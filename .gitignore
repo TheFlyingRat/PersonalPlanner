@@ -2,7 +2,11 @@ node_modules/
 dist/
 .env
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 .svelte-kit/
 build/
 .DS_Store
+.claude/settings.local.json
+data/
