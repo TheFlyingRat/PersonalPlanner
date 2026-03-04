@@ -2,14 +2,20 @@ import { Router } from 'express';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
-import { createOAuth2Client, getAuthUrl, exchangeCode, setCredentials } from '../google/index.js';
+import { createOAuth2Client, getAuthUrl, exchangeCode } from '../google/index.js';
+import { encrypt } from '../crypto.js';
 
 const router = Router();
+
+// Module-level variable to store the OAuth state for CSRF protection
+let pendingOAuthState: string | null = null;
 
 // POST /api/auth/google — initiate OAuth flow
 router.post('/google', (_req, res) => {
   const oauth2Client = createOAuth2Client();
-  const url = getAuthUrl(oauth2Client);
+  const state = crypto.randomUUID();
+  pendingOAuthState = state;
+  const url = getAuthUrl(oauth2Client, state);
   res.json({ redirectUrl: url });
 });
 
@@ -21,15 +27,26 @@ router.get('/google/callback', async (req, res) => {
     return;
   }
 
+  // Verify OAuth state parameter (CSRF protection)
+  const state = req.query.state as string | undefined;
+  if (!pendingOAuthState || state !== pendingOAuthState) {
+    res.status(403).json({ error: 'Invalid OAuth state' });
+    return;
+  }
+  pendingOAuthState = null;
+
   try {
     const oauth2Client = createOAuth2Client();
     const tokens = await exchangeCode(oauth2Client, code);
 
-    // Store refresh token in database
+    // Encrypt the refresh token before storing
+    const encryptedToken = tokens.refresh_token ? encrypt(tokens.refresh_token) : null;
+
+    // Store encrypted refresh token in database
     const userRows = db.select().from(users).all();
     if (userRows.length > 0) {
       db.update(users)
-        .set({ googleRefreshToken: tokens.refresh_token || null })
+        .set({ googleRefreshToken: encryptedToken })
         .where(eq(users.id, userRows[0].id))
         .run();
     }

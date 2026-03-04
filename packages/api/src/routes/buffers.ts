@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { bufferConfig } from '../db/schema.js';
 import type { BufferConfig } from '@reclaim/shared';
+import { updateBufferSchema } from '../validation.js';
 
 const router = Router();
 
@@ -20,7 +21,13 @@ router.get('/', (_req, res) => {
 
 // PUT /api/buffers — update (upsert single row)
 router.put('/', (req, res) => {
-  const body = req.body;
+  const parsed = updateBufferSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const body = parsed.data;
 
   const existing = db.select().from(bufferConfig).where(eq(bufferConfig.id, 'default')).get();
 

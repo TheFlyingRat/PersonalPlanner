@@ -21,12 +21,14 @@ export function createOAuth2Client(): OAuth2Client {
 /**
  * Generate the Google OAuth2 consent screen URL.
  * Requests offline access so we receive a refresh token.
+ * Accepts an optional `state` parameter for CSRF protection.
  */
-export function getAuthUrl(oauth2Client: OAuth2Client): string {
+export function getAuthUrl(oauth2Client: OAuth2Client, state?: string): string {
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://www.googleapis.com/auth/calendar'],
+    ...(state ? { state } : {}),
   });
 }
 

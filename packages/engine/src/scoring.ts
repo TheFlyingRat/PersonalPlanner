@@ -9,6 +9,9 @@ import {
  * Parse "HH:MM" into minutes since midnight.
  */
 function parseTimeToMinutes(hhmm: string): number {
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) {
+    return 0;
+  }
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
 }

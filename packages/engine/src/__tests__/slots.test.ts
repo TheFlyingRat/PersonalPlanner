@@ -231,4 +231,124 @@ describe('generateCandidateSlots', () => {
       expect(c.score).toBe(0);
     }
   });
+
+  it('should enforce hard dependency constraint (no candidates before dependency end)', () => {
+    const timeline: TimeSlot[] = [
+      {
+        start: new Date(2026, 2, 2, 9, 0),
+        end: new Date(2026, 2, 2, 17, 0),
+      },
+    ];
+
+    // Dependency is placed at 10:00-11:00
+    const existingPlacements = new Map<string, TimeSlot>();
+    existingPlacements.set('dep-item', {
+      start: new Date(2026, 2, 2, 10, 0),
+      end: new Date(2026, 2, 2, 11, 0),
+    });
+
+    const item = makeItem({
+      duration: 30,
+      dependsOn: 'dep-item',
+    });
+
+    const candidates = generateCandidateSlots(
+      item,
+      timeline,
+      [],
+      defaultBuffer,
+      existingPlacements,
+      'dep-item',
+    );
+
+    // All candidates should start at or after 11:00
+    for (const c of candidates) {
+      expect(c.start.getTime()).toBeGreaterThanOrEqual(
+        new Date(2026, 2, 2, 11, 0).getTime(),
+      );
+    }
+
+    // And there should be candidates available
+    expect(candidates.length).toBeGreaterThan(0);
+  });
+
+  it('should allow candidates on a different day even before dependency time', () => {
+    const timeline: TimeSlot[] = [
+      {
+        start: new Date(2026, 2, 2, 9, 0),
+        end: new Date(2026, 2, 2, 17, 0),
+      },
+      {
+        start: new Date(2026, 2, 3, 9, 0),
+        end: new Date(2026, 2, 3, 17, 0),
+      },
+    ];
+
+    // Dependency is placed on March 2 at 14:00-15:00
+    const existingPlacements = new Map<string, TimeSlot>();
+    existingPlacements.set('dep-item', {
+      start: new Date(2026, 2, 2, 14, 0),
+      end: new Date(2026, 2, 2, 15, 0),
+    });
+
+    const item = makeItem({
+      duration: 30,
+      timeWindow: {
+        start: new Date(2026, 2, 3, 9, 0),
+        end: new Date(2026, 2, 3, 17, 0),
+      },
+      dependsOn: 'dep-item',
+    });
+
+    const candidates = generateCandidateSlots(
+      item,
+      timeline,
+      [],
+      defaultBuffer,
+      existingPlacements,
+      'dep-item',
+    );
+
+    // Should have candidates on March 3 (different day, no restriction)
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const c of candidates) {
+      expect(c.start.getDate()).toBe(3); // March 3
+    }
+  });
+
+  it('should not filter candidates when dependency is not yet placed', () => {
+    const timeline: TimeSlot[] = [
+      {
+        start: new Date(2026, 2, 2, 9, 0),
+        end: new Date(2026, 2, 2, 17, 0),
+      },
+    ];
+
+    const existingPlacements = new Map<string, TimeSlot>();
+    // dep-item not in the map
+
+    const item = makeItem({
+      duration: 30,
+      dependsOn: 'dep-item',
+    });
+
+    const candidatesWithDep = generateCandidateSlots(
+      item,
+      timeline,
+      [],
+      defaultBuffer,
+      existingPlacements,
+      'dep-item',
+    );
+
+    const candidatesWithout = generateCandidateSlots(
+      item,
+      timeline,
+      [],
+      defaultBuffer,
+    );
+
+    // Both should have the same number of candidates
+    expect(candidatesWithDep.length).toBe(candidatesWithout.length);
+  });
 });

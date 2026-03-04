@@ -22,8 +22,12 @@ const API_BASE = '/api';
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...options?.headers,
+    },
+    credentials: 'same-origin',
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
@@ -46,7 +50,7 @@ export const habits = {
     request<void>(`/habits/${id}`, { method: 'DELETE' }),
   lock: (id: string, locked: boolean) =>
     request<Habit>(`/habits/${id}/lock`, {
-      method: 'PUT',
+      method: 'POST',
       body: JSON.stringify({ locked }),
     }),
 };
@@ -67,10 +71,10 @@ export const tasks = {
   delete: (id: string) =>
     request<void>(`/tasks/${id}`, { method: 'DELETE' }),
   complete: (id: string) =>
-    request<Task>(`/tasks/${id}/complete`, { method: 'PUT' }),
+    request<Task>(`/tasks/${id}/complete`, { method: 'POST' }),
   setUpNext: (id: string, isUpNext: boolean) =>
     request<Task>(`/tasks/${id}/up-next`, {
-      method: 'PUT',
+      method: 'POST',
       body: JSON.stringify({ isUpNext }),
     }),
 };
@@ -93,9 +97,9 @@ export const meetings = {
 };
 
 export const focusTime = {
-  get: () => request<FocusTimeRule>('/focus'),
+  get: () => request<FocusTimeRule>('/focus-time'),
   update: (data: Partial<FocusTimeRule>) =>
-    request<FocusTimeRule>('/focus', {
+    request<FocusTimeRule>('/focus-time', {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
@@ -111,9 +115,9 @@ export const buffers = {
 };
 
 export const schedule = {
-  getEvents: (start: string, end: string) =>
-    request<CalendarEvent[]>(`/schedule/events?start=${start}&end=${end}`),
-  run: () => request<ScheduleResult>('/schedule/run', { method: 'POST' }),
+  getEvents: () =>
+    request<CalendarEvent[]>('/schedule'),
+  run: () => request<ScheduleResult>('/schedule/reschedule', { method: 'POST' }),
 };
 
 export const links = {
@@ -132,7 +136,7 @@ export const links = {
   delete: (id: string) =>
     request<void>(`/links/${id}`, { method: 'DELETE' }),
   getBySlug: (slug: string) =>
-    request<SchedulingLink>(`/links/slug/${slug}`),
+    request<SchedulingLink>(`/links/${slug}/slots`),
 };
 
 export const analytics = {
@@ -153,7 +157,7 @@ export const settings = {
       body: JSON.stringify(data),
     }),
   connectGoogle: () =>
-    request<{ url: string }>('/settings/google/connect'),
+    request<{ redirectUrl: string }>('/auth/google', { method: 'POST' }),
   disconnectGoogle: () =>
     request<void>('/settings/google/disconnect', { method: 'POST' }),
 };

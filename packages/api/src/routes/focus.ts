@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { focusTimeRules } from '../db/schema.js';
 import type { FocusTimeRule } from '@reclaim/shared';
+import { updateFocusSchema } from '../validation.js';
 
 const router = Router();
 
@@ -20,7 +21,13 @@ router.get('/', (_req, res) => {
 
 // PUT /api/focus-time — update (upsert single row)
 router.put('/', (req, res) => {
-  const body = req.body;
+  const parsed = updateFocusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const body = parsed.data;
   const now = new Date().toISOString();
 
   const existing = db.select().from(focusTimeRules).where(eq(focusTimeRules.id, 'default')).get();

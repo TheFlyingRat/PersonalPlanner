@@ -103,6 +103,7 @@ export interface SmartMeeting {
   attendees: string[];       // email addresses
   duration: number;          // minutes
   frequency: Frequency;
+  frequencyConfig?: FrequencyConfig;
   idealTime: string;         // HH:MM
   windowStart: string;       // HH:MM
   windowEnd: string;         // HH:MM

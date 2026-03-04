@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { smartMeetings } from '../db/schema.js';
 import type { CreateMeetingRequest, SmartMeeting } from '@reclaim/shared';
+import { createMeetingSchema, updateMeetingSchema } from '../validation.js';
 
 const router = Router();
 
@@ -15,13 +16,12 @@ router.get('/', (_req, res) => {
 
 // POST /api/meetings — create a meeting
 router.post('/', (req, res) => {
-  const body = req.body as CreateMeetingRequest;
-
-  if (!body.name || body.duration == null || !body.frequency || !body.idealTime ||
-      !body.windowStart || !body.windowEnd) {
-    res.status(400).json({ error: 'Missing required fields: name, duration, frequency, idealTime, windowStart, windowEnd' });
+  const parsed = createMeetingSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     return;
   }
+  const body = parsed.data as CreateMeetingRequest;
 
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
@@ -58,7 +58,13 @@ router.put('/:id', (req, res) => {
     return;
   }
 
-  const body = req.body;
+  const parsed = updateMeetingSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const body = parsed.data;
   const now = new Date().toISOString();
 
   const updates: Record<string, unknown> = { updatedAt: now };

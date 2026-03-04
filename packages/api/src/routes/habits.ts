@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { habits, scheduledEvents } from '../db/schema.js';
 import type { CreateHabitRequest, Habit, FrequencyConfig } from '@reclaim/shared';
+import { createHabitSchema, updateHabitSchema } from '../validation.js';
 
 const router = Router();
 
@@ -15,13 +16,12 @@ router.get('/', (_req, res) => {
 
 // POST /api/habits — create a habit
 router.post('/', (req, res) => {
-  const body = req.body as CreateHabitRequest;
-
-  if (!body.name || !body.windowStart || !body.windowEnd || !body.idealTime ||
-      body.durationMin == null || body.durationMax == null || !body.frequency) {
-    res.status(400).json({ error: 'Missing required fields: name, windowStart, windowEnd, idealTime, durationMin, durationMax, frequency' });
+  const parsed = createHabitSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     return;
   }
+  const body = parsed.data as CreateHabitRequest;
 
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
@@ -62,7 +62,13 @@ router.put('/:id', (req, res) => {
     return;
   }
 
-  const body = req.body;
+  const parsed = updateHabitSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const body = parsed.data;
   const now = new Date().toISOString();
 
   const updates: Record<string, unknown> = { updatedAt: now };

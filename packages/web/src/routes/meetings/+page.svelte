@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { meetings as meetingsApi } from '$lib/api';
 
   interface MeetingItem {
@@ -46,6 +47,11 @@
 
   let meetingList = $state<MeetingItem[]>(mockMeetings);
   let showForm = $state(false);
+  let editingId = $state<string | null>(null);
+  let loading = $state(true);
+  let error = $state('');
+  let success = $state('');
+  let submitting = $state(false);
 
   // Form fields
   let formName = $state('');
@@ -74,6 +80,11 @@
     none: 'None',
   };
 
+  function showSuccess(msg: string) {
+    success = msg;
+    setTimeout(() => { success = ''; }, 3000);
+  }
+
   function resetForm() {
     formName = '';
     formPriority = 3;
@@ -85,9 +96,31 @@
     formLocation = '';
     formConferenceType = 'none';
     formAttendees = '';
+    editingId = null;
+  }
+
+  function openAddForm() {
+    resetForm();
+    showForm = true;
+  }
+
+  function openEditForm(meeting: MeetingItem) {
+    editingId = meeting.id;
+    formName = meeting.name;
+    formPriority = meeting.priority;
+    formDuration = meeting.duration;
+    formFrequency = meeting.frequency;
+    formIdealTime = meeting.idealTime;
+    formWindowStart = meeting.windowStart;
+    formWindowEnd = meeting.windowEnd;
+    formLocation = meeting.location;
+    formConferenceType = meeting.conferenceType;
+    formAttendees = meeting.attendees.join(', ');
+    showForm = true;
   }
 
   async function handleSubmit() {
+    submitting = true;
     const meetingData = {
       name: formName,
       priority: formPriority,
@@ -105,14 +138,29 @@
     };
 
     try {
-      await meetingsApi.create(meetingData as any);
+      if (editingId) {
+        await meetingsApi.update(editingId, meetingData as any);
+      } else {
+        await meetingsApi.create(meetingData as any);
+      }
       const list = await meetingsApi.list();
       meetingList = list as any;
+      showSuccess(editingId ? 'Meeting updated successfully.' : 'Meeting created successfully.');
     } catch {
-      meetingList = [
-        ...meetingList,
-        { id: crypto.randomUUID(), ...meetingData },
-      ];
+      if (editingId) {
+        meetingList = meetingList.map((m) =>
+          m.id === editingId ? { ...m, ...meetingData } : m
+        );
+        showSuccess('Meeting updated (offline).');
+      } else {
+        meetingList = [
+          ...meetingList,
+          { id: crypto.randomUUID(), ...meetingData },
+        ];
+        showSuccess('Meeting created (offline).');
+      }
+    } finally {
+      submitting = false;
     }
 
     showForm = false;
@@ -120,12 +168,15 @@
   }
 
   async function deleteMeeting(id: string) {
+    if (!confirm('Are you sure you want to delete this meeting?')) return;
     try {
       await meetingsApi.delete(id);
       const list = await meetingsApi.list();
       meetingList = list as any;
+      showSuccess('Meeting deleted successfully.');
     } catch {
       meetingList = meetingList.filter((m) => m.id !== id);
+      showSuccess('Meeting deleted (offline).');
     }
   }
 
@@ -135,23 +186,49 @@
     const m = minutes % 60;
     return m > 0 ? `${h}h ${m}m` : `${h}h`;
   }
+
+  onMount(async () => {
+    loading = true;
+    error = '';
+    try {
+      const list = await meetingsApi.list();
+      meetingList = list as any;
+    } catch {
+      error = 'Failed to load data from API. Showing cached data.';
+    } finally {
+      loading = false;
+    }
+  });
 </script>
+
+<svelte:head>
+  <title>Meetings - Reclaim</title>
+</svelte:head>
 
 <div class="p-6">
   <div class="flex items-center justify-between mb-6">
     <h1 class="text-2xl font-bold text-gray-900">Smart Meetings</h1>
     <button
-      onclick={() => { resetForm(); showForm = true; }}
+      onclick={openAddForm}
       class="px-4 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors"
     >
       Add Meeting
     </button>
   </div>
 
-  <!-- Add Form -->
+  {#if error}
+    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+  {/if}
+  {#if success}
+    <div class="mb-4 px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm">{success}</div>
+  {/if}
+
+  <!-- Add/Edit Form -->
   {#if showForm}
     <div class="bg-white rounded-lg shadow p-6 mb-6">
-      <h2 class="text-lg font-semibold text-gray-900 mb-4">Add New Meeting</h2>
+      <h2 class="text-lg font-semibold text-gray-900 mb-4">
+        {editingId ? 'Edit Meeting' : 'Add New Meeting'}
+      </h2>
       <form
         onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
         class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
@@ -265,9 +342,10 @@
         <div class="flex items-end gap-3">
           <button
             type="submit"
-            class="px-4 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors"
+            disabled={submitting}
+            class="px-4 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Create Meeting
+            {editingId ? 'Update Meeting' : 'Create Meeting'}
           </button>
           <button
             type="button"
@@ -281,68 +359,80 @@
     </div>
   {/if}
 
-  <!-- Meeting List -->
-  <div class="space-y-4">
-    {#each meetingList as meeting}
-      <div class="bg-white rounded-lg shadow p-4">
-        <div class="flex items-start justify-between">
-          <div class="flex-1">
-            <div class="flex items-center gap-3 mb-2">
-              <h3 class="text-lg font-semibold text-gray-900">{meeting.name}</h3>
-              <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[meeting.priority]}">
-                {priorityLabels[meeting.priority]}
-              </span>
-              <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700 capitalize">
-                {meeting.frequency}
-              </span>
+  {#if loading}
+    <div class="flex items-center justify-center py-12">
+      <p class="text-gray-500">Loading...</p>
+    </div>
+  {:else}
+    <!-- Meeting List -->
+    <div class="space-y-4">
+      {#each meetingList as meeting}
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="flex items-start justify-between">
+            <div class="flex-1">
+              <div class="flex items-center gap-3 mb-2">
+                <h3 class="text-lg font-semibold text-gray-900">{meeting.name}</h3>
+                <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[meeting.priority]}">
+                  {priorityLabels[meeting.priority]}
+                </span>
+                <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700 capitalize">
+                  {meeting.frequency}
+                </span>
+              </div>
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-gray-600">
+                <div>
+                  <span class="font-medium text-gray-500">Duration:</span>
+                  {formatDuration(meeting.duration)}
+                </div>
+                <div>
+                  <span class="font-medium text-gray-500">Ideal Time:</span>
+                  {meeting.idealTime}
+                </div>
+                <div>
+                  <span class="font-medium text-gray-500">Window:</span>
+                  {meeting.windowStart} - {meeting.windowEnd}
+                </div>
+                <div>
+                  <span class="font-medium text-gray-500">Conference:</span>
+                  {conferenceLabels[meeting.conferenceType] || meeting.conferenceType}
+                </div>
+              </div>
+              {#if meeting.attendees.length > 0}
+                <div class="mt-2 text-sm text-gray-500">
+                  <span class="font-medium">Attendees:</span>
+                  {meeting.attendees.join(', ')}
+                </div>
+              {/if}
+              {#if meeting.location}
+                <div class="mt-1 text-sm text-gray-500">
+                  <span class="font-medium">Location:</span>
+                  {meeting.location}
+                </div>
+              {/if}
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-gray-600">
-              <div>
-                <span class="font-medium text-gray-500">Duration:</span>
-                {formatDuration(meeting.duration)}
-              </div>
-              <div>
-                <span class="font-medium text-gray-500">Ideal Time:</span>
-                {meeting.idealTime}
-              </div>
-              <div>
-                <span class="font-medium text-gray-500">Window:</span>
-                {meeting.windowStart} - {meeting.windowEnd}
-              </div>
-              <div>
-                <span class="font-medium text-gray-500">Conference:</span>
-                {conferenceLabels[meeting.conferenceType] || meeting.conferenceType}
-              </div>
+            <div class="flex items-center gap-2 ml-4">
+              <button
+                onclick={() => openEditForm(meeting)}
+                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+              >
+                Edit
+              </button>
+              <button
+                onclick={() => deleteMeeting(meeting.id)}
+                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+              >
+                Delete
+              </button>
             </div>
-            {#if meeting.attendees.length > 0}
-              <div class="mt-2 text-sm text-gray-500">
-                <span class="font-medium">Attendees:</span>
-                {meeting.attendees.join(', ')}
-              </div>
-            {/if}
-            {#if meeting.location}
-              <div class="mt-1 text-sm text-gray-500">
-                <span class="font-medium">Location:</span>
-                {meeting.location}
-              </div>
-            {/if}
-          </div>
-          <div class="flex items-center gap-2 ml-4">
-            <button
-              onclick={() => deleteMeeting(meeting.id)}
-              class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-            >
-              Delete
-            </button>
           </div>
         </div>
-      </div>
-    {/each}
+      {/each}
 
-    {#if meetingList.length === 0}
-      <div class="bg-white rounded-lg shadow p-8 text-center">
-        <p class="text-gray-500">No smart meetings yet. Click "Add Meeting" to create one.</p>
-      </div>
-    {/if}
-  </div>
+      {#if meetingList.length === 0}
+        <div class="bg-white rounded-lg shadow p-8 text-center">
+          <p class="text-gray-500">No smart meetings yet. Click "Add Meeting" to create one.</p>
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { habits as habitsApi } from '$lib/api';
 
   interface HabitItem {
@@ -69,6 +70,10 @@
   let habitList = $state<HabitItem[]>(mockHabits);
   let showForm = $state(false);
   let editingId = $state<string | null>(null);
+  let loading = $state(true);
+  let error = $state('');
+  let success = $state('');
+  let submitting = $state(false);
 
   // Form fields
   let formName = $state('');
@@ -90,6 +95,11 @@
     3: 'bg-yellow-100 text-yellow-700',
     4: 'bg-green-100 text-green-700',
   };
+
+  function showSuccess(msg: string) {
+    success = msg;
+    setTimeout(() => { success = ''; }, 3000);
+  }
 
   function resetForm() {
     formName = '';
@@ -128,6 +138,7 @@
   }
 
   async function handleSubmit() {
+    submitting = true;
     const habitData = {
       name: formName,
       priority: formPriority,
@@ -150,18 +161,23 @@
       }
       const list = await habitsApi.list();
       habitList = list as any;
+      showSuccess(editingId ? 'Habit updated successfully.' : 'Habit created successfully.');
     } catch {
       // API unavailable - use mock data
       if (editingId) {
         habitList = habitList.map((h) =>
           h.id === editingId ? { ...h, ...habitData } : h
         );
+        showSuccess('Habit updated (offline).');
       } else {
         habitList = [
           ...habitList,
           { id: crypto.randomUUID(), ...habitData, enabled: true },
         ];
+        showSuccess('Habit created (offline).');
       }
+    } finally {
+      submitting = false;
     }
 
     showForm = false;
@@ -181,15 +197,35 @@
   }
 
   async function deleteHabit(id: string) {
+    if (!confirm('Are you sure you want to delete this habit?')) return;
     try {
       await habitsApi.delete(id);
       const list = await habitsApi.list();
       habitList = list as any;
+      showSuccess('Habit deleted successfully.');
     } catch {
       habitList = habitList.filter((h) => h.id !== id);
+      showSuccess('Habit deleted (offline).');
     }
   }
+
+  onMount(async () => {
+    loading = true;
+    error = '';
+    try {
+      const list = await habitsApi.list();
+      habitList = list as any;
+    } catch {
+      error = 'Failed to load data from API. Showing cached data.';
+    } finally {
+      loading = false;
+    }
+  });
 </script>
+
+<svelte:head>
+  <title>Habits - Reclaim</title>
+</svelte:head>
 
 <div class="p-6">
   <div class="flex items-center justify-between mb-6">
@@ -201,6 +237,13 @@
       Add Habit
     </button>
   </div>
+
+  {#if error}
+    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+  {/if}
+  {#if success}
+    <div class="mb-4 px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm">{success}</div>
+  {/if}
 
   <!-- Add/Edit Form -->
   {#if showForm}
@@ -323,7 +366,8 @@
         <div class="flex items-end gap-3 lg:col-span-2">
           <button
             type="submit"
-            class="px-4 py-2 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 transition-colors"
+            disabled={submitting}
+            class="px-4 py-2 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {editingId ? 'Update Habit' : 'Create Habit'}
           </button>
@@ -339,78 +383,84 @@
     </div>
   {/if}
 
-  <!-- Habit List -->
-  <div class="space-y-4">
-    {#each habitList as habit}
-      <div class="bg-white rounded-lg shadow p-4">
-        <div class="flex items-start justify-between">
-          <div class="flex-1">
-            <div class="flex items-center gap-3 mb-2">
-              <h3 class="text-lg font-semibold text-gray-900">{habit.name}</h3>
-              <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[habit.priority]}">
-                {priorityLabels[habit.priority]}
-              </span>
-              {#if habit.locked}
-                <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
-                  Locked
+  {#if loading}
+    <div class="flex items-center justify-center py-12">
+      <p class="text-gray-500">Loading...</p>
+    </div>
+  {:else}
+    <!-- Habit List -->
+    <div class="space-y-4">
+      {#each habitList as habit}
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="flex items-start justify-between">
+            <div class="flex-1">
+              <div class="flex items-center gap-3 mb-2">
+                <h3 class="text-lg font-semibold text-gray-900">{habit.name}</h3>
+                <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[habit.priority]}">
+                  {priorityLabels[habit.priority]}
                 </span>
-              {/if}
-              {#if habit.autoDecline}
-                <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700">
-                  Auto-decline
-                </span>
-              {/if}
+                {#if habit.locked}
+                  <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
+                    Locked
+                  </span>
+                {/if}
+                {#if habit.autoDecline}
+                  <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700">
+                    Auto-decline
+                  </span>
+                {/if}
+              </div>
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-gray-600">
+                <div>
+                  <span class="font-medium text-gray-500">Window:</span>
+                  {habit.windowStart} - {habit.windowEnd}
+                </div>
+                <div>
+                  <span class="font-medium text-gray-500">Ideal:</span>
+                  {habit.idealTime}
+                </div>
+                <div>
+                  <span class="font-medium text-gray-500">Duration:</span>
+                  {habit.durationMin}-{habit.durationMax} min
+                </div>
+                <div>
+                  <span class="font-medium text-gray-500">Frequency:</span>
+                  <span class="capitalize">{habit.frequency}</span>
+                </div>
+              </div>
             </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-gray-600">
-              <div>
-                <span class="font-medium text-gray-500">Window:</span>
-                {habit.windowStart} - {habit.windowEnd}
-              </div>
-              <div>
-                <span class="font-medium text-gray-500">Ideal:</span>
-                {habit.idealTime}
-              </div>
-              <div>
-                <span class="font-medium text-gray-500">Duration:</span>
-                {habit.durationMin}-{habit.durationMax} min
-              </div>
-              <div>
-                <span class="font-medium text-gray-500">Frequency:</span>
-                <span class="capitalize">{habit.frequency}</span>
-              </div>
+            <div class="flex items-center gap-2 ml-4">
+              <button
+                onclick={() => toggleLock(habit)}
+                class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
+                  {habit.locked
+                    ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
+              >
+                {habit.locked ? 'Locked' : 'Unlocked'}
+              </button>
+              <button
+                onclick={() => openEditForm(habit)}
+                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+              >
+                Edit
+              </button>
+              <button
+                onclick={() => deleteHabit(habit.id)}
+                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+              >
+                Delete
+              </button>
             </div>
-          </div>
-          <div class="flex items-center gap-2 ml-4">
-            <button
-              onclick={() => toggleLock(habit)}
-              class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                {habit.locked
-                  ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
-            >
-              {habit.locked ? '🔒' : '🔓'}
-            </button>
-            <button
-              onclick={() => openEditForm(habit)}
-              class="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
-            >
-              Edit
-            </button>
-            <button
-              onclick={() => deleteHabit(habit.id)}
-              class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-            >
-              Delete
-            </button>
           </div>
         </div>
-      </div>
-    {/each}
+      {/each}
 
-    {#if habitList.length === 0}
-      <div class="bg-white rounded-lg shadow p-8 text-center">
-        <p class="text-gray-500">No habits yet. Click "Add Habit" to create one.</p>
-      </div>
-    {/if}
-  </div>
+      {#if habitList.length === 0}
+        <div class="bg-white rounded-lg shadow p-8 text-center">
+          <p class="text-gray-500">No habits yet. Click "Add Habit" to create one.</p>
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>

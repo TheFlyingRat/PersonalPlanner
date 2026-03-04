@@ -45,6 +45,9 @@ function getWeekNumber(date: Date): number {
 // ============================================================
 
 function parseTime(hhmm: string): { hours: number; minutes: number } {
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) {
+    return { hours: 0, minutes: 0 };
+  }
   const [h, m] = hhmm.split(':').map(Number);
   return { hours: h, minutes: m };
 }
@@ -90,6 +93,7 @@ function habitsToScheduleItems(
   habits: Habit[],
   scheduleStart: Date,
   scheduleEnd: Date,
+  windowStart: Date,
 ): ScheduleItem[] {
   const items: ScheduleItem[] = [];
   const days = enumerateDays(scheduleStart, scheduleEnd);
@@ -128,6 +132,7 @@ function habitsToScheduleItems(
       const weekInterval = habit.frequencyConfig?.weekInterval ?? 1;
       const applicableDays = habit.frequencyConfig?.days ?? ['mon'];
 
+      const windowStartWeek = getWeekNumber(windowStart);
       const scheduledWeeks = new Set<number>();
       for (const day of days) {
         const dayAbbrev = getDayAbbrev(day);
@@ -135,12 +140,14 @@ function habitsToScheduleItems(
 
         const weekNum = getWeekNumber(day);
         if (scheduledWeeks.has(weekNum)) continue;
-        if (weekInterval > 1 && weekNum % weekInterval !== 0) continue;
+        const weeksSinceStart = weekNum - windowStartWeek;
+        if (weekInterval > 1 && weeksSinceStart % weekInterval !== 0) continue;
 
         scheduledWeeks.add(weekNum);
+        const dayStr = day.toISOString().slice(0, 10);
         const timeWindow = buildDayWindow(day, habit.windowStart, habit.windowEnd);
         items.push({
-          id: `${habit.id}__w${weekNum}`,
+          id: `${habit.id}__${dayStr}`,
           type: ItemType.Habit,
           priority: habit.priority,
           timeWindow,
@@ -148,7 +155,46 @@ function habitsToScheduleItems(
           duration,
           locked: habit.locked,
           dependsOn: habit.dependsOn
-            ? `${habit.dependsOn}__w${weekNum}`
+            ? `${habit.dependsOn}__${dayStr}`
+            : null,
+        });
+      }
+    } else if (habit.frequency === Frequency.Monthly) {
+      // Fix 8: Monthly frequency support
+      const config = habit.frequencyConfig;
+
+      for (const day of days) {
+        let isTargetDay = false;
+
+        if (config?.monthDay != null) {
+          // Schedule on a specific day of the month
+          isTargetDay = day.getDate() === config.monthDay;
+        } else if (config?.monthWeek != null && config?.monthWeekday != null) {
+          // Schedule on the nth weekday of the month
+          const dayAbbrev = getDayAbbrev(day);
+          if (dayAbbrev === config.monthWeekday) {
+            const weekOfMonth = Math.ceil(day.getDate() / 7);
+            isTargetDay = weekOfMonth === config.monthWeek;
+          }
+        } else {
+          // Default: schedule on the 1st of each month
+          isTargetDay = day.getDate() === 1;
+        }
+
+        if (!isTargetDay) continue;
+
+        const dayStr = day.toISOString().slice(0, 10);
+        const timeWindow = buildDayWindow(day, habit.windowStart, habit.windowEnd);
+        items.push({
+          id: `${habit.id}__${dayStr}`,
+          type: ItemType.Habit,
+          priority: habit.priority,
+          timeWindow,
+          idealTime: habit.idealTime,
+          duration,
+          locked: habit.locked,
+          dependsOn: habit.dependsOn
+            ? `${habit.dependsOn}__${dayStr}`
             : null,
         });
       }
@@ -170,15 +216,25 @@ function tasksToScheduleItems(
   const items: ScheduleItem[] = [];
 
   for (const task of tasks) {
-    // Skip completed tasks
-    if (task.status === TaskStatus.Completed) continue;
+    // Skip completed or done-scheduling tasks
+    if (task.status === TaskStatus.Completed || task.status === TaskStatus.DoneScheduling) continue;
 
     const remaining = task.remainingDuration;
     if (remaining <= 0) continue;
 
     // Determine chunk size (prefer chunkMax, but don't exceed remaining)
     const chunkSize = Math.min(task.chunkMax, remaining);
-    const numChunks = Math.ceil(remaining / chunkSize);
+    let numChunks = Math.ceil(remaining / chunkSize);
+
+    // Fix: ensure no chunk is smaller than chunkMin.
+    // If the last chunk would be < chunkMin, reduce numChunks by 1 so the
+    // remaining time is distributed into fewer (slightly larger) chunks.
+    if (numChunks > 1) {
+      const lastChunkSize = remaining - (numChunks - 1) * chunkSize;
+      if (lastChunkSize < task.chunkMin) {
+        numChunks = numChunks - 1;
+      }
+    }
 
     const earliest = new Date(task.earliestStart);
     const due = new Date(task.dueDate);
@@ -193,8 +249,16 @@ function tasksToScheduleItems(
     // Override priority if isUpNext
     const priority = task.isUpNext ? Priority.Critical : task.priority;
 
+    // Compute the actual chunk size for each chunk. When numChunks was reduced,
+    // divide remaining evenly (ceiling) so that all chunks are >= chunkMin.
+    let effectiveChunkSize = Math.ceil(remaining / numChunks);
+    if (effectiveChunkSize > task.chunkMax) {
+      effectiveChunkSize = task.chunkMax;
+      numChunks = Math.ceil(remaining / effectiveChunkSize);
+    }
+
     for (let i = 0; i < numChunks; i++) {
-      const thisChunkSize = Math.min(chunkSize, remaining - i * chunkSize);
+      const thisChunkSize = Math.min(effectiveChunkSize, remaining - i * effectiveChunkSize);
       if (thisChunkSize <= 0) break;
 
       // Each chunk is its own ScheduleItem with the full time window
@@ -226,6 +290,7 @@ function meetingsToScheduleItems(
   meetings: SmartMeeting[],
   scheduleStart: Date,
   scheduleEnd: Date,
+  windowStart: Date,
 ): ScheduleItem[] {
   const items: ScheduleItem[] = [];
   const days = enumerateDays(scheduleStart, scheduleEnd);
@@ -256,9 +321,44 @@ function meetingsToScheduleItems(
         if (scheduledWeeks.has(weekNum)) continue;
 
         scheduledWeeks.add(weekNum);
+        const dayStr = day.toISOString().slice(0, 10);
         const timeWindow = buildDayWindow(day, meeting.windowStart, meeting.windowEnd);
         items.push({
-          id: `${meeting.id}__w${weekNum}`,
+          id: `${meeting.id}__${dayStr}`,
+          type: ItemType.Meeting,
+          priority: meeting.priority,
+          timeWindow,
+          idealTime: meeting.idealTime,
+          duration: meeting.duration,
+          locked: false,
+          dependsOn: null,
+        });
+      }
+    } else if (meeting.frequency === Frequency.Monthly) {
+      // Fix 8: Monthly frequency support for meetings
+      for (const day of days) {
+        if (day.getDay() === 0 || day.getDay() === 6) continue;
+
+        let isTargetDay = false;
+
+        if (meeting.frequencyConfig?.monthDay != null) {
+          isTargetDay = day.getDate() === meeting.frequencyConfig.monthDay;
+        } else if (meeting.frequencyConfig?.monthWeek != null && meeting.frequencyConfig?.monthWeekday != null) {
+          const dayAbbrev = getDayAbbrev(day);
+          if (dayAbbrev === meeting.frequencyConfig.monthWeekday) {
+            const weekOfMonth = Math.ceil(day.getDate() / 7);
+            isTargetDay = weekOfMonth === meeting.frequencyConfig.monthWeek;
+          }
+        } else {
+          isTargetDay = day.getDate() === 1;
+        }
+
+        if (!isTargetDay) continue;
+
+        const dayStr = day.toISOString().slice(0, 10);
+        const timeWindow = buildDayWindow(day, meeting.windowStart, meeting.windowEnd);
+        items.push({
+          id: `${meeting.id}__${dayStr}`,
           type: ItemType.Meeting,
           priority: meeting.priority,
           timeWindow,
@@ -293,8 +393,45 @@ function sortScheduleItems(items: ScheduleItem[]): ScheduleItem[] {
     }
 
     // For same type and priority, sort by time window end (earlier due date first)
-    return a.timeWindow.end.getTime() - b.timeWindow.end.getTime();
+    const timeDiff = a.timeWindow.end.getTime() - b.timeWindow.end.getTime();
+    if (timeDiff !== 0) {
+      return timeDiff;
+    }
+
+    // Tiebreaker: sort by id for deterministic ordering (preserves chunk order)
+    return a.id.localeCompare(b.id);
   });
+}
+
+// ============================================================
+// Circular dependency detection
+// ============================================================
+
+function detectCircularDependencies(habits: Habit[]): string[] {
+  const errors: string[] = [];
+  const visited = new Set<string>();
+  const inStack = new Set<string>();
+
+  function dfs(id: string): boolean {
+    if (inStack.has(id)) return true; // cycle found
+    if (visited.has(id)) return false;
+    visited.add(id);
+    inStack.add(id);
+    const habit = habits.find(h => h.id === id);
+    if (habit?.dependsOn) {
+      if (dfs(habit.dependsOn)) {
+        errors.push(`Circular dependency detected involving habit "${habit.name}" (${id})`);
+        return true;
+      }
+    }
+    inStack.delete(id);
+    return false;
+  }
+
+  for (const habit of habits) {
+    dfs(habit.id);
+  }
+  return errors;
 }
 
 // ============================================================
@@ -313,6 +450,30 @@ export function reschedule(
 ): ScheduleResult {
   const currentTime = now ?? new Date();
 
+  // 0. Detect circular dependencies in habits
+  const circularErrors = detectCircularDependencies(habits);
+  const circularHabitIds = new Set<string>();
+  if (circularErrors.length > 0) {
+    // Collect IDs of habits that are part of a cycle
+    for (const habit of habits) {
+      if (habit.dependsOn) {
+        // Check if this habit's dependency chain forms a cycle
+        const seen = new Set<string>();
+        let current: string | null = habit.id;
+        let isCyclic = false;
+        while (current) {
+          if (seen.has(current)) { isCyclic = true; break; }
+          seen.add(current);
+          const h = habits.find(hh => hh.id === current);
+          current = h?.dependsOn ?? null;
+        }
+        if (isCyclic) {
+          circularHabitIds.add(habit.id);
+        }
+      }
+    }
+  }
+
   // 1. Define the scheduling window
   const scheduleStart = new Date(currentTime);
   const scheduleEnd = new Date(currentTime);
@@ -324,6 +485,8 @@ export function reschedule(
   // 3. Separate fixed events from flexible items
   const fixedEvents: TimeSlot[] = [];
   const existingManagedEvents = new Map<string, CalendarEvent>();
+  const lockedPlacements = new Map<string, TimeSlot>();
+  const lockedExistingIds = new Set<string>();
 
   for (const event of calendarEvents) {
     const eventStart = new Date(event.start);
@@ -336,13 +499,44 @@ export function reschedule(
 
     if (event.isManaged && event.itemId) {
       existingManagedEvents.set(event.itemId, event);
+
+      // Fix: locked managed events must also be tracked as placed so
+      // generateCalendarOperations does not delete them
+      if (event.status === EventStatus.Locked) {
+        lockedPlacements.set(event.itemId, { start: eventStart, end: eventEnd });
+        lockedExistingIds.add(event.itemId);
+      }
     }
   }
 
   // 4. Convert domain objects to ScheduleItems
-  const habitItems = habitsToScheduleItems(habits, scheduleStart, scheduleEnd);
+  const habitItems = habitsToScheduleItems(habits, scheduleStart, scheduleEnd, scheduleStart);
   const taskItems = tasksToScheduleItems(tasks, scheduleStart, scheduleEnd, userSettings);
-  const meetingItems = meetingsToScheduleItems(meetings, scheduleStart, scheduleEnd);
+  const meetingItems = meetingsToScheduleItems(meetings, scheduleStart, scheduleEnd, scheduleStart);
+
+  // 4b. Handle circular dependencies: add errors and strip dependsOn
+  const unschedulable: Array<{ itemId: string; itemType: ItemType; reason: string }> = [];
+
+  for (const error of circularErrors) {
+    // Extract habit ID from the error message
+    const match = error.match(/\(([^)]+)\)$/);
+    const habitId = match ? match[1] : 'unknown';
+    unschedulable.push({
+      itemId: habitId,
+      itemType: ItemType.Habit,
+      reason: error,
+    });
+  }
+
+  // Strip dependsOn from schedule items that belong to cyclic habits
+  if (circularHabitIds.size > 0) {
+    for (const item of habitItems) {
+      const baseId = item.id.split('__')[0];
+      if (circularHabitIds.has(baseId)) {
+        item.dependsOn = null;
+      }
+    }
+  }
 
   // 5. Sort flexible items by priority
   const flexibleItems = sortScheduleItems([...habitItems, ...taskItems, ...meetingItems]);
@@ -351,16 +545,22 @@ export function reschedule(
   const occupiedSlots: TimeSlot[] = [...fixedEvents];
   const placements = new Map<string, TimeSlot>();
   const candidateSlotsMap = new Map<string, CandidateSlot[]>();
-  const unschedulable: Array<{ itemId: string; itemType: ItemType; reason: string }> = [];
   const itemMap = new Map<string, ScheduleItem>();
+
+  // Seed placements with locked managed events so they are not deleted
+  for (const [itemId, slot] of lockedPlacements) {
+    placements.set(itemId, slot);
+  }
 
   for (const item of flexibleItems) {
     itemMap.set(item.id, item);
   }
 
   for (const item of flexibleItems) {
-    // Generate candidates
-    const candidates = generateCandidateSlots(item, timeline, occupiedSlots, bufferConfig);
+    // Generate candidates (pass placements and dependsOn for hard dependency constraint)
+    const candidates = generateCandidateSlots(
+      item, timeline, occupiedSlots, bufferConfig, placements, item.dependsOn,
+    );
     candidateSlotsMap.set(item.id, candidates);
 
     if (candidates.length === 0) {
@@ -436,6 +636,7 @@ export function reschedule(
     statuses,
     itemMap,
     existingManagedEvents,
+    lockedExistingIds,
   );
 
   return { operations, unschedulable };
@@ -467,11 +668,16 @@ function placeFocusTime(
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 7);
 
+    // Count all placed items except meetings toward focus time.
+    // Habits, tasks, and focus blocks all contribute to deep work time.
     let placedFocusMinutesThisWeek = 0;
     for (const [id, slot] of placements) {
-      if (id.startsWith('focus_') && slot.start >= weekStart && slot.start < weekEnd) {
-        const durationMs = slot.end.getTime() - slot.start.getTime();
-        placedFocusMinutesThisWeek += durationMs / (1000 * 60);
+      if (slot.start >= weekStart && slot.start < weekEnd) {
+        // Skip meetings - they don't count as focus/deep work time
+        const isMeeting = id.startsWith('meeting_');
+        if (!isMeeting) {
+          placedFocusMinutesThisWeek += (slot.end.getTime() - slot.start.getTime()) / 60000;
+        }
       }
     }
 
@@ -558,9 +764,10 @@ function generateCalendarOperations(
   statuses: Map<string, EventStatus>,
   itemMap: Map<string, ScheduleItem>,
   existingManagedEvents: Map<string, CalendarEvent>,
+  lockedExistingIds: Set<string> = new Set(),
 ): CalendarOperation[] {
   const operations: CalendarOperation[] = [];
-  const processedExistingIds = new Set<string>();
+  const processedExistingIds = new Set<string>(lockedExistingIds);
 
   for (const [itemId, placement] of placements) {
     const item = itemMap.get(itemId);

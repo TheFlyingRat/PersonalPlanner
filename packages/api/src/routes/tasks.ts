@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { tasks, scheduledEvents } from '../db/schema.js';
 import type { CreateTaskRequest, Task } from '@reclaim/shared';
+import { createTaskSchema, updateTaskSchema } from '../validation.js';
 
 const router = Router();
 
@@ -15,12 +16,12 @@ router.get('/', (_req, res) => {
 
 // POST /api/tasks — create a task
 router.post('/', (req, res) => {
-  const body = req.body as CreateTaskRequest;
-
-  if (!body.name || body.totalDuration == null || !body.dueDate) {
-    res.status(400).json({ error: 'Missing required fields: name, totalDuration, dueDate' });
+  const parsed = createTaskSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
     return;
   }
+  const body = parsed.data as CreateTaskRequest;
 
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
@@ -58,7 +59,13 @@ router.put('/:id', (req, res) => {
     return;
   }
 
-  const body = req.body;
+  const parsed = updateTaskSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const body = parsed.data;
   const now = new Date().toISOString();
 
   const updates: Record<string, unknown> = { updatedAt: now };

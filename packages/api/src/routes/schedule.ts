@@ -145,7 +145,7 @@ router.post('/reschedule', (_req, res) => {
     });
   } catch (error: any) {
     console.error('Reschedule error:', error);
-    res.status(500).json({ error: 'Reschedule failed', details: error.message });
+    res.status(500).json({ error: 'Reschedule failed' });
   }
 });
 

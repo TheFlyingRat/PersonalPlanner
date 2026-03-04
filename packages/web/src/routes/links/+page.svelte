@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { links as linksApi } from '$lib/api';
 
   interface LinkItem {
@@ -32,6 +33,10 @@
   let linkList = $state<LinkItem[]>(mockLinks);
   let showForm = $state(false);
   let copyFeedback = $state<string | null>(null);
+  let loading = $state(true);
+  let error = $state('');
+  let success = $state('');
+  let submitting = $state(false);
 
   // Form fields
   let formName = $state('');
@@ -48,6 +53,11 @@
     3: 'bg-yellow-100 text-yellow-700',
     4: 'bg-green-100 text-green-700',
   };
+
+  function showSuccess(msg: string) {
+    success = msg;
+    setTimeout(() => { success = ''; }, 3000);
+  }
 
   function resetForm() {
     formName = '';
@@ -79,6 +89,7 @@
   }
 
   async function handleSubmit() {
+    submitting = true;
     const durations: number[] = [];
     if (formDuration15) durations.push(15);
     if (formDuration30) durations.push(30);
@@ -95,11 +106,15 @@
       await linksApi.create(linkData as any);
       const list = await linksApi.list();
       linkList = list as any;
+      showSuccess('Link created successfully.');
     } catch {
       linkList = [
         ...linkList,
         { id: crypto.randomUUID(), ...linkData, enabled: true },
       ];
+      showSuccess('Link created (offline).');
+    } finally {
+      submitting = false;
     }
 
     showForm = false;
@@ -119,12 +134,15 @@
   }
 
   async function deleteLink(id: string) {
+    if (!confirm('Are you sure you want to delete this link?')) return;
     try {
       await linksApi.delete(id);
       const list = await linksApi.list();
       linkList = list as any;
+      showSuccess('Link deleted successfully.');
     } catch {
       linkList = linkList.filter((l) => l.id !== id);
+      showSuccess('Link deleted (offline).');
     }
   }
 
@@ -138,7 +156,24 @@
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
   }
+
+  onMount(async () => {
+    loading = true;
+    error = '';
+    try {
+      const list = await linksApi.list();
+      linkList = list as any;
+    } catch {
+      error = 'Failed to load data from API. Showing cached data.';
+    } finally {
+      loading = false;
+    }
+  });
 </script>
+
+<svelte:head>
+  <title>Links - Reclaim</title>
+</svelte:head>
 
 <div class="p-6">
   <div class="flex items-center justify-between mb-6">
@@ -150,6 +185,13 @@
       Create Link
     </button>
   </div>
+
+  {#if error}
+    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+  {/if}
+  {#if success}
+    <div class="mb-4 px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm">{success}</div>
+  {/if}
 
   <!-- Create Form -->
   {#if showForm}
@@ -216,7 +258,8 @@
         <div class="flex items-end gap-3 md:col-span-2">
           <button
             type="submit"
-            class="px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
+            disabled={submitting}
+            class="px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Create Link
           </button>
@@ -232,70 +275,76 @@
     </div>
   {/if}
 
-  <!-- Links List -->
-  <div class="space-y-4">
-    {#each linkList as link}
-      <div class="bg-white rounded-lg shadow p-4">
-        <div class="flex items-center justify-between">
-          <div class="flex-1">
-            <div class="flex items-center gap-3 mb-2">
-              <h3 class="text-lg font-semibold text-gray-900">{link.name}</h3>
-              <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[link.priority]}">
-                {priorityLabels[link.priority]}
-              </span>
-              <span class="px-2 py-0.5 rounded-full text-xs font-semibold
-                {link.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}">
-                {link.enabled ? 'Active' : 'Disabled'}
-              </span>
-            </div>
-            <div class="flex items-center gap-4 text-sm text-gray-600">
-              <div>
-                <span class="font-medium text-gray-500">Slug:</span>
-                <code class="ml-1 px-1.5 py-0.5 bg-gray-100 rounded text-xs">{link.slug}</code>
+  {#if loading}
+    <div class="flex items-center justify-center py-12">
+      <p class="text-gray-500">Loading...</p>
+    </div>
+  {:else}
+    <!-- Links List -->
+    <div class="space-y-4">
+      {#each linkList as link}
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="flex items-center justify-between">
+            <div class="flex-1">
+              <div class="flex items-center gap-3 mb-2">
+                <h3 class="text-lg font-semibold text-gray-900">{link.name}</h3>
+                <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[link.priority]}">
+                  {priorityLabels[link.priority]}
+                </span>
+                <span class="px-2 py-0.5 rounded-full text-xs font-semibold
+                  {link.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}">
+                  {link.enabled ? 'Active' : 'Disabled'}
+                </span>
               </div>
-              <div>
-                <span class="font-medium text-gray-500">Durations:</span>
-                {formatDurations(link.durations)}
+              <div class="flex items-center gap-4 text-sm text-gray-600">
+                <div>
+                  <span class="font-medium text-gray-500">Slug:</span>
+                  <code class="ml-1 px-1.5 py-0.5 bg-gray-100 rounded text-xs">{link.slug}</code>
+                </div>
+                <div>
+                  <span class="font-medium text-gray-500">Durations:</span>
+                  {formatDurations(link.durations)}
+                </div>
+              </div>
+              <div class="mt-2 text-xs text-gray-400">
+                {getBookingUrl(link.slug)}
               </div>
             </div>
-            <div class="mt-2 text-xs text-gray-400">
-              {getBookingUrl(link.slug)}
+            <div class="flex items-center gap-2 ml-4">
+              <button
+                onclick={() => copyUrl(link.slug)}
+                class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
+                  {copyFeedback === link.slug
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
+              >
+                {copyFeedback === link.slug ? 'Copied!' : 'Copy URL'}
+              </button>
+              <button
+                onclick={() => toggleEnabled(link)}
+                class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
+                  {link.enabled
+                    ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}"
+              >
+                {link.enabled ? 'Disable' : 'Enable'}
+              </button>
+              <button
+                onclick={() => deleteLink(link.id)}
+                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+              >
+                Delete
+              </button>
             </div>
-          </div>
-          <div class="flex items-center gap-2 ml-4">
-            <button
-              onclick={() => copyUrl(link.slug)}
-              class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                {copyFeedback === link.slug
-                  ? 'bg-green-100 text-green-700'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
-            >
-              {copyFeedback === link.slug ? 'Copied!' : 'Copy URL'}
-            </button>
-            <button
-              onclick={() => toggleEnabled(link)}
-              class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                {link.enabled
-                  ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}"
-            >
-              {link.enabled ? 'Disable' : 'Enable'}
-            </button>
-            <button
-              onclick={() => deleteLink(link.id)}
-              class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-            >
-              Delete
-            </button>
           </div>
         </div>
-      </div>
-    {/each}
+      {/each}
 
-    {#if linkList.length === 0}
-      <div class="bg-white rounded-lg shadow p-8 text-center">
-        <p class="text-gray-500">No scheduling links yet. Click "Create Link" to create one.</p>
-      </div>
-    {/if}
-  </div>
+      {#if linkList.length === 0}
+        <div class="bg-white rounded-lg shadow p-8 text-center">
+          <p class="text-gray-500">No scheduling links yet. Click "Create Link" to create one.</p>
+        </div>
+      {/if}
+    </div>
+  {/if}
 </div>

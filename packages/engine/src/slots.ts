@@ -13,24 +13,44 @@ export function slotsOverlap(a: TimeSlot, b: TimeSlot): boolean {
 }
 
 /**
+ * Check if two dates are on the same calendar day.
+ */
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+/**
  * Generate candidate placement slots for a given ScheduleItem.
  *
  * 1. Walk the timeline and find slots that fall within the item's timeWindow.
  * 2. Within each available slot, slide a window of `item.duration` minutes
  *    to produce candidate placements.
  * 3. Filter out candidates that overlap with any occupied slot (including buffers).
- * 4. Return candidates with an initial score of 0 (scoring happens later).
+ * 4. If dependsOn is set and the dependency is placed, filter out candidates
+ *    that start before the dependency ends on the same day (hard constraint).
+ * 5. Return candidates with an initial score of 0 (scoring happens later).
  */
 export function generateCandidateSlots(
   item: ScheduleItem,
   timeline: TimeSlot[],
   occupiedSlots: TimeSlot[],
   bufferConfig: BufferConfig,
+  existingPlacements?: Map<string, TimeSlot>,
+  dependsOn?: string | null,
 ): CandidateSlot[] {
   const candidates: CandidateSlot[] = [];
   const durationMs = item.duration * 60 * 1000;
   const stepMs = 15 * 60 * 1000; // 15-minute step for sliding window
   const bufferMs = bufferConfig.breakBetweenItemsMinutes * 60 * 1000;
+
+  // Resolve dependency placement for hard constraint
+  const depPlacement = (dependsOn && existingPlacements)
+    ? existingPlacements.get(dependsOn) ?? null
+    : null;
 
   for (const slot of timeline) {
     // The candidate must fall within the item's allowed time window
@@ -60,7 +80,19 @@ export function generateCandidateSlots(
         return slotsOverlap(candidateSlot, bufferedOccupied);
       });
 
-      if (!hasConflict) {
+      // Hard dependency constraint: candidate must start after
+      // the dependency ends on the same day
+      let violatesDependency = false;
+      if (depPlacement) {
+        if (
+          isSameDay(candidateSlot.start, depPlacement.start) &&
+          candidateStart < depPlacement.end.getTime()
+        ) {
+          violatesDependency = true;
+        }
+      }
+
+      if (!hasConflict && !violatesDependency) {
         candidates.push({
           start: new Date(candidateStart),
           end: new Date(candidateEnd),

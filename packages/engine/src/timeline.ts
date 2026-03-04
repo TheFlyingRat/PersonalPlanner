@@ -8,6 +8,9 @@ import {
  * Parse an "HH:MM" string into { hours, minutes }.
  */
 function parseTime(hhmm: string): { hours: number; minutes: number } {
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) {
+    return { hours: 0, minutes: 0 };
+  }
   const [h, m] = hhmm.split(':').map(Number);
   return { hours: h, minutes: m };
 }

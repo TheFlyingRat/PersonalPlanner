@@ -61,4 +61,8 @@ VOLUME /app/data
 ENV DB_PATH=/app/data/reclaim.db
 ENV NODE_ENV=production
 
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN chown -R appuser:appgroup /app
+USER appuser
+
 CMD ["node", "packages/api/dist/index.js"]
