@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+import { resolve } from 'path';
+dotenv.config({ path: resolve(import.meta.dirname, '../../../.env') });
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -16,6 +19,7 @@ import {
   smartMeetings,
   focusTimeRules,
   bufferConfig,
+  calendars,
   scheduledEvents,
 } from './db/schema.js';
 import { createOAuth2Client, setCredentials, GoogleCalendarClient, CalendarPoller } from './google/index.js';
@@ -51,6 +55,7 @@ import linksRouter from './routes/links.js';
 import analyticsRouter from './routes/analytics.js';
 import authRouter from './routes/auth.js';
 import settingsRouter from './routes/settings.js';
+import calendarsRouter from './routes/calendars.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -151,6 +156,7 @@ app.use('/api/links', linksRouter);
 app.use('/api/analytics', analyticsRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/calendars', calendarsRouter);
 
 // Serve static SvelteKit build in production
 const webBuildPath = resolve(import.meta.dirname, '../../web/build');
