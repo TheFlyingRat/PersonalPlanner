@@ -15,6 +15,7 @@ import type {
   AnalyticsData,
   UserConfig,
   UserSettings,
+  Calendar,
 } from '../../../shared/src/types';
 
 const API_BASE = '/api';
@@ -148,6 +149,16 @@ export const analytics = {
     return request<AnalyticsData>(`/analytics${query ? `?${query}` : ''}`);
   },
   weekly: () => request<any>('/analytics/weekly'),
+};
+
+export const calendars = {
+  list: () => request<Calendar[]>('/calendars'),
+  discover: () => request<Calendar[]>('/calendars/discover'),
+  update: (id: string, data: { mode?: string; enabled?: boolean }) =>
+    request<Calendar>(`/calendars/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
 };
 
 export const settings = {
