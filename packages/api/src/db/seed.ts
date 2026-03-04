@@ -1,5 +1,5 @@
 import { db } from './index.js';
-import { users, bufferConfig, focusTimeRules } from './schema.js';
+import { users, bufferConfig, focusTimeRules, calendars } from './schema.js';
 
 export function seed() {
   const now = new Date().toISOString();
@@ -41,6 +41,22 @@ export function seed() {
       dailyTargetMinutes: 120,
       schedulingHours: 'working',
       enabled: false,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing()
+    .run();
+
+  // Insert primary calendar
+  db.insert(calendars)
+    .values({
+      id: 'primary',
+      googleCalendarId: 'primary',
+      name: 'Primary Calendar',
+      color: '#4285f4',
+      mode: 'writable',
+      enabled: true,
+      syncToken: null,
       createdAt: now,
       updatedAt: now,
     })
