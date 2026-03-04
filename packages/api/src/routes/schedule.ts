@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { scheduledEvents, habits, tasks, smartMeetings, focusTimeRules, bufferConfig, users } from '../db/schema.js';
 import { reschedule } from '@reclaim/engine';
-import type { Habit, Task, SmartMeeting, FocusTimeRule, BufferConfig, CalendarEvent, UserSettings, CalendarOperation } from '@reclaim/shared';
+import type { Habit, Task, SmartMeeting, FocusTimeRule, BufferConfig, CalendarEvent, UserSettings } from '@reclaim/shared';
 import { Priority, Frequency, SchedulingHours, TaskStatus, DecompressionTarget, EventStatus, ItemType, CalendarOpType } from '@reclaim/shared';
 
 const router = Router();

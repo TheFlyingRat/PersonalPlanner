@@ -4,7 +4,7 @@ import { db } from '../db/index.js';
 import { schedulingLinks, scheduledEvents, users } from '../db/schema.js';
 import type { CreateLinkRequest, SchedulingLink, UserSettings } from '@reclaim/shared';
 import { SchedulingHours } from '@reclaim/shared';
-import { createLinkSchema } from '../validation.js';
+import { createLinkSchema, updateLinkSchema } from '../validation.js';
 
 const router = Router();
 
@@ -62,7 +62,13 @@ router.put('/:id', (req, res) => {
     return;
   }
 
-  const body = req.body;
+  const parsed = updateLinkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+
+  const body = parsed.data;
   const now = new Date().toISOString();
 
   const updates: Record<string, unknown> = { updatedAt: now };
@@ -165,14 +171,6 @@ router.get('/:slug/slots', (req, res) => {
     const durationMs = duration * 60 * 1000;
     const slotStepMs = 15 * 60 * 1000; // 15-minute increments
 
-    // Iterate day by day
-    const currentDay = new Date(now);
-    currentDay.setHours(0, 0, 0, 0);
-    // If today, start from now, not midnight
-    if (currentDay.getTime() < now.getTime()) {
-      currentDay.setTime(now.getTime());
-    }
-
     for (let d = 0; d < 7; d++) {
       const day = new Date(now);
       day.setDate(now.getDate() + d);
@@ -255,6 +253,33 @@ router.post('/:slug/book', (req, res) => {
 
   if (endDate <= startDate) {
     res.status(400).json({ error: 'End must be after start' });
+    return;
+  }
+
+  // Validate that start is in the future
+  if (startDate.getTime() <= Date.now()) {
+    res.status(400).json({ error: 'Start time must be in the future' });
+    return;
+  }
+
+  // Validate that the booking duration matches one of the link's configured durations
+  const bookingDurationMin = Math.round((endDate.getTime() - startDate.getTime()) / 60000);
+  const configuredDurations: number[] = link.durations ? JSON.parse(link.durations) : [];
+  if (!configuredDurations.includes(bookingDurationMin)) {
+    res.status(400).json({ error: `Duration ${bookingDurationMin} minutes is not one of the allowed durations: ${configuredDurations.join(', ')}` });
+    return;
+  }
+
+  // Validate name (max 200 chars)
+  if (name !== undefined && name.length > 200) {
+    res.status(400).json({ error: 'Name must be 200 characters or fewer' });
+    return;
+  }
+
+  // Validate email format if provided
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (email !== undefined && email !== '' && !emailRegex.test(email)) {
+    res.status(400).json({ error: 'Invalid email format' });
     return;
   }
 

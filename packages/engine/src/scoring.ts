@@ -4,6 +4,7 @@ import {
   TimeSlot,
   BufferConfig,
 } from '@reclaim/shared';
+import { isSameDay } from './utils.js';
 
 /**
  * Parse "HH:MM" into minutes since midnight.
@@ -185,13 +186,3 @@ function scoreTimeOfDay(slot: CandidateSlot, item: ScheduleItem): number {
   return normalized;
 }
 
-/**
- * Check if two dates are on the same calendar day.
- */
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}

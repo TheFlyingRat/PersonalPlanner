@@ -58,7 +58,7 @@
   // Time grid from 7:00 to 22:00
   const hours = Array.from({ length: 16 }, (_, i) => i + 7);
   const HOUR_HEIGHT = 64;
-  const GRID_HEIGHT = 15 * HOUR_HEIGHT; // 7am-10pm = 15 hours
+  const GRID_HEIGHT = 16 * HOUR_HEIGHT; // 7am-11pm = 16 hour slots
 
   interface CalEvent {
     dayIndex: number;
@@ -101,6 +101,12 @@
     return date.getDate() === today.getDate() &&
       date.getMonth() === today.getMonth() &&
       date.getFullYear() === today.getFullYear();
+  }
+
+  function formatStartTime(startHour: number): string {
+    const h = Math.floor(startHour);
+    const m = Math.round((startHour - h) * 60);
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
   }
 
   function formatEndTime(startHour: number, duration: number): string {
@@ -169,6 +175,7 @@
     <div class="flex items-center gap-2">
       <button
         onclick={prevWeek}
+        aria-label="Previous week"
         class="px-3 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 font-medium text-sm"
       >
         &larr;
@@ -181,6 +188,7 @@
       </button>
       <button
         onclick={nextWeek}
+        aria-label="Next week"
         class="px-3 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 font-medium text-sm"
       >
         &rarr;
@@ -254,7 +262,7 @@
               >
                 <div class="truncate">{event.title}</div>
                 <div class="text-white/70 text-[10px]">
-                  {event.startHour.toString().padStart(2, '0')}:00 - {formatEndTime(event.startHour, event.duration)}
+                  {formatStartTime(event.startHour)} - {formatEndTime(event.startHour, event.duration)}
                 </div>
               </div>
             {/each}

@@ -60,8 +60,8 @@
   async function connectGoogle() {
     try {
       const result = await settingsApi.connectGoogle();
-      if (result.url) {
-        window.location.href = result.url;
+      if (result.redirectUrl) {
+        window.location.href = result.redirectUrl;
       }
     } catch {
       // Mock toggle

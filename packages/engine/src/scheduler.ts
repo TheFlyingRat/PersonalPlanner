@@ -23,6 +23,7 @@ import { buildTimeline, getSchedulingWindow } from './timeline.js';
 import { generateCandidateSlots, slotsOverlap } from './slots.js';
 import { scoreSlot } from './scoring.js';
 import { computeFreeBusyStatus } from './free-busy.js';
+import { parseTime } from './utils.js';
 
 // ============================================================
 // Day-of-week helpers
@@ -43,14 +44,6 @@ function getWeekNumber(date: Date): number {
 // ============================================================
 // Conversion helpers: domain objects -> ScheduleItems
 // ============================================================
-
-function parseTime(hhmm: string): { hours: number; minutes: number } {
-  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) {
-    return { hours: 0, minutes: 0 };
-  }
-  const [h, m] = hhmm.split(':').map(Number);
-  return { hours: h, minutes: m };
-}
 
 /**
  * Build a time window for a given day using HH:MM start/end strings.
@@ -140,7 +133,10 @@ function habitsToScheduleItems(
 
         const weekNum = getWeekNumber(day);
         if (scheduledWeeks.has(weekNum)) continue;
-        const weeksSinceStart = weekNum - windowStartWeek;
+        let weeksSinceStart = weekNum - windowStartWeek;
+        if (weeksSinceStart < 0) {
+          weeksSinceStart += 52; // handle year boundary
+        }
         if (weekInterval > 1 && weeksSinceStart % weekInterval !== 0) continue;
 
         scheduledWeeks.add(weekNum);
@@ -314,11 +310,18 @@ function meetingsToScheduleItems(
         });
       }
     } else if (meeting.frequency === Frequency.Weekly) {
+      const weekInterval = meeting.frequencyConfig?.weekInterval ?? 1;
+      const windowStartWeek = getWeekNumber(windowStart);
       const scheduledWeeks = new Set<number>();
       for (const day of days) {
         if (day.getDay() === 0 || day.getDay() === 6) continue;
         const weekNum = getWeekNumber(day);
         if (scheduledWeeks.has(weekNum)) continue;
+        let weeksSinceStart = weekNum - windowStartWeek;
+        if (weeksSinceStart < 0) {
+          weeksSinceStart += 52; // handle year boundary
+        }
+        if (weekInterval > 1 && weeksSinceStart % weekInterval !== 0) continue;
 
         scheduledWeeks.add(weekNum);
         const dayStr = day.toISOString().slice(0, 10);
@@ -597,6 +600,12 @@ export function reschedule(
   // 7. Handle Focus Time
   const activeFocusRules = focusRules.filter((r) => r.enabled);
   if (activeFocusRules.length > 0) {
+    // Build a type map from the schedule items for meeting detection
+    const itemTypeMap = new Map<string, ItemType>();
+    for (const item of flexibleItems) {
+      itemTypeMap.set(item.id, item.type);
+    }
+
     placeFocusTime(
       activeFocusRules,
       timeline,
@@ -610,6 +619,7 @@ export function reschedule(
       scheduleStart,
       scheduleEnd,
       currentTime,
+      itemTypeMap,
     );
   }
 
@@ -659,6 +669,7 @@ function placeFocusTime(
   _scheduleStart: Date,
   scheduleEnd: Date,
   now: Date,
+  itemTypeMap: Map<string, ItemType> = new Map(),
 ): void {
   for (const rule of focusRules) {
     // Calculate how much focus time is already placed this week
@@ -674,7 +685,7 @@ function placeFocusTime(
     for (const [id, slot] of placements) {
       if (slot.start >= weekStart && slot.start < weekEnd) {
         // Skip meetings - they don't count as focus/deep work time
-        const isMeeting = id.startsWith('meeting_');
+        const isMeeting = itemTypeMap.get(id) === ItemType.Meeting;
         if (!isMeeting) {
           placedFocusMinutesThisWeek += (slot.end.getTime() - slot.start.getTime()) / 60000;
         }

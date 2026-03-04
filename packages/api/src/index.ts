@@ -3,7 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { existsSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, join } from 'path';
+import { timingSafeEqual } from 'crypto';
 import { eq } from 'drizzle-orm';
 
 import { seed } from './db/seed.js';
@@ -125,7 +126,8 @@ app.use('/api', (req, res, next) => {
 
   // Verify Authorization header
   const authHeader = req.headers.authorization;
-  if (!authHeader || authHeader !== `Bearer ${apiKey}`) {
+  const expected = `Bearer ${apiKey}`;
+  if (!authHeader || authHeader.length !== expected.length || !timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected))) {
     res.status(401).json({ error: 'Unauthorized' });
     return;
   }
@@ -155,6 +157,11 @@ const webBuildPath = resolve(import.meta.dirname, '../../web/build');
 if (existsSync(webBuildPath)) {
   app.use(express.static(webBuildPath));
 }
+
+// SPA fallback: serve index.html for any non-API route (client-side routing)
+app.get('*', (_req, res) => {
+  res.sendFile(join(import.meta.dirname, '../../web/build/index.html'));
+});
 
 // Global error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

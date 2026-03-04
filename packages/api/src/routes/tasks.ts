@@ -134,9 +134,12 @@ router.post('/:id/up-next', (req, res) => {
     return;
   }
 
+  const { isUpNext } = req.body;
+  const newIsUpNext = isUpNext !== undefined ? !!isUpNext : !existing.isUpNext;
+
   const now = new Date().toISOString();
   db.update(tasks)
-    .set({ isUpNext: !existing.isUpNext, updatedAt: now })
+    .set({ isUpNext: newIsUpNext, updatedAt: now })
     .where(eq(tasks.id, id))
     .run();
 

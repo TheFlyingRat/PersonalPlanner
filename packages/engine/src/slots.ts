@@ -4,23 +4,13 @@ import {
   CandidateSlot,
   BufferConfig,
 } from '@reclaim/shared';
+import { isSameDay } from './utils.js';
 
 /**
  * Check whether two time slots overlap.
  */
 export function slotsOverlap(a: TimeSlot, b: TimeSlot): boolean {
   return a.start < b.end && b.start < a.end;
-}
-
-/**
- * Check if two dates are on the same calendar day.
- */
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
 }
 
 /**

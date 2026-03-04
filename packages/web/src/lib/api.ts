@@ -15,7 +15,6 @@ import type {
   AnalyticsData,
   UserConfig,
   UserSettings,
-  ScheduleResult,
 } from '../../../shared/src/types';
 
 const API_BASE = '/api';
@@ -35,7 +34,6 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const habits = {
   list: () => request<Habit[]>('/habits'),
-  get: (id: string) => request<Habit>(`/habits/${id}`),
   create: (data: CreateHabitRequest) =>
     request<Habit>('/habits', {
       method: 'POST',
@@ -57,7 +55,6 @@ export const habits = {
 
 export const tasks = {
   list: () => request<Task[]>('/tasks'),
-  get: (id: string) => request<Task>(`/tasks/${id}`),
   create: (data: CreateTaskRequest) =>
     request<Task>('/tasks', {
       method: 'POST',
@@ -81,7 +78,6 @@ export const tasks = {
 
 export const meetings = {
   list: () => request<SmartMeeting[]>('/meetings'),
-  get: (id: string) => request<SmartMeeting>(`/meetings/${id}`),
   create: (data: CreateMeetingRequest) =>
     request<SmartMeeting>('/meetings', {
       method: 'POST',
@@ -115,14 +111,18 @@ export const buffers = {
 };
 
 export const schedule = {
-  getEvents: () =>
-    request<CalendarEvent[]>('/schedule'),
-  run: () => request<ScheduleResult>('/schedule/reschedule', { method: 'POST' }),
+  getEvents: (start?: string, end?: string) => {
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    const qs = params.toString();
+    return request<CalendarEvent[]>(`/schedule${qs ? '?' + qs : ''}`);
+  },
+  run: () => request<{ message: string; operationsApplied: number; unschedulable: any[] }>('/schedule/reschedule', { method: 'POST' }),
 };
 
 export const links = {
   list: () => request<SchedulingLink[]>('/links'),
-  get: (id: string) => request<SchedulingLink>(`/links/${id}`),
   create: (data: CreateLinkRequest) =>
     request<SchedulingLink>('/links', {
       method: 'POST',
@@ -136,7 +136,7 @@ export const links = {
   delete: (id: string) =>
     request<void>(`/links/${id}`, { method: 'DELETE' }),
   getBySlug: (slug: string) =>
-    request<SchedulingLink>(`/links/${slug}/slots`),
+    request<{ slug: string; slots: any[] }>(`/links/${slug}/slots`),
 };
 
 export const analytics = {
@@ -147,6 +147,7 @@ export const analytics = {
     const query = params.toString();
     return request<AnalyticsData>(`/analytics${query ? `?${query}` : ''}`);
   },
+  weekly: () => request<any>('/analytics/weekly'),
 };
 
 export const settings = {

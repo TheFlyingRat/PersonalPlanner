@@ -120,9 +120,12 @@ router.post('/:id/lock', (req, res) => {
     return;
   }
 
+  const { locked } = req.body;
+  const newLocked = locked !== undefined ? !!locked : !existing.locked;
+
   const now = new Date().toISOString();
   db.update(habits)
-    .set({ locked: !existing.locked, updatedAt: now })
+    .set({ locked: newLocked, updatedAt: now })
     .where(eq(habits.id, id))
     .run();
 

@@ -52,7 +52,7 @@ export const createBufferSchema = z.object({
   travelTimeMinutes: z.number().int().min(0),
   decompressionMinutes: z.number().int().min(0),
   breakBetweenItemsMinutes: z.number().int().min(0),
-  applyDecompressionTo: z.enum(['all', 'meetings', 'none']).optional(),
+  applyDecompressionTo: z.enum(['all', 'video_only']).optional(),
 });
 
 export const updateHabitSchema = createHabitSchema.extend({
@@ -62,7 +62,7 @@ export const updateHabitSchema = createHabitSchema.extend({
 
 export const updateTaskSchema = createTaskSchema.extend({
   remainingDuration: z.number().int().positive().optional(),
-  status: z.enum(['open', 'completed', 'cancelled']).optional(),
+  status: z.enum(['open', 'done_scheduling', 'completed']).optional(),
   isUpNext: z.boolean().optional(),
 }).partial();
 
@@ -77,3 +77,7 @@ export const createLinkSchema = z.object({
   schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
   priority: z.number().int().min(1).max(4).optional(),
 });
+
+export const updateLinkSchema = createLinkSchema.extend({
+  enabled: z.boolean().optional(),
+}).partial();

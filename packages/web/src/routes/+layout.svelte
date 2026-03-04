@@ -65,12 +65,13 @@
         <a
           href={item.href}
           onclick={closeSidebar}
+          aria-label={item.label}
           class="flex items-center gap-3 px-6 py-3 text-sm font-medium transition-colors
             {isActive(item.href)
               ? 'bg-slate-700 text-white border-r-2 border-blue-400'
               : 'text-slate-300 hover:bg-slate-700/50 hover:text-white'}"
         >
-          <span class="text-lg">{item.icon}</span>
+          <span class="text-lg" aria-hidden="true">{item.icon}</span>
           <span>{item.label}</span>
         </a>
       {/each}

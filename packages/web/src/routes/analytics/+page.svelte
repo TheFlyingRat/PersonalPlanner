@@ -58,7 +58,10 @@
     loading = true;
     error = '';
     try {
-      const data = await analyticsApi.get();
+      const [data, weeklyData] = await Promise.all([
+        analyticsApi.get(),
+        analyticsApi.weekly(),
+      ]);
       habitHours = Math.round((data.habitMinutes / 60) * 10) / 10;
       taskHours = Math.round((data.taskMinutes / 60) * 10) / 10;
       meetingHours = Math.round((data.meetingMinutes / 60) * 10) / 10;
@@ -66,9 +69,10 @@
       const rawRate = data.habitCompletionRate;
       habitCompletionRate = Math.round(rawRate <= 1 ? rawRate * 100 : rawRate);
 
-      if (data.weeklyBreakdown && data.weeklyBreakdown.length > 0) {
+      const breakdown = weeklyData?.weeklyBreakdown ?? data.weeklyBreakdown;
+      if (breakdown && breakdown.length > 0) {
         const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-        weeklyBreakdown = data.weeklyBreakdown.map((entry, i) => ({
+        weeklyBreakdown = breakdown.map((entry: any, i: number) => ({
           day: dayLabels[i] || new Date(entry.date).toLocaleDateString('en-US', { weekday: 'short' }),
           habits: Math.round((entry.habitMinutes / 60) * 10) / 10,
           tasks: Math.round((entry.taskMinutes / 60) * 10) / 10,
