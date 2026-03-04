@@ -5,6 +5,7 @@ import { calendars, users } from '../db/schema.js';
 import { createOAuth2Client, setCredentials, GoogleCalendarClient } from '../google/index.js';
 import { decrypt } from '../crypto.js';
 import { CalendarMode } from '@reclaim/shared';
+import { pollerManager } from '../index.js';
 
 const router = Router();
 
@@ -67,7 +68,7 @@ router.get('/discover', async (_req, res) => {
 });
 
 // PATCH /api/calendars/:id - update mode or enabled
-router.patch('/:id', (req, res) => {
+router.patch('/:id', async (req, res) => {
   const { id } = req.params;
   const { mode, enabled } = req.body;
 
@@ -102,6 +103,16 @@ router.patch('/:id', (req, res) => {
   }
 
   db.update(calendars).set(updates).where(eq(calendars.id, id)).run();
+
+  // Start/stop poller when enabled state changes
+  if (enabled !== undefined && pollerManager) {
+    const cal = db.select().from(calendars).where(eq(calendars.id, id)).all()[0];
+    if (enabled) {
+      await pollerManager.startPoller(cal.id, cal.googleCalendarId);
+    } else {
+      pollerManager.stopPoller(cal.id);
+    }
+  }
 
   const updated = db.select().from(calendars).where(eq(calendars.id, id)).all();
   res.json(updated[0]);
