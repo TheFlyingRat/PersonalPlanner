@@ -22,7 +22,7 @@ import {
   calendars,
   scheduledEvents,
 } from './db/schema.js';
-import { createOAuth2Client, setCredentials, GoogleCalendarClient, CalendarPoller } from './google/index.js';
+import { createOAuth2Client, setCredentials, GoogleCalendarClient, CalendarPollerManager } from './google/index.js';
 import { decrypt } from './crypto.js';
 import { reschedule } from '@reclaim/engine';
 import type {
@@ -182,7 +182,7 @@ seed();
 // Calendar Polling
 // ============================================================
 
-export let calendarPoller: CalendarPoller | null = null;
+export let pollerManager: CalendarPollerManager | null = null;
 
 function toHabit(row: any): Habit {
   return {
@@ -231,7 +231,7 @@ function toBufConfig(row: any): BufferConfig {
   };
 }
 
-async function initPolling(): Promise<CalendarPoller | null> {
+async function initPolling(): Promise<CalendarPollerManager | null> {
   const userRows = db.select().from(users).all();
   if (!userRows[0]?.googleRefreshToken) {
     console.log('No Google Calendar connected. Polling disabled.');
@@ -239,15 +239,13 @@ async function initPolling(): Promise<CalendarPoller | null> {
   }
 
   const oauth2Client = createOAuth2Client();
-  // Decrypt the refresh token before using it
   const refreshToken = decrypt(userRows[0].googleRefreshToken);
   setCredentials(oauth2Client, refreshToken);
   const calClient = new GoogleCalendarClient(oauth2Client);
 
-  const poller = new CalendarPoller(
+  const manager = new CalendarPollerManager(
     calClient,
-    'primary',
-    async (_events) => {
+    async (_calendarId, _events) => {
       // Load all scheduling data from DB
       const allHabits = db.select().from(habits).all().map(toHabit);
       const allTasks = db.select().from(tasks).all().map(toTask);
@@ -285,7 +283,39 @@ async function initPolling(): Promise<CalendarPoller | null> {
         itemType: row.itemType as ItemType,
         itemId: row.itemId,
         status: (row.status || 'free') as EventStatus,
+        calendarId: row.calendarId || 'primary',
       }));
+
+      // Merge events from locked calendars as immovable constraints
+      const enabledCals = db.select().from(calendars)
+        .where(eq(calendars.enabled, true))
+        .all();
+
+      for (const cal of enabledCals) {
+        if (cal.mode === 'locked') {
+          const syncResult = await calClient.syncEvents(cal.googleCalendarId, cal.syncToken);
+          for (const event of syncResult.events) {
+            if (event.start && event.end) {
+              existingEvents.push({
+                ...event,
+                isManaged: false,
+                status: EventStatus.Locked,
+                calendarId: cal.id,
+              });
+            }
+          }
+        }
+      }
+
+      // Determine default calendars for habits/tasks
+      const defaultHabitCalId = userSettings.defaultHabitCalendarId || 'primary';
+      const defaultTaskCalId = userSettings.defaultTaskCalendarId || 'primary';
+
+      // Look up the googleCalendarId for each default
+      const habitCal = db.select().from(calendars)
+        .where(eq(calendars.id, defaultHabitCalId)).all();
+      const taskCal = db.select().from(calendars)
+        .where(eq(calendars.id, defaultTaskCalId)).all();
 
       // Run the reschedule engine
       const result = reschedule(
@@ -298,8 +328,33 @@ async function initPolling(): Promise<CalendarPoller | null> {
         userSettings,
       );
 
-      // Apply operations to Google Calendar
-      await calClient.applyOperations('primary', result.operations);
+      // Tag each operation with the appropriate calendarId
+      for (const op of result.operations) {
+        if (!op.calendarId) {
+          if (op.itemType === ItemType.Habit || op.itemType === ItemType.Focus) {
+            op.calendarId = defaultHabitCalId;
+          } else if (op.itemType === ItemType.Task) {
+            op.calendarId = defaultTaskCalId;
+          } else {
+            op.calendarId = 'primary';
+          }
+        }
+      }
+
+      // Group operations by target Google Calendar and apply
+      const opsByGoogleCal = new Map<string, typeof result.operations>();
+      for (const op of result.operations) {
+        const cal = db.select().from(calendars)
+          .where(eq(calendars.id, op.calendarId!)).all();
+        const googleCalId = cal[0]?.googleCalendarId || 'primary';
+        const existing = opsByGoogleCal.get(googleCalId) || [];
+        existing.push(op);
+        opsByGoogleCal.set(googleCalId, existing);
+      }
+
+      for (const [googleCalId, ops] of opsByGoogleCal) {
+        await calClient.applyOperations(googleCalId, ops);
+      }
 
       // Store operations in the scheduled_events table
       for (const op of result.operations) {
@@ -310,6 +365,7 @@ async function initPolling(): Promise<CalendarPoller | null> {
             itemType: op.itemType,
             itemId: op.itemId,
             googleEventId: op.eventId || null,
+            calendarId: op.calendarId || 'primary',
             start: op.start,
             end: op.end,
             status: op.status,
@@ -329,31 +385,21 @@ async function initPolling(): Promise<CalendarPoller | null> {
         }
       }
 
-      // Skip the next poll to avoid reacting to our own writes
-      poller.markWritten();
+      // Skip the next poll on all calendars
+      manager.markAllWritten();
 
       console.log(`[poller] Reschedule complete: ${result.operations.length} operations applied`);
     },
-    async () => {
-      const rows = db.select().from(users).all();
-      return rows[0]?.googleSyncToken || null;
-    },
-    async (token) => {
-      db.update(users)
-        .set({ googleSyncToken: token })
-        .where(eq(users.id, userRows[0].id))
-        .run();
-    },
   );
 
-  await poller.start();
-  console.log('Calendar polling started (every 15 seconds)');
-  return poller;
+  await manager.startAll();
+  console.log('Calendar polling started for all enabled calendars');
+  return manager;
 }
 
 initPolling()
-  .then((poller) => {
-    calendarPoller = poller;
+  .then((manager) => {
+    pollerManager = manager;
   })
   .catch((err) => {
     console.error('Polling init failed:', err);
