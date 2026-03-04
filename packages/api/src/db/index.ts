@@ -90,11 +90,23 @@ sqlite.exec(`
     breakBetweenItemsMinutes INTEGER DEFAULT 5,
     applyDecompressionTo TEXT DEFAULT 'all'
   );
+  CREATE TABLE IF NOT EXISTS calendars (
+    id TEXT PRIMARY KEY,
+    googleCalendarId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT DEFAULT '#4285f4',
+    mode TEXT DEFAULT 'writable',
+    enabled INTEGER DEFAULT 1,
+    syncToken TEXT,
+    createdAt TEXT,
+    updatedAt TEXT
+  );
   CREATE TABLE IF NOT EXISTS scheduled_events (
     id TEXT PRIMARY KEY,
     itemType TEXT,
     itemId TEXT,
     googleEventId TEXT,
+    calendarId TEXT,
     start TEXT,
     end TEXT,
     status TEXT DEFAULT 'free',
@@ -114,5 +126,12 @@ sqlite.exec(`
     updatedAt TEXT
   );
 `);
+
+// Migrations for existing databases
+try {
+  sqlite.exec(`ALTER TABLE scheduled_events ADD COLUMN calendarId TEXT`);
+} catch {
+  // Column already exists — ignore
+}
 
 export const db = drizzle(sqlite, { schema });
