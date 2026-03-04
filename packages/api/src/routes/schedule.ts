@@ -11,7 +11,10 @@ const router = Router();
 // GET /api/schedule — return all scheduled events
 router.get('/', (_req, res) => {
   const rows = db.select().from(scheduledEvents).all();
-  res.json(rows);
+  res.json(rows.map((row: any) => ({
+    ...row,
+    calendarId: row.calendarId || 'primary',
+  })));
 });
 
 function toHabit(row: any): Habit {
