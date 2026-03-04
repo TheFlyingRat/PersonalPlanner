@@ -1,12 +1,11 @@
 import dotenv from 'dotenv';
-import { resolve } from 'path';
+import { resolve, join } from 'path';
 dotenv.config({ path: resolve(import.meta.dirname, '../../../.env') });
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { existsSync } from 'fs';
-import { resolve, join } from 'path';
 import { timingSafeEqual } from 'crypto';
 import { eq } from 'drizzle-orm';
 
@@ -316,6 +315,16 @@ async function initPolling(): Promise<CalendarPollerManager | null> {
         .where(eq(calendars.id, defaultHabitCalId)).all();
       const taskCal = db.select().from(calendars)
         .where(eq(calendars.id, defaultTaskCalId)).all();
+
+      // Validate defaults exist, are enabled, and are writable before using them
+      const habitCalRow = habitCal[0];
+      const habitGoogleCalId = (habitCalRow?.enabled && habitCalRow?.mode === 'writable')
+        ? habitCalRow.googleCalendarId
+        : 'primary';
+      const taskCalRow = taskCal[0];
+      const taskGoogleCalId = (taskCalRow?.enabled && taskCalRow?.mode === 'writable')
+        ? taskCalRow.googleCalendarId
+        : 'primary';
 
       // Run the reschedule engine
       const result = reschedule(

@@ -114,6 +114,29 @@ router.patch('/:id', async (req, res) => {
     }
   }
 
+  // Reset defaults if disabled calendar was a default
+  if (enabled === false) {
+    const userRows = db.select().from(users).all();
+    if (userRows[0]?.settings) {
+      const settings = JSON.parse(userRows[0].settings);
+      let changed = false;
+      if (settings.defaultHabitCalendarId === id) {
+        settings.defaultHabitCalendarId = 'primary';
+        changed = true;
+      }
+      if (settings.defaultTaskCalendarId === id) {
+        settings.defaultTaskCalendarId = 'primary';
+        changed = true;
+      }
+      if (changed) {
+        db.update(users)
+          .set({ settings: JSON.stringify(settings) })
+          .where(eq(users.id, userRows[0].id))
+          .run();
+      }
+    }
+  }
+
   const updated = db.select().from(calendars).where(eq(calendars.id, id)).all();
   res.json(updated[0]);
 });
