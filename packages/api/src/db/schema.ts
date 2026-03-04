@@ -12,6 +12,21 @@ export const users = sqliteTable('users', {
 });
 
 // ============================================================
+// Calendars
+// ============================================================
+export const calendars = sqliteTable('calendars', {
+  id: text('id').primaryKey(),
+  googleCalendarId: text('googleCalendarId').notNull(),
+  name: text('name').notNull(),
+  color: text('color').default('#4285f4'),
+  mode: text('mode').default('writable'),  // 'writable' | 'locked'
+  enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  syncToken: text('syncToken'),
+  createdAt: text('createdAt'),
+  updatedAt: text('updatedAt'),
+});
+
+// ============================================================
 // Habits
 // ============================================================
 export const habits = sqliteTable('habits', {
@@ -105,6 +120,7 @@ export const scheduledEvents = sqliteTable('scheduled_events', {
   itemType: text('itemType'),
   itemId: text('itemId'),
   googleEventId: text('googleEventId'),
+  calendarId: text('calendarId'),  // FK to calendars.id
   start: text('start'),
   end: text('end'),
   status: text('status').default('free'),
