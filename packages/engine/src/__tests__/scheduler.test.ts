@@ -1087,6 +1087,66 @@ describe('reschedule', () => {
   });
 
   // ============================================================
+  // Locked external calendar events (e.g. uni timetable)
+  // ============================================================
+
+  it('should schedule around locked external calendar events', () => {
+    // A habit that ideally wants 10:00 on Monday
+    const habit = makeHabit({
+      id: 'habit-lock-test',
+      frequency: Frequency.Weekly,
+      frequencyConfig: { days: ['mon'] },
+      windowStart: '09:00',
+      windowEnd: '14:00',
+      idealTime: '10:00',
+      durationMin: 60,
+      durationMax: 60,
+    });
+
+    // A locked external event at Monday 10:00-11:00 (simulating uni timetable)
+    const lockedEvent: CalendarEvent = {
+      id: 'ext-locked-1',
+      googleEventId: 'g-locked-ext-1',
+      title: 'University Lecture',
+      start: '2026-03-02T10:00:00.000Z',
+      end: '2026-03-02T11:00:00.000Z',
+      isManaged: false,
+      itemType: null,
+      itemId: null,
+      status: EventStatus.Locked,
+    };
+
+    const result = reschedule(
+      [habit],
+      [],
+      [],
+      [],
+      [lockedEvent],
+      defaultBuffer,
+      defaultSettings,
+      NOW,
+    );
+
+    const creates = result.operations.filter(
+      (op) => op.type === CalendarOpType.Create,
+    );
+
+    // The habit should still be placed somewhere
+    expect(creates.length).toBeGreaterThan(0);
+
+    // No created event should overlap with the locked 10:00-11:00 slot
+    const lockedStart = new Date('2026-03-02T10:00:00.000Z').getTime();
+    const lockedEnd = new Date('2026-03-02T11:00:00.000Z').getTime();
+
+    for (const op of creates) {
+      const opStart = new Date(op.start).getTime();
+      const opEnd = new Date(op.end).getTime();
+      const overlaps = opStart < lockedEnd && lockedStart < opEnd;
+      expect(overlaps).toBe(false);
+    }
+  });
+
+  // ============================================================
   // Fix 1: Cross-frequency dependency ID mismatch
   // ============================================================
 
