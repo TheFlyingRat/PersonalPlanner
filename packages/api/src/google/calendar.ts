@@ -165,6 +165,47 @@ export class GoogleCalendarClient {
     }
   }
 
+  // ---------- Calendar listing -----------------------------------------------
+
+  /**
+   * List all calendars accessible by the authenticated user.
+   */
+  async listCalendars(): Promise<Array<{
+    googleCalendarId: string;
+    name: string;
+    color: string;
+    accessRole: string;
+  }>> {
+    const result: Array<{
+      googleCalendarId: string;
+      name: string;
+      color: string;
+      accessRole: string;
+    }> = [];
+
+    let pageToken: string | undefined;
+
+    do {
+      const response = await this.calendar.calendarList.list({
+        maxResults: 250,
+        ...(pageToken ? { pageToken } : {}),
+      });
+
+      for (const item of response.data.items ?? []) {
+        result.push({
+          googleCalendarId: item.id ?? '',
+          name: item.summary ?? '(Untitled)',
+          color: item.backgroundColor ?? '#4285f4',
+          accessRole: item.accessRole ?? 'reader',
+        });
+      }
+
+      pageToken = response.data.nextPageToken ?? undefined;
+    } while (pageToken);
+
+    return result;
+  }
+
   // ---------- Batch operations ----------------------------------------------
 
   /**
