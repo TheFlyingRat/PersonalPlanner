@@ -74,6 +74,13 @@ router.put('/', (req, res) => {
     ...parsed.data,
   };
 
+  if (req.body.defaultHabitCalendarId !== undefined) {
+    updatedSettings.defaultHabitCalendarId = req.body.defaultHabitCalendarId;
+  }
+  if (req.body.defaultTaskCalendarId !== undefined) {
+    updatedSettings.defaultTaskCalendarId = req.body.defaultTaskCalendarId;
+  }
+
   db.update(users)
     .set({ settings: JSON.stringify(updatedSettings) })
     .where(eq(users.id, user.id))
