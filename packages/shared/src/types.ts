@@ -47,6 +47,11 @@ export enum DecompressionTarget {
   VideoOnly = 'video_only',
 }
 
+export enum CalendarMode {
+  Writable = 'writable',
+  Locked = 'locked',
+}
+
 // ============================================================
 // Core Data Models
 // ============================================================
@@ -143,6 +148,16 @@ export interface SchedulingLink {
   updatedAt: string;
 }
 
+export interface Calendar {
+  id: string;
+  googleCalendarId: string;
+  name: string;
+  color: string;
+  mode: CalendarMode;
+  enabled: boolean;
+  syncToken: string | null;
+}
+
 // ============================================================
 // Calendar Events
 // ============================================================
@@ -159,6 +174,7 @@ export interface CalendarEvent {
   status: EventStatus;
   location?: string;
   description?: string;
+  calendarId?: string;         // which calendar this event belongs to
 }
 
 // ============================================================
@@ -201,6 +217,7 @@ export interface CalendarOperation {
   end: string;              // ISO datetime
   status: EventStatus;
   extendedProperties: Record<string, string>;
+  calendarId?: string;         // target calendar for this operation
 }
 
 export interface ScheduleResult {
@@ -217,6 +234,8 @@ export interface UserSettings {
   personalHours: { start: string; end: string };
   timezone: string;
   schedulingWindowDays: number; // how far ahead to schedule
+  defaultHabitCalendarId?: string;
+  defaultTaskCalendarId?: string;
 }
 
 export interface UserConfig {
