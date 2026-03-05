@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, asc } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { tasks, scheduledEvents } from '../db/schema.js';
-import type { CreateTaskRequest, Task } from '@reclaim/shared';
+import { tasks, scheduledEvents, subtasks } from '../db/schema.js';
+import type { CreateTaskRequest, Task, Subtask } from '@cadence/shared';
 import { createTaskSchema, updateTaskSchema } from '../validation.js';
+import { logActivity } from './activity.js';
 
 const router = Router();
 
@@ -39,6 +40,8 @@ router.post('/', (req, res) => {
     schedulingHours: body.schedulingHours ?? 'working',
     status: 'open',
     isUpNext: false,
+    calendarId: body.calendarId ?? null,
+    color: body.color ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -46,6 +49,7 @@ router.post('/', (req, res) => {
   db.insert(tasks).values(row).run();
 
   const created = db.select().from(tasks).where(eq(tasks.id, id)).get();
+  logActivity('create', 'task', id, { name: body.name });
   res.status(201).json(toTask(created!));
 });
 
@@ -81,10 +85,13 @@ router.put('/:id', (req, res) => {
   if (body.schedulingHours !== undefined) updates.schedulingHours = body.schedulingHours;
   if (body.status !== undefined) updates.status = body.status;
   if (body.isUpNext !== undefined) updates.isUpNext = body.isUpNext;
+  if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
+  if (body.color !== undefined) updates.color = body.color;
 
   db.update(tasks).set(updates).where(eq(tasks.id, id)).run();
 
   const updated = db.select().from(tasks).where(eq(tasks.id, id)).get();
+  logActivity('update', 'task', id, { fields: Object.keys(updates) });
   res.json(toTask(updated!));
 });
 
@@ -100,6 +107,7 @@ router.delete('/:id', (req, res) => {
 
   db.delete(scheduledEvents).where(eq(scheduledEvents.itemId, id)).run();
   db.delete(tasks).where(eq(tasks.id, id)).run();
+  logActivity('delete', 'task', id, { name: existing.name });
 
   res.status(204).send();
 });
@@ -147,6 +155,111 @@ router.post('/:id/up-next', (req, res) => {
   res.json(toTask(updated!));
 });
 
+// GET /api/tasks/:id/subtasks — list subtasks ordered by sortOrder
+router.get('/:id/subtasks', (req, res) => {
+  const { id } = req.params;
+  const existing = db.select().from(tasks).where(eq(tasks.id, id)).get();
+  if (!existing) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+
+  const rows = db.select().from(subtasks)
+    .where(eq(subtasks.taskId, id))
+    .orderBy(asc(subtasks.sortOrder))
+    .all();
+
+  const result: Subtask[] = rows.map(toSubtask);
+  res.json(result);
+});
+
+// POST /api/tasks/:id/subtasks — create a subtask
+router.post('/:id/subtasks', (req, res) => {
+  const { id } = req.params;
+  const existing = db.select().from(tasks).where(eq(tasks.id, id)).get();
+  if (!existing) {
+    res.status(404).json({ error: 'Task not found' });
+    return;
+  }
+
+  const { name } = req.body;
+  if (!name || typeof name !== 'string' || name.trim().length === 0) {
+    res.status(400).json({ error: 'name is required' });
+    return;
+  }
+
+  // Auto-assign sortOrder to be after existing subtasks
+  const existingSubtasks = db.select().from(subtasks)
+    .where(eq(subtasks.taskId, id))
+    .all();
+  const maxSort = existingSubtasks.reduce((max, s) => Math.max(max, s.sortOrder ?? 0), -1);
+
+  const subtaskId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  db.insert(subtasks).values({
+    id: subtaskId,
+    taskId: id,
+    name: name.trim(),
+    completed: false,
+    sortOrder: maxSort + 1,
+    createdAt: now,
+  }).run();
+
+  const created = db.select().from(subtasks).where(eq(subtasks.id, subtaskId)).get();
+  logActivity('create', 'task', id, { subtask: name.trim() });
+  res.status(201).json(toSubtask(created!));
+});
+
+// PUT /api/tasks/:id/subtasks/:subtaskId — update a subtask
+router.put('/:id/subtasks/:subtaskId', (req, res) => {
+  const { id, subtaskId } = req.params;
+  const existing = db.select().from(subtasks).where(eq(subtasks.id, subtaskId)).get();
+  if (!existing || existing.taskId !== id) {
+    res.status(404).json({ error: 'Subtask not found' });
+    return;
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (req.body.name !== undefined) updates.name = req.body.name;
+  if (req.body.completed !== undefined) updates.completed = !!req.body.completed;
+  if (req.body.sortOrder !== undefined) updates.sortOrder = req.body.sortOrder;
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: 'No fields to update' });
+    return;
+  }
+
+  db.update(subtasks).set(updates).where(eq(subtasks.id, subtaskId)).run();
+
+  const updated = db.select().from(subtasks).where(eq(subtasks.id, subtaskId)).get();
+  res.json(toSubtask(updated!));
+});
+
+// DELETE /api/tasks/:id/subtasks/:subtaskId — delete a subtask
+router.delete('/:id/subtasks/:subtaskId', (req, res) => {
+  const { id, subtaskId } = req.params;
+  const existing = db.select().from(subtasks).where(eq(subtasks.id, subtaskId)).get();
+  if (!existing || existing.taskId !== id) {
+    res.status(404).json({ error: 'Subtask not found' });
+    return;
+  }
+
+  db.delete(subtasks).where(eq(subtasks.id, subtaskId)).run();
+  res.status(204).send();
+});
+
+function toSubtask(row: typeof subtasks.$inferSelect): Subtask {
+  return {
+    id: row.id,
+    taskId: row.taskId,
+    name: row.name,
+    completed: row.completed ?? false,
+    sortOrder: row.sortOrder ?? 0,
+    createdAt: row.createdAt ?? '',
+  };
+}
+
 function toTask(row: typeof tasks.$inferSelect): Task {
   return {
     id: row.id,
@@ -161,6 +274,8 @@ function toTask(row: typeof tasks.$inferSelect): Task {
     schedulingHours: (row.schedulingHours ?? 'working') as Task['schedulingHours'],
     status: (row.status ?? 'open') as Task['status'],
     isUpNext: row.isUpNext ?? false,
+    calendarId: row.calendarId ?? undefined,
+    color: row.color ?? undefined,
     createdAt: row.createdAt ?? '',
     updatedAt: row.updatedAt ?? '',
   };

@@ -15,6 +15,8 @@ export const createHabitSchema = z.object({
   schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
   autoDecline: z.boolean().optional(),
   dependsOn: z.string().nullable().optional(),
+  calendarId: z.string().optional(),
+  color: z.string().optional(),
 });
 
 export const createTaskSchema = z.object({
@@ -26,6 +28,8 @@ export const createTaskSchema = z.object({
   chunkMin: z.number().int().positive().optional(),
   chunkMax: z.number().int().positive().optional(),
   schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
+  calendarId: z.string().optional(),
+  color: z.string().optional(),
 });
 
 export const createMeetingSchema = z.object({
@@ -39,6 +43,8 @@ export const createMeetingSchema = z.object({
   windowEnd: z.string().regex(timeRegex, 'Must be HH:MM format'),
   location: z.string().optional(),
   conferenceType: z.string().optional(),
+  calendarId: z.string().optional(),
+  color: z.string().optional(),
 });
 
 export const createFocusSchema = z.object({

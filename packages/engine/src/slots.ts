@@ -3,7 +3,7 @@ import {
   TimeSlot,
   CandidateSlot,
   BufferConfig,
-} from '@reclaim/shared';
+} from '@cadence/shared';
 import { isSameDay } from './utils.js';
 
 /**

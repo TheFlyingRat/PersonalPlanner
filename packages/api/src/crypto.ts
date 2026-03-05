@@ -23,12 +23,20 @@ export function encrypt(text: string): string {
 }
 
 export function decrypt(data: string): string {
-  const [saltHex, ivHex, tagHex, encrypted] = data.split(':');
-  const salt = Buffer.from(saltHex, 'hex');
-  const key = getKey(salt);
-  const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(ivHex, 'hex'));
-  decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
-  let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
+  const parts = data.split(':');
+  if (parts.length !== 4) {
+    throw new Error('Invalid encrypted data format');
+  }
+  const [saltHex, ivHex, tagHex, encrypted] = parts;
+  try {
+    const salt = Buffer.from(saltHex, 'hex');
+    const key = getKey(salt);
+    const decipher = createDecipheriv(ALGORITHM, key, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch {
+    throw new Error('Failed to decrypt data');
+  }
 }

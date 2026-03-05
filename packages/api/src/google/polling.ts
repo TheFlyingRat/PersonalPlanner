@@ -1,5 +1,5 @@
-import { POLL_INTERVAL_MS } from '@reclaim/shared';
-import type { CalendarEvent } from '@reclaim/shared';
+import { POLL_INTERVAL_MS } from '@cadence/shared';
+import type { CalendarEvent } from '@cadence/shared';
 import { GoogleCalendarClient } from './calendar.js';
 
 /**

@@ -1,11 +1,45 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import Repeat from 'lucide-svelte/icons/repeat';
+  import CheckSquare from 'lucide-svelte/icons/check-square';
+  import Users from 'lucide-svelte/icons/users';
+  import Target from 'lucide-svelte/icons/target';
   import { analytics as analyticsApi } from '$lib/api';
 
   let loading = $state(true);
   let error = $state('');
 
-  // Mutable analytics data
+  // Date range filter
+  type DateRange = 'week' | 'month' | '30days' | 'all';
+  let selectedRange = $state<DateRange>('month');
+
+  const rangeOptions: { key: DateRange; label: string }[] = [
+    { key: 'week', label: 'This Week' },
+    { key: 'month', label: 'This Month' },
+    { key: '30days', label: 'Last 30 Days' },
+    { key: 'all', label: 'All Time' },
+  ];
+
+  function getDateRange(range: DateRange): { start?: string; end?: string } {
+    const now = new Date();
+    const end = now.toISOString();
+    if (range === 'all') return {};
+    if (range === 'week') {
+      const start = new Date(now);
+      start.setDate(start.getDate() - start.getDay() + 1);
+      start.setHours(0, 0, 0, 0);
+      return { start: start.toISOString(), end };
+    }
+    if (range === 'month') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { start: start.toISOString(), end };
+    }
+    // 30days
+    const start = new Date(now);
+    start.setDate(start.getDate() - 30);
+    return { start: start.toISOString(), end };
+  }
+
+  // Analytics data
   let habitHours = $state(6.5);
   let taskHours = $state(8.0);
   let meetingHours = $state(5.5);
@@ -25,41 +59,43 @@
 
   let totalHours = $derived(habitHours + taskHours + meetingHours + focusHours);
 
-  let summaryCards = $derived([
-    { label: 'Habit Hours', value: habitHours, color: 'text-green-600', bgColor: 'bg-green-50', borderColor: 'border-green-200' },
-    { label: 'Task Hours', value: taskHours, color: 'text-blue-600', bgColor: 'bg-blue-50', borderColor: 'border-blue-200' },
-    { label: 'Meeting Hours', value: meetingHours, color: 'text-purple-600', bgColor: 'bg-purple-50', borderColor: 'border-purple-200' },
-    { label: 'Focus Hours', value: focusHours, color: 'text-orange-600', bgColor: 'bg-orange-50', borderColor: 'border-orange-200' },
-  ]);
+  let topCategory = $derived(() => {
+    const cats = [
+      { name: 'Habits', hours: habitHours },
+      { name: 'Tasks', hours: taskHours },
+      { name: 'Meetings', hours: meetingHours },
+      { name: 'Focus', hours: focusHours },
+    ];
+    return cats.reduce((a, b) => a.hours >= b.hours ? a : b).name;
+  });
 
-  // SVG chart constants
-  const chartWidth = 700;
-  const chartHeight = 200;
-  const barGroupWidth = chartWidth / 7;
-  const barWidth = barGroupWidth * 0.6;
-
-  let maxDayTotal = $derived(
-    Math.max(
-      ...weeklyBreakdown.map((d) => d.habits + d.tasks + d.meetings + d.focus)
-    )
-  );
-
-  function getBarHeight(value: number): number {
-    if (maxDayTotal === 0) return 0;
-    return (value / maxDayTotal) * (chartHeight - 30);
-  }
-
-  // Completion ring
-  const ringRadius = 54;
+  // Ring chart
+  const ringRadius = 58;
   const ringCircumference = 2 * Math.PI * ringRadius;
   let ringDashoffset = $derived(ringCircumference * (1 - habitCompletionRate / 100));
 
-  onMount(async () => {
+  // Stacked bar chart
+  let maxDayTotal = $derived(
+    Math.max(
+      ...weeklyBreakdown.map((d) => d.habits + d.tasks + d.meetings + d.focus),
+      0.1
+    )
+  );
+
+  const barChartHeight = 160;
+
+  function barH(value: number): number {
+    if (maxDayTotal === 0) return 0;
+    return (value / maxDayTotal) * barChartHeight;
+  }
+
+  async function fetchAnalytics(range: DateRange) {
     loading = true;
     error = '';
     try {
+      const { start, end } = getDateRange(range);
       const [data, weeklyData] = await Promise.all([
-        analyticsApi.get(),
+        analyticsApi.get(start, end),
         analyticsApi.weekly(),
       ]);
       habitHours = Math.round((data.habitMinutes / 60) * 10) / 10;
@@ -85,210 +121,265 @@
     } finally {
       loading = false;
     }
+  }
+
+  $effect(() => {
+    const _range = selectedRange;
+    fetchAnalytics(_range);
   });
 </script>
 
 <svelte:head>
-  <title>Analytics - Reclaim</title>
+  <title>Analytics - Cadence</title>
 </svelte:head>
 
-<div class="p-6">
-  <h1 class="text-2xl font-bold text-gray-900 mb-6">Analytics</h1>
+<div style="padding: 24px;">
+  <div class="analytics-header">
+    <h1 style="font-size: 20px; font-weight: 600; color: var(--color-text); margin: 0;">Analytics</h1>
+    <div class="date-range-selector">
+      {#each rangeOptions as range}
+        <button
+          class="range-btn"
+          class:range-btn--active={selectedRange === range.key}
+          onclick={() => { selectedRange = range.key; }}
+        >
+          {range.label}
+        </button>
+      {/each}
+    </div>
+  </div>
 
   {#if error}
-    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+    <div role="alert" style="margin-bottom: 16px; padding: 10px 14px; background: var(--color-danger-muted); color: var(--color-danger); border-radius: var(--radius-md); font-size: 13px;">
+      {error}
+    </div>
   {/if}
 
   {#if loading}
-    <div class="flex items-center justify-center py-12">
-      <p class="text-gray-500">Loading...</p>
+    <div style="display: flex; align-items: center; justify-content: center; padding: 48px 0;" role="status" aria-live="polite">
+      <p style="color: var(--color-text-secondary); font-size: 14px;">Loading...</p>
     </div>
   {:else}
-    <!-- Summary Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-      {#each summaryCards as card}
-        <div class="bg-white rounded-lg shadow p-4 border {card.borderColor}">
-          <div class="{card.bgColor} rounded-lg p-3 mb-3 inline-block">
-            <span class="text-2xl font-bold {card.color}">{card.value}h</span>
+    <!-- KPI Cards -->
+    <div class="analytics-kpi-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px;">
+      {#each [
+        { icon: Repeat, label: 'Habit Hours', value: habitHours, color: 'var(--color-habit-border)' },
+        { icon: CheckSquare, label: 'Task Hours', value: taskHours, color: 'var(--color-task-border)' },
+        { icon: Users, label: 'Meeting Hours', value: meetingHours, color: 'var(--color-meeting-border)' },
+        { icon: Target, label: 'Focus Hours', value: focusHours, color: 'var(--color-focus-border)' },
+      ] as card}
+        <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 20px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+            {#if card.icon === Repeat}<Repeat size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
+            {:else if card.icon === CheckSquare}<CheckSquare size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
+            {:else if card.icon === Users}<Users size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
+            {:else if card.icon === Target}<Target size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
+            {/if}
+            <span style="font-size: 12px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">
+              {card.label}
+            </span>
           </div>
-          <div class="text-sm font-medium text-gray-600">{card.label}</div>
-          <div class="text-xs text-gray-400 mt-1">This week</div>
+          <div class="font-mono" style="font-size: 28px; font-weight: 700; color: var(--color-text);">
+            {card.value}<span style="font-size: 16px; font-weight: 400; color: var(--color-text-secondary);">h</span>
+          </div>
         </div>
       {/each}
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-      <!-- Habit Completion Rate -->
-      <div class="bg-white rounded-lg shadow p-6 flex flex-col items-center">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4 self-start">Habit Completion</h2>
-        <div class="relative">
-          <svg width="140" height="140" viewBox="0 0 140 140">
-            <!-- Background ring -->
-            <circle
-              cx="70"
-              cy="70"
-              r={ringRadius}
-              fill="none"
-              stroke="#e5e7eb"
-              stroke-width="10"
-            />
-            <!-- Progress ring -->
-            <circle
-              cx="70"
-              cy="70"
-              r={ringRadius}
-              fill="none"
-              stroke={habitCompletionRate >= 75 ? '#22c55e' : habitCompletionRate >= 50 ? '#eab308' : '#ef4444'}
-              stroke-width="10"
-              stroke-linecap="round"
-              stroke-dasharray={ringCircumference}
-              stroke-dashoffset={ringDashoffset}
-              transform="rotate(-90 70 70)"
-            />
-            <!-- Text -->
-            <text
-              x="70"
-              y="65"
-              text-anchor="middle"
-              font-size="28"
-              font-weight="bold"
-              fill="#111827"
-            >
-              {habitCompletionRate}%
-            </text>
-            <text
-              x="70"
-              y="85"
-              text-anchor="middle"
-              font-size="11"
-              fill="#6b7280"
-            >
-              completed
-            </text>
-          </svg>
-        </div>
-        <p class="text-sm text-gray-500 mt-3">
-          {Math.round(habitCompletionRate * 7 / 100)} of 7 daily habits completed on average
-        </p>
+    <div class="analytics-content-grid" style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; margin-bottom: 32px;">
+      <!-- Habit Completion Ring -->
+      <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px; display: flex; flex-direction: column; align-items: center;">
+        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0; align-self: flex-start;">Habit Completion</h2>
+        <svg width="140" height="140" viewBox="0 0 140 140" aria-label="Habit completion: {habitCompletionRate}%">
+          <circle
+            cx="70" cy="70" r={ringRadius}
+            fill="none"
+            stroke="var(--color-border)"
+            stroke-width="8"
+          />
+          <circle
+            cx="70" cy="70" r={ringRadius}
+            fill="none"
+            stroke="var(--color-accent)"
+            stroke-width="8"
+            stroke-linecap="round"
+            stroke-dasharray={ringCircumference}
+            stroke-dashoffset={ringDashoffset}
+            transform="rotate(-90 70 70)"
+            class="ring-progress"
+          />
+          <text
+            x="70" y="66"
+            text-anchor="middle"
+            class="font-mono"
+            style="font-size: 26px; font-weight: 700; fill: var(--color-text);"
+          >
+            {habitCompletionRate}%
+          </text>
+          <text
+            x="70" y="84"
+            text-anchor="middle"
+            style="font-size: 11px; fill: var(--color-text-secondary);"
+          >
+            completed
+          </text>
+        </svg>
       </div>
 
-      <!-- Weekly Total -->
-      <div class="bg-white rounded-lg shadow p-6 lg:col-span-2">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">Weekly Summary</h2>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="bg-gray-50 rounded-lg p-4">
-            <div class="text-3xl font-bold text-gray-900">{totalHours}h</div>
-            <div class="text-sm text-gray-500">Total scheduled time</div>
+      <!-- Weekly Summary -->
+      <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px;">
+        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0;">Weekly Summary</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+          <div style="padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md);">
+            <div class="font-mono" style="font-size: 24px; font-weight: 700; color: var(--color-text); margin-bottom: 4px;">
+              {totalHours}<span style="font-size: 14px; font-weight: 400; color: var(--color-text-secondary);">h</span>
+            </div>
+            <div style="font-size: 12px; color: var(--color-text-secondary);">Total Hours</div>
           </div>
-          <div class="bg-gray-50 rounded-lg p-4">
-            <div class="text-3xl font-bold text-gray-900">{(totalHours / 5).toFixed(1)}h</div>
-            <div class="text-sm text-gray-500">Average per workday</div>
+          <div style="padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md);">
+            <div class="font-mono" style="font-size: 24px; font-weight: 700; color: var(--color-text); margin-bottom: 4px;">
+              {(totalHours / 5).toFixed(1)}<span style="font-size: 14px; font-weight: 400; color: var(--color-text-secondary);">h</span>
+            </div>
+            <div style="font-size: 12px; color: var(--color-text-secondary);">Avg / Workday</div>
           </div>
-          <div class="bg-gray-50 rounded-lg p-4">
-            <div class="text-3xl font-bold text-green-600">{habitHours}h</div>
-            <div class="text-sm text-gray-500">Habits (top category)</div>
-          </div>
-          <div class="bg-gray-50 rounded-lg p-4">
-            <div class="text-3xl font-bold text-orange-600">{focusHours}h</div>
-            <div class="text-sm text-gray-500">Focus time achieved</div>
+          <div style="padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md);">
+            <div style="font-size: 24px; font-weight: 700; color: var(--color-text); margin-bottom: 4px;">
+              {topCategory()}
+            </div>
+            <div style="font-size: 12px; color: var(--color-text-secondary);">Top Category</div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Daily Breakdown Chart -->
-    <div class="bg-white rounded-lg shadow p-6">
-      <h2 class="text-lg font-semibold text-gray-900 mb-4">Daily Breakdown</h2>
-
-      <!-- Legend -->
-      <div class="flex gap-4 mb-4 text-sm">
-        <span class="flex items-center gap-1.5">
-          <span class="w-3 h-3 rounded bg-green-500 inline-block"></span> Habits
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span class="w-3 h-3 rounded bg-blue-500 inline-block"></span> Tasks
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span class="w-3 h-3 rounded bg-purple-500 inline-block"></span> Meetings
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span class="w-3 h-3 rounded bg-orange-500 inline-block"></span> Focus
-        </span>
+    <!-- Daily Breakdown -->
+    <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0;">Daily Breakdown</h2>
+        <div style="display: flex; gap: 16px;">
+          {#each [
+            { label: 'Habits', color: 'var(--color-habit-border)' },
+            { label: 'Tasks', color: 'var(--color-task-border)' },
+            { label: 'Meetings', color: 'var(--color-meeting-border)' },
+            { label: 'Focus', color: 'var(--color-focus-border)' },
+          ] as legend}
+            <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-tertiary);">
+              <span style="width: 8px; height: 8px; border-radius: 2px; background: {legend.color};"></span>
+              {legend.label}
+            </span>
+          {/each}
+        </div>
       </div>
 
-      <!-- Stacked Bar Chart (Inline SVG) -->
-      <svg viewBox="0 0 {chartWidth} {chartHeight + 30}" class="w-full" style="max-height: 280px">
-        {#each weeklyBreakdown as day, i}
-          {@const x = i * barGroupWidth + (barGroupWidth - barWidth) / 2}
-          {@const hHabits = getBarHeight(day.habits)}
-          {@const hTasks = getBarHeight(day.tasks)}
-          {@const hMeetings = getBarHeight(day.meetings)}
-          {@const hFocus = getBarHeight(day.focus)}
-          {@const totalH = hHabits + hTasks + hMeetings + hFocus}
-          {@const baseY = chartHeight - 5}
-
-          <!-- Focus (bottom) -->
-          <rect
-            x={x}
-            y={baseY - hFocus}
-            width={barWidth}
-            height={hFocus}
-            rx="2"
-            fill="#f97316"
-          />
-          <!-- Meetings -->
-          <rect
-            x={x}
-            y={baseY - hFocus - hMeetings}
-            width={barWidth}
-            height={hMeetings}
-            rx="0"
-            fill="#a855f7"
-          />
-          <!-- Tasks -->
-          <rect
-            x={x}
-            y={baseY - hFocus - hMeetings - hTasks}
-            width={barWidth}
-            height={hTasks}
-            rx="0"
-            fill="#3b82f6"
-          />
-          <!-- Habits (top) -->
-          <rect
-            x={x}
-            y={baseY - totalH}
-            width={barWidth}
-            height={hHabits}
-            rx="2"
-            fill="#22c55e"
-          />
-
-          <!-- Day label -->
-          <text
-            x={x + barWidth / 2}
-            y={chartHeight + 15}
-            text-anchor="middle"
-            font-size="12"
-            fill="#6b7280"
-          >
-            {day.day}
-          </text>
-
-          <!-- Total label on top -->
-          {#if totalH > 0}
-            <text
-              x={x + barWidth / 2}
-              y={baseY - totalH - 5}
-              text-anchor="middle"
-              font-size="10"
-              fill="#9ca3af"
-            >
-              {(day.habits + day.tasks + day.meetings + day.focus).toFixed(1)}h
-            </text>
-          {/if}
+      <!-- Horizontal stacked bars -->
+      <div class="analytics-bars" style="display: flex; flex-direction: column; gap: 8px;">
+        {#each weeklyBreakdown as day}
+          {@const dayTotal = day.habits + day.tasks + day.meetings + day.focus}
+          {@const barMax = maxDayTotal}
+          <div style="display: grid; grid-template-columns: 36px 1fr 48px; gap: 12px; align-items: center;">
+            <span class="font-mono" style="font-size: 12px; color: var(--color-text-secondary); text-align: right;">
+              {day.day}
+            </span>
+            <div style="display: flex; height: 24px; border-radius: var(--radius-sm); overflow: hidden; background: var(--color-surface-hover);">
+              {#if day.habits > 0}
+                <div style="width: {(day.habits / barMax) * 100}%; background: var(--color-habit-border); transition: width var(--transition-base);"></div>
+              {/if}
+              {#if day.tasks > 0}
+                <div style="width: {(day.tasks / barMax) * 100}%; background: var(--color-task-border); transition: width var(--transition-base);"></div>
+              {/if}
+              {#if day.meetings > 0}
+                <div style="width: {(day.meetings / barMax) * 100}%; background: var(--color-meeting-border); transition: width var(--transition-base);"></div>
+              {/if}
+              {#if day.focus > 0}
+                <div style="width: {(day.focus / barMax) * 100}%; background: var(--color-focus-border); transition: width var(--transition-base);"></div>
+              {/if}
+            </div>
+            <span class="font-mono" style="font-size: 12px; color: var(--color-text-tertiary); text-align: right;">
+              {dayTotal.toFixed(1)}h
+            </span>
+          </div>
         {/each}
-      </svg>
+      </div>
     </div>
   {/if}
 </div>
+
+<style>
+  .analytics-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+
+  .date-range-selector {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .range-btn {
+    padding: var(--space-1) var(--space-4);
+    height: 32px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .range-btn:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+
+  .range-btn--active {
+    background: var(--color-accent);
+    color: var(--color-accent-text);
+    border-color: var(--color-accent);
+  }
+
+  .range-btn--active:hover {
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+    color: var(--color-accent-text);
+  }
+
+  .ring-progress {
+    transition: stroke-dashoffset var(--transition-slow);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ring-progress {
+      transition: none;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .analytics-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-3);
+    }
+    .date-range-selector {
+      flex-wrap: wrap;
+    }
+    .analytics-kpi-grid {
+      grid-template-columns: repeat(2, 1fr) !important;
+    }
+    .analytics-content-grid {
+      grid-template-columns: 1fr !important;
+    }
+    .analytics-bars {
+      overflow-x: auto;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .analytics-kpi-grid {
+      grid-template-columns: 1fr !important;
+    }
+  }
+</style>

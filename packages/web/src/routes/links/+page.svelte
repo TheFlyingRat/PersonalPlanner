@@ -1,6 +1,15 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { links as linksApi } from '$lib/api';
+  import Plus from 'lucide-svelte/icons/plus';
+  import Pencil from 'lucide-svelte/icons/pencil';
+  import Trash2 from 'lucide-svelte/icons/trash-2';
+  import X from 'lucide-svelte/icons/x';
+  import Link from 'lucide-svelte/icons/link';
+  import Copy from 'lucide-svelte/icons/copy';
+  import Check from 'lucide-svelte/icons/check';
+  import ToggleLeft from 'lucide-svelte/icons/toggle-left';
+  import ToggleRight from 'lucide-svelte/icons/toggle-right';
 
   interface LinkItem {
     id: string;
@@ -31,7 +40,8 @@
   ];
 
   let linkList = $state<LinkItem[]>(mockLinks);
-  let showForm = $state(false);
+  let showPanel = $state(false);
+  let editingId = $state<string | null>(null);
   let copyFeedback = $state<string | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -46,13 +56,9 @@
   let formDuration30 = $state(true);
   let formDuration60 = $state(false);
 
+  let panelEl = $state<HTMLDivElement | null>(null);
+
   const priorityLabels: Record<number, string> = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4' };
-  const priorityColors: Record<number, string> = {
-    1: 'bg-red-100 text-red-700',
-    2: 'bg-orange-100 text-orange-700',
-    3: 'bg-yellow-100 text-yellow-700',
-    4: 'bg-green-100 text-green-700',
-  };
 
   function showSuccess(msg: string) {
     success = msg;
@@ -66,6 +72,7 @@
     formDuration15 = false;
     formDuration30 = true;
     formDuration60 = false;
+    editingId = null;
   }
 
   function getBookingUrl(slug: string): string {
@@ -82,10 +89,53 @@
       copyFeedback = slug;
       setTimeout(() => { copyFeedback = null; }, 2000);
     } catch {
-      // Fallback
       copyFeedback = slug;
       setTimeout(() => { copyFeedback = null; }, 2000);
     }
+  }
+
+  function openAddForm() {
+    resetForm();
+    showPanel = true;
+    tick().then(() => focusFirstInPanel());
+  }
+
+  function openEditForm(link: LinkItem) {
+    editingId = link.id;
+    formName = link.name;
+    formSlug = link.slug;
+    formPriority = link.priority;
+    formDuration15 = link.durations.includes(15);
+    formDuration30 = link.durations.includes(30);
+    formDuration60 = link.durations.includes(60);
+    showPanel = true;
+    tick().then(() => focusFirstInPanel());
+  }
+
+  function closePanel() {
+    showPanel = false;
+    resetForm();
+  }
+
+  function focusFirstInPanel() {
+    if (!panelEl) return;
+    const focusable = panelEl.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length > 0) focusable[0].focus();
+  }
+
+  function trapFocus(e: KeyboardEvent) {
+    if (e.key === 'Escape') { closePanel(); return; }
+    if (e.key !== 'Tab' || !panelEl) return;
+    const focusable = panelEl.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && showPanel) closePanel();
   }
 
   async function handleSubmit() {
@@ -103,22 +153,32 @@
     };
 
     try {
-      await linksApi.create(linkData as any);
+      if (editingId) {
+        await linksApi.update(editingId, linkData as any);
+      } else {
+        await linksApi.create(linkData as any);
+      }
       const list = await linksApi.list();
       linkList = list as any;
-      showSuccess('Link created successfully.');
+      showSuccess(editingId ? 'Link updated successfully.' : 'Link created successfully.');
     } catch {
-      linkList = [
-        ...linkList,
-        { id: crypto.randomUUID(), ...linkData, enabled: true },
-      ];
-      showSuccess('Link created (offline).');
+      if (editingId) {
+        linkList = linkList.map((l) =>
+          l.id === editingId ? { ...l, ...linkData } : l
+        );
+        showSuccess('Link updated (offline).');
+      } else {
+        linkList = [
+          ...linkList,
+          { id: crypto.randomUUID(), ...linkData, enabled: true },
+        ];
+        showSuccess('Link created (offline).');
+      }
     } finally {
       submitting = false;
     }
 
-    showForm = false;
-    resetForm();
+    closePanel();
   }
 
   async function toggleEnabled(link: LinkItem) {
@@ -146,10 +206,6 @@
     }
   }
 
-  function formatDurations(durations: number[]): string {
-    return durations.map((d) => `${d}min`).join(', ');
-  }
-
   function autoSlug() {
     formSlug = formName
       .toLowerCase()
@@ -172,179 +228,226 @@
 </script>
 
 <svelte:head>
-  <title>Links - Reclaim</title>
+  <title>Links - Cadence</title>
 </svelte:head>
 
-<div class="p-6">
-  <div class="flex items-center justify-between mb-6">
-    <h1 class="text-2xl font-bold text-gray-900">Scheduling Links</h1>
-    <button
-      onclick={() => { resetForm(); showForm = true; }}
-      class="px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors"
-    >
-      Create Link
+<svelte:window onkeydown={handleKeydown} />
+
+<div style="padding: var(--space-6);">
+  <!-- Header -->
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6);">
+    <h1 style="font-size: 1.5rem; font-weight: 600; color: var(--color-text);">Scheduling Links</h1>
+    <button onclick={openAddForm} class="btn-accent-pill" aria-expanded={showPanel}>
+      <Plus size={16} strokeWidth={1.5} />
+      Add Link
     </button>
   </div>
 
   {#if error}
-    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+    <div class="alert-error" role="alert">{error}</div>
   {/if}
   {#if success}
-    <div class="mb-4 px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm">{success}</div>
-  {/if}
-
-  <!-- Create Form -->
-  {#if showForm}
-    <div class="bg-white rounded-lg shadow p-6 mb-6">
-      <h2 class="text-lg font-semibold text-gray-900 mb-4">Create Scheduling Link</h2>
-      <form
-        onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
-        class="grid grid-cols-1 md:grid-cols-2 gap-4"
-      >
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
-          <input
-            type="text"
-            bind:value={formName}
-            oninput={autoSlug}
-            required
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            placeholder="e.g., Quick Chat"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Slug</label>
-          <input
-            type="text"
-            bind:value={formSlug}
-            required
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            placeholder="e.g., quick-chat"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
-          <select
-            bind:value={formPriority}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value={1}>P1 - Critical</option>
-            <option value={2}>P2 - High</option>
-            <option value={3}>P3 - Medium</option>
-            <option value={4}>P4 - Low</option>
-          </select>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-2">Durations</label>
-          <div class="flex items-center gap-4">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" bind:checked={formDuration15} class="w-4 h-4 rounded" />
-              <span class="text-sm text-gray-700">15 min</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" bind:checked={formDuration30} class="w-4 h-4 rounded" />
-              <span class="text-sm text-gray-700">30 min</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" bind:checked={formDuration60} class="w-4 h-4 rounded" />
-              <span class="text-sm text-gray-700">60 min</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="flex items-end gap-3 md:col-span-2">
-          <button
-            type="submit"
-            disabled={submitting}
-            class="px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Create Link
-          </button>
-          <button
-            type="button"
-            onclick={() => { showForm = false; resetForm(); }}
-            class="px-4 py-2 rounded-lg bg-gray-200 text-gray-700 font-medium hover:bg-gray-300 transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
+    <div class="alert-success" role="alert">{success}</div>
   {/if}
 
   {#if loading}
-    <div class="flex items-center justify-center py-12">
-      <p class="text-gray-500">Loading...</p>
+    <div style="display: flex; align-items: center; justify-content: center; padding: var(--space-12) 0;" role="status" aria-live="polite">
+      <p style="color: var(--color-text-secondary);">Loading...</p>
+    </div>
+  {:else if linkList.length === 0}
+    <!-- Empty State -->
+    <div class="empty-state">
+      <Link size={48} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+      <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--color-text); margin-top: var(--space-4);">No links yet</h2>
+      <p style="color: var(--color-text-secondary); margin-top: var(--space-2);">Create your first scheduling link to share with others</p>
+      <button onclick={openAddForm} class="btn-accent-pill" style="margin-top: var(--space-5);">
+        <Plus size={16} strokeWidth={1.5} />
+        Add Link
+      </button>
     </div>
   {:else}
-    <!-- Links List -->
-    <div class="space-y-4">
-      {#each linkList as link}
-        <div class="bg-white rounded-lg shadow p-4">
-          <div class="flex items-center justify-between">
-            <div class="flex-1">
-              <div class="flex items-center gap-3 mb-2">
-                <h3 class="text-lg font-semibold text-gray-900">{link.name}</h3>
-                <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[link.priority]}">
-                  {priorityLabels[link.priority]}
-                </span>
-                <span class="px-2 py-0.5 rounded-full text-xs font-semibold
-                  {link.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}">
-                  {link.enabled ? 'Active' : 'Disabled'}
-                </span>
-              </div>
-              <div class="flex items-center gap-4 text-sm text-gray-600">
-                <div>
-                  <span class="font-medium text-gray-500">Slug:</span>
-                  <code class="ml-1 px-1.5 py-0.5 bg-gray-100 rounded text-xs">{link.slug}</code>
-                </div>
-                <div>
-                  <span class="font-medium text-gray-500">Durations:</span>
-                  {formatDurations(link.durations)}
-                </div>
-              </div>
-              <div class="mt-2 text-xs text-gray-400">
-                {getBookingUrl(link.slug)}
-              </div>
-            </div>
-            <div class="flex items-center gap-2 ml-4">
-              <button
-                onclick={() => copyUrl(link.slug)}
-                class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                  {copyFeedback === link.slug
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
-              >
-                {copyFeedback === link.slug ? 'Copied!' : 'Copy URL'}
-              </button>
-              <button
-                onclick={() => toggleEnabled(link)}
-                class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                  {link.enabled
-                    ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}"
-              >
-                {link.enabled ? 'Disable' : 'Enable'}
-              </button>
-              <button
-                onclick={() => deleteLink(link.id)}
-                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      {/each}
-
-      {#if linkList.length === 0}
-        <div class="bg-white rounded-lg shadow p-8 text-center">
-          <p class="text-gray-500">No scheduling links yet. Click "Create Link" to create one.</p>
-        </div>
-      {/if}
+    <!-- Table Header -->
+    <div class="table-header" style="grid-template-columns: 1fr 140px 160px 80px 40px;">
+      <span>Name</span>
+      <span>Slug</span>
+      <span>Durations</span>
+      <span>Status</span>
+      <span></span>
     </div>
+
+    <!-- Table Rows -->
+    {#each linkList as link}
+      <div
+        class="table-row"
+        style="grid-template-columns: 1fr 140px 160px 80px 40px;"
+        onclick={() => openEditForm(link)}
+        role="button"
+        tabindex="0"
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditForm(link); } }}
+      >
+        <span style="font-weight: 500; color: var(--color-text);">{link.name}</span>
+        <span class="font-mono" style="color: var(--color-text-secondary); font-size: 0.8125rem;">/{link.slug}</span>
+        <span style="display: flex; gap: var(--space-1); flex-wrap: wrap;">
+          {#each link.durations as dur}
+            <span class="duration-pill">{dur}m</span>
+          {/each}
+        </span>
+        <span>
+          <button
+            class="toggle-btn"
+            onclick={(e) => { e.stopPropagation(); toggleEnabled(link); }}
+            aria-label={link.enabled ? 'Disable link' : 'Enable link'}
+          >
+            {#if link.enabled}
+              <ToggleRight size={20} strokeWidth={1.5} style="color: var(--color-accent);" />
+            {:else}
+              <ToggleLeft size={20} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+            {/if}
+          </button>
+        </span>
+        <span>
+          <button
+            class="copy-btn"
+            onclick={(e) => { e.stopPropagation(); copyUrl(link.slug); }}
+            aria-label="Copy URL"
+          >
+            {#if copyFeedback === link.slug}
+              <Check size={16} strokeWidth={1.5} style="color: var(--color-success);" />
+            {:else}
+              <Copy size={16} strokeWidth={1.5} />
+            {/if}
+          </button>
+        </span>
+
+        <!-- Hover actions -->
+        <div class="row-actions">
+          <button
+            class="row-action-btn"
+            onclick={(e) => { e.stopPropagation(); openEditForm(link); }}
+            aria-label="Edit link"
+          >
+            <Pencil size={16} strokeWidth={1.5} />
+          </button>
+          <button
+            class="row-action-btn row-action-btn--danger"
+            onclick={(e) => { e.stopPropagation(); deleteLink(link.id); }}
+            aria-label="Delete link"
+          >
+            <Trash2 size={16} strokeWidth={1.5} />
+          </button>
+        </div>
+      </div>
+    {/each}
   {/if}
 </div>
+
+<!-- Slide-over Panel -->
+{#if showPanel}
+  <div class="panel-backdrop" onclick={closePanel} aria-hidden="true"></div>
+  <div
+    class="panel-slideover"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="panel-title"
+    tabindex="-1"
+    bind:this={panelEl}
+    onkeydown={trapFocus}
+  >
+    <div class="panel-header">
+      <h2 id="panel-title" style="font-size: 1.125rem; font-weight: 600; color: var(--color-text);">
+        {editingId ? 'Edit Link' : 'Add Link'}
+      </h2>
+      <button onclick={closePanel} class="panel-close-btn" aria-label="Close panel">
+        <X size={20} strokeWidth={1.5} />
+      </button>
+    </div>
+
+    <form
+      onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
+      class="panel-body"
+    >
+      <div class="form-field">
+        <label for="link-name">Name</label>
+        <input id="link-name" type="text" bind:value={formName} oninput={autoSlug} required placeholder="e.g., Quick Chat" />
+      </div>
+
+      <div class="form-field">
+        <label for="link-slug">Slug</label>
+        <input id="link-slug" type="text" bind:value={formSlug} required placeholder="e.g., quick-chat" />
+      </div>
+
+      <div class="form-field">
+        <label for="link-priority">Priority</label>
+        <select id="link-priority" bind:value={formPriority}>
+          <option value={1}>P1 - Critical</option>
+          <option value={2}>P2 - High</option>
+          <option value={3}>P3 - Medium</option>
+          <option value={4}>P4 - Low</option>
+        </select>
+      </div>
+
+      <fieldset class="form-field" style="border: none; padding: 0; margin: 0;">
+        <legend style="font-size: 13px; font-weight: 500; color: var(--color-text); padding: 0; margin-bottom: var(--space-1);">Durations</legend>
+        <div style="display: flex; gap: var(--space-4); padding-top: var(--space-1);">
+          <label class="toggle-label">
+            <input type="checkbox" bind:checked={formDuration15} />
+            <span>15 min</span>
+          </label>
+          <label class="toggle-label">
+            <input type="checkbox" bind:checked={formDuration30} />
+            <span>30 min</span>
+          </label>
+          <label class="toggle-label">
+            <input type="checkbox" bind:checked={formDuration60} />
+            <span>60 min</span>
+          </label>
+        </div>
+      </fieldset>
+
+      <div class="panel-footer">
+        <button type="submit" class="btn-save" disabled={submitting}>
+          {submitting ? 'Saving...' : 'Save'}
+        </button>
+        <button type="button" class="btn-cancel" onclick={closePanel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+{/if}
+
+<style>
+  /* Duration pills */
+  .duration-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    border-radius: var(--radius-full);
+    background: var(--color-surface-hover);
+    color: var(--color-text-secondary);
+  }
+
+  /* Toggle / copy buttons */
+  .toggle-btn,
+  .copy-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: var(--space-1);
+    border-radius: var(--radius-md);
+    color: var(--color-text-secondary);
+    transition: background var(--transition-fast), color var(--transition-fast);
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .copy-btn:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+</style>

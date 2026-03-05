@@ -1,5 +1,5 @@
 {
-  "name": "reclaim-clone",
+  "name": "cadence",
   "private": true,
   "packageManager": "pnpm@9.15.4",
   "scripts": {
@@ -11,5 +11,8 @@
   "devDependencies": {
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "open": "^11.0.0"
   }
 }

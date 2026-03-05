@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { bufferConfig } from '../db/schema.js';
-import type { BufferConfig } from '@reclaim/shared';
+import type { BufferConfig } from '@cadence/shared';
 import { updateBufferSchema } from '../validation.js';
 
 const router = Router();

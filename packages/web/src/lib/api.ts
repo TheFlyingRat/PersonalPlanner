@@ -16,6 +16,8 @@ import type {
   UserConfig,
   UserSettings,
   Calendar,
+  HabitCompletion,
+  Subtask,
 } from '../../../shared/src/types';
 
 const API_BASE = '/api';
@@ -52,6 +54,15 @@ export const habits = {
       method: 'POST',
       body: JSON.stringify({ locked }),
     }),
+  getCompletions: (id: string) =>
+    request<HabitCompletion[]>(`/habits/${id}/completions`),
+  markComplete: (id: string, scheduledDate: string) =>
+    request<HabitCompletion>(`/habits/${id}/completions`, {
+      method: 'POST',
+      body: JSON.stringify({ scheduledDate }),
+    }),
+  getStreak: (id: string) =>
+    request<{ streak: number }>(`/habits/${id}/streak`),
 };
 
 export const tasks = {
@@ -75,6 +86,20 @@ export const tasks = {
       method: 'POST',
       body: JSON.stringify({ isUpNext }),
     }),
+  getSubtasks: (id: string) =>
+    request<Subtask[]>(`/tasks/${id}/subtasks`),
+  createSubtask: (id: string, name: string) =>
+    request<Subtask>(`/tasks/${id}/subtasks`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  updateSubtask: (id: string, subtaskId: string, data: Partial<{ name: string; completed: boolean; sortOrder: number }>) =>
+    request<Subtask>(`/tasks/${id}/subtasks/${subtaskId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteSubtask: (id: string, subtaskId: string) =>
+    request<void>(`/tasks/${id}/subtasks/${subtaskId}`, { method: 'DELETE' }),
 };
 
 export const meetings = {
@@ -120,6 +145,15 @@ export const schedule = {
     return request<CalendarEvent[]>(`/schedule${qs ? '?' + qs : ''}`);
   },
   run: () => request<{ message: string; operationsApplied: number; unschedulable: any[] }>('/schedule/reschedule', { method: 'POST' }),
+  export: (start?: string, end?: string) => {
+    const params = new URLSearchParams();
+    if (start) params.set('start', start);
+    if (end) params.set('end', end);
+    const qs = params.toString();
+    window.location.href = `${API_BASE}/schedule/export${qs ? '?' + qs : ''}`;
+  },
+  getAlternatives: (itemId: string) =>
+    request<{ alternatives: Array<{ start: string; end: string; score: number }> }>(`/schedule/${itemId}/alternatives`),
 };
 
 export const links = {
@@ -161,6 +195,13 @@ export const calendars = {
     }),
 };
 
+export const search = {
+  query: (q: string) =>
+    request<{ results: Array<{ type: string; id: string; name: string; href: string }> }>(
+      `/search?q=${encodeURIComponent(q)}`,
+    ),
+};
+
 export const settings = {
   get: () => request<UserConfig>('/settings'),
   update: (data: Partial<UserSettings>) =>
@@ -172,4 +213,6 @@ export const settings = {
     request<{ redirectUrl: string }>('/auth/google', { method: 'POST' }),
   disconnectGoogle: () =>
     request<void>('/settings/google/disconnect', { method: 'POST' }),
+  getGoogleStatus: () =>
+    request<{ connected: boolean }>('/auth/google/status'),
 };

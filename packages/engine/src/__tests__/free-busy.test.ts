@@ -4,7 +4,7 @@ import {
   EventStatus,
   TimeSlot,
   CandidateSlot,
-} from '@reclaim/shared';
+} from '@cadence/shared';
 
 function makeCandidate(
   startHour: number,

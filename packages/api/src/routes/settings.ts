@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod/v4';
 import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
-import type { UserConfig, UserSettings } from '@reclaim/shared';
+import type { UserConfig, UserSettings } from '@cadence/shared';
 
 const router = Router();
 
@@ -18,6 +18,8 @@ const userSettingsSchema = z.object({
   }).optional(),
   timezone: z.string().optional(),
   schedulingWindowDays: z.number().int().positive().optional(),
+  defaultHabitCalendarId: z.string().min(1).max(200).optional(),
+  defaultTaskCalendarId: z.string().min(1).max(200).optional(),
 });
 
 const defaultSettings: UserSettings = {
@@ -73,13 +75,6 @@ router.put('/', (req, res) => {
     ...currentSettings,
     ...parsed.data,
   };
-
-  if (req.body.defaultHabitCalendarId !== undefined) {
-    updatedSettings.defaultHabitCalendarId = req.body.defaultHabitCalendarId;
-  }
-  if (req.body.defaultTaskCalendarId !== undefined) {
-    updatedSettings.defaultTaskCalendarId = req.body.defaultTaskCalendarId;
-  }
 
   db.update(users)
     .set({ settings: JSON.stringify(updatedSettings) })

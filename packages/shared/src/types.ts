@@ -72,6 +72,8 @@ export interface Habit {
   autoDecline: boolean;
   dependsOn: string | null; // habit ID
   enabled: boolean;
+  calendarId?: string;
+  color?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -97,6 +99,8 @@ export interface Task {
   schedulingHours: SchedulingHours;
   status: TaskStatus;
   isUpNext: boolean;
+  calendarId?: string;
+  color?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -114,6 +118,8 @@ export interface SmartMeeting {
   windowEnd: string;         // HH:MM
   location: string;
   conferenceType: string;    // zoom | meet | teams | none
+  calendarId?: string;
+  color?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -156,6 +162,35 @@ export interface Calendar {
   mode: CalendarMode;
   enabled: boolean;
   syncToken: string | null;
+}
+
+// ============================================================
+// Habit Completions, Subtasks, Activity Log
+// ============================================================
+
+export interface HabitCompletion {
+  id: string;
+  habitId: string;
+  scheduledDate: string;
+  completedAt: string;
+}
+
+export interface Subtask {
+  id: string;
+  taskId: string;
+  name: string;
+  completed: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+export interface ActivityLogEntry {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  details: string | null;
+  createdAt: string;
 }
 
 // ============================================================
@@ -262,6 +297,8 @@ export interface CreateHabitRequest {
   schedulingHours?: SchedulingHours;
   autoDecline?: boolean;
   dependsOn?: string | null;
+  calendarId?: string;
+  color?: string;
 }
 
 export interface CreateTaskRequest {
@@ -273,6 +310,8 @@ export interface CreateTaskRequest {
   chunkMin?: number;
   chunkMax?: number;
   schedulingHours?: SchedulingHours;
+  calendarId?: string;
+  color?: string;
 }
 
 export interface CreateMeetingRequest {
@@ -286,6 +325,8 @@ export interface CreateMeetingRequest {
   windowEnd: string;
   location?: string;
   conferenceType?: string;
+  calendarId?: string;
+  color?: string;
 }
 
 export interface CreateLinkRequest {

@@ -19,11 +19,12 @@ import {
   focusTimeRules,
   bufferConfig,
   calendars,
+  calendarEvents,
   scheduledEvents,
 } from './db/schema.js';
 import { createOAuth2Client, setCredentials, GoogleCalendarClient, CalendarPollerManager } from './google/index.js';
 import { decrypt } from './crypto.js';
-import { reschedule } from '@reclaim/engine';
+import { reschedule } from '@cadence/engine';
 import type {
   Habit,
   Task,
@@ -32,7 +33,7 @@ import type {
   BufferConfig,
   CalendarEvent,
   UserSettings,
-} from '@reclaim/shared';
+} from '@cadence/shared';
 import {
   Priority,
   Frequency,
@@ -42,7 +43,7 @@ import {
   EventStatus,
   ItemType,
   CalendarOpType,
-} from '@reclaim/shared';
+} from '@cadence/shared';
 
 import habitsRouter from './routes/habits.js';
 import tasksRouter from './routes/tasks.js';
@@ -55,12 +56,25 @@ import analyticsRouter from './routes/analytics.js';
 import authRouter from './routes/auth.js';
 import settingsRouter from './routes/settings.js';
 import calendarsRouter from './routes/calendars.js';
+import searchRouter from './routes/search.js';
+import activityRouter from './routes/activity.js';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
-// Security headers
-app.use(helmet());
+// Security headers — allow Geist font CDN
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
+      fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+    },
+  },
+}));
 
 // CORS
 app.use(cors({
@@ -98,6 +112,16 @@ const rescheduleLimiter = rateLimit({
   message: { error: 'Too many reschedule requests, please try again later.' },
 });
 app.use('/api/schedule/reschedule', rescheduleLimiter);
+
+// Strict rate limit for OAuth initiation
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many auth requests, please try again later.' },
+});
+app.use('/api/auth/google', authLimiter);
 
 // API key authentication middleware
 const PUBLIC_ROUTES: Array<{ method: string; pattern: RegExp }> = [
@@ -156,6 +180,8 @@ app.use('/api/analytics', analyticsRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/calendars', calendarsRouter);
+app.use('/api/search', searchRouter);
+app.use('/api/activity', activityRouter);
 
 // Serve static SvelteKit build in production
 const webBuildPath = resolve(import.meta.dirname, '../../web/build');
@@ -244,7 +270,78 @@ async function initPolling(): Promise<CalendarPollerManager | null> {
 
   const manager = new CalendarPollerManager(
     calClient,
-    async (_calendarId, _events) => {
+    async (calendarId, polledEvents) => {
+      // Upsert changed events from this calendar (incremental sync sends only deltas)
+      const now = new Date().toISOString();
+      for (const ev of polledEvents) {
+        if (!ev.googleEventId) continue;
+
+        // Handle cancelled/deleted events
+        if (!ev.start || !ev.end || !ev.title) {
+          db.delete(calendarEvents)
+            .where(eq(calendarEvents.googleEventId, ev.googleEventId))
+            .run();
+          continue;
+        }
+
+        const existing = db.select().from(calendarEvents)
+          .where(eq(calendarEvents.googleEventId, ev.googleEventId))
+          .all();
+
+        if (existing.length > 0) {
+          db.update(calendarEvents)
+            .set({
+              title: ev.title,
+              start: ev.start,
+              end: ev.end,
+              status: ev.status || 'busy',
+              location: ev.location || null,
+              isAllDay: !ev.start.includes('T'),
+              updatedAt: now,
+            })
+            .where(eq(calendarEvents.googleEventId, ev.googleEventId))
+            .run();
+        } else {
+          db.insert(calendarEvents).values({
+            id: crypto.randomUUID(),
+            calendarId,
+            googleEventId: ev.googleEventId,
+            title: ev.title,
+            start: ev.start,
+            end: ev.end,
+            status: ev.status || 'busy',
+            location: ev.location || null,
+            isAllDay: !ev.start.includes('T'),
+            updatedAt: now,
+          }).run();
+        }
+      }
+
+      // Check for conflicts between new/updated external events and managed events
+      const managedEvents = db.select().from(scheduledEvents).all()
+        .filter((r: any) => r.start && r.end);
+
+      const changedTimed = polledEvents.filter(
+        (ev) => ev.start && ev.end && ev.start.includes('T'),
+      );
+
+      const hasConflicts = changedTimed.some((ext) => {
+        const extStart = new Date(ext.start!).getTime();
+        const extEnd = new Date(ext.end!).getTime();
+        return managedEvents.some((managed: any) => {
+          const mStart = new Date(managed.start).getTime();
+          const mEnd = new Date(managed.end).getTime();
+          return extStart < mEnd && mStart < extEnd;
+        });
+      });
+
+      if (!hasConflicts) {
+        console.log('[poller] No conflicts detected, skipping reschedule');
+        return;
+      }
+
+      console.log('[poller] Conflicts detected with managed events, triggering reschedule');
+
       // Load all scheduling data from DB
       const allHabits = db.select().from(habits).all().map(toHabit);
       const allTasks = db.select().from(tasks).all().map(toTask);
@@ -414,8 +511,27 @@ initPolling()
     console.error('Polling init failed:', err);
   });
 
-app.listen(PORT, () => {
-  console.log(`Reclaim API server running on http://localhost:${PORT}`);
+const server = app.listen(PORT, () => {
+  console.log(`Cadence API server running on http://localhost:${PORT}`);
 });
+
+function gracefulShutdown(signal: string) {
+  console.log(`${signal} received. Shutting down gracefully...`);
+  if (pollerManager) {
+    pollerManager.stopAll();
+  }
+  server.close(() => {
+    console.log('HTTP server closed.');
+    process.exit(0);
+  });
+  // Force exit after 10s if server hasn't closed
+  setTimeout(() => {
+    console.error('Forced shutdown after timeout.');
+    process.exit(1);
+  }, 10_000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 export default app;

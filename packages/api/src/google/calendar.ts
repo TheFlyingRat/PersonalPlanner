@@ -1,11 +1,11 @@
 import { google, calendar_v3, Auth } from 'googleapis';
-import { EXTENDED_PROPS, STATUS_PREFIX } from '@reclaim/shared';
+import { EXTENDED_PROPS, STATUS_PREFIX } from '@cadence/shared';
 import {
   CalendarOpType,
   EventStatus,
   ItemType,
-} from '@reclaim/shared';
-import type { CalendarEvent, CalendarOperation } from '@reclaim/shared';
+} from '@cadence/shared';
+import type { CalendarEvent, CalendarOperation } from '@cadence/shared';
 
 /** Status prefix map keyed by EventStatus enum values */
 const STATUS_EMOJI: Record<EventStatus, string> = {
@@ -69,8 +69,10 @@ export class GoogleCalendarClient {
         if (syncToken && !fullSync) {
           params.syncToken = syncToken;
         } else {
-          // Full sync: look 90 days ahead from now
-          params.timeMin = new Date().toISOString();
+          // Full sync: look 30 days back and 90 days ahead
+          const timeMin = new Date();
+          timeMin.setDate(timeMin.getDate() - 30);
+          params.timeMin = timeMin.toISOString();
           const timeMax = new Date();
           timeMax.setDate(timeMax.getDate() + 90);
           params.timeMax = timeMax.toISOString();
@@ -249,8 +251,8 @@ export class GoogleCalendarClient {
   private parseGoogleEvent(event: calendar_v3.Schema$Event): CalendarEvent {
     const privateProps = event.extendedProperties?.private ?? {};
 
-    const reclaimId = privateProps[EXTENDED_PROPS.reclaimId] ?? '';
-    const isManaged = Boolean(reclaimId);
+    const cadenceId = privateProps[EXTENDED_PROPS.cadenceId] ?? '';
+    const isManaged = Boolean(cadenceId);
 
     const rawTitle = event.summary ?? '(No title)';
     const { cleanTitle, status: parsedStatus } = parseStatusPrefix(rawTitle);
@@ -274,7 +276,7 @@ export class GoogleCalendarClient {
     const end = event.end?.dateTime ?? event.end?.date ?? '';
 
     return {
-      id: reclaimId || event.id || '',
+      id: cadenceId || event.id || '',
       googleEventId: event.id ?? '',
       title: cleanTitle,
       start,
@@ -295,7 +297,7 @@ export class GoogleCalendarClient {
     // Merge any extra extended properties from the operation with our standard ones
     const privateProperties: Record<string, string> = {
       ...op.extendedProperties,
-      [EXTENDED_PROPS.reclaimId]: op.itemId,
+      [EXTENDED_PROPS.cadenceId]: op.itemId,
       [EXTENDED_PROPS.itemType]: op.itemType,
       [EXTENDED_PROPS.itemId]: op.itemId,
       [EXTENDED_PROPS.status]: op.status,

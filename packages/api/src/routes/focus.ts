@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { focusTimeRules } from '../db/schema.js';
-import type { FocusTimeRule } from '@reclaim/shared';
+import type { FocusTimeRule } from '@cadence/shared';
 import { updateFocusSchema } from '../validation.js';
 
 const router = Router();

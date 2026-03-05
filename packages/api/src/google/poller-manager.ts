@@ -1,9 +1,9 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { calendars } from '../db/schema.js';
+import { calendars, calendarEvents } from '../db/schema.js';
 import { GoogleCalendarClient } from './calendar.js';
 import { CalendarPoller } from './polling.js';
-import type { CalendarEvent } from '@reclaim/shared';
+import type { CalendarEvent } from '@cadence/shared';
 
 /**
  * Manages one CalendarPoller per enabled calendar.
@@ -29,10 +29,53 @@ export class CalendarPollerManager {
     }
   }
 
-  /** Start a poller for a specific calendar. */
+  /** Start a poller for a specific calendar. Also does an initial event cache. */
   async startPoller(calId: string, googleCalendarId: string): Promise<void> {
     // Stop existing poller if any
     this.stopPoller(calId);
+
+    // Initial sync: fetch all events and cache them immediately
+    try {
+      const calRow = db.select().from(calendars)
+        .where(eq(calendars.id, calId)).all()[0];
+      const syncResult = await this.client.syncEvents(
+        googleCalendarId,
+        calRow?.syncToken || null,
+      );
+
+      // Store sync token
+      if (syncResult.nextSyncToken) {
+        db.update(calendars)
+          .set({ syncToken: syncResult.nextSyncToken })
+          .where(eq(calendars.id, calId))
+          .run();
+      }
+
+      // Cache the events
+      const now = new Date().toISOString();
+      db.delete(calendarEvents)
+        .where(eq(calendarEvents.calendarId, calId))
+        .run();
+      for (const ev of syncResult.events) {
+        if (ev.start && ev.end && ev.title) {
+          db.insert(calendarEvents).values({
+            id: crypto.randomUUID(),
+            calendarId: calId,
+            googleEventId: ev.googleEventId || '',
+            title: ev.title,
+            start: ev.start,
+            end: ev.end,
+            status: ev.status || 'busy',
+            location: ev.location || null,
+            isAllDay: !ev.start.includes('T'),
+            updatedAt: now,
+          }).run();
+        }
+      }
+      console.log(`[poller] Cached ${syncResult.events.length} events for calendar ${calId}`);
+    } catch (err) {
+      console.error(`[poller] Initial sync failed for ${calId}:`, err);
+    }
 
     const poller = new CalendarPoller(
       this.client,
@@ -58,13 +101,17 @@ export class CalendarPollerManager {
     this.pollers.set(calId, poller);
   }
 
-  /** Stop a specific calendar's poller. */
+  /** Stop a specific calendar's poller and clear cached events. */
   stopPoller(calId: string): void {
     const poller = this.pollers.get(calId);
     if (poller) {
       poller.stop();
       this.pollers.delete(calId);
     }
+    // Clear cached events for this calendar
+    db.delete(calendarEvents)
+      .where(eq(calendarEvents.calendarId, calId))
+      .run();
   }
 
   /** Stop all pollers. */

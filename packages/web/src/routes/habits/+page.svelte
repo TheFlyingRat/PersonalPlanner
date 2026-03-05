@@ -1,6 +1,19 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { habits as habitsApi } from '$lib/api';
+  import { onMount, tick } from 'svelte';
+  import { habits as habitsApi, calendars as calendarsApi } from '$lib/api';
+  import type { HabitCompletion, Calendar } from '../../../../shared/src/types';
+  import Plus from 'lucide-svelte/icons/plus';
+  import Pencil from 'lucide-svelte/icons/pencil';
+  import Trash2 from 'lucide-svelte/icons/trash-2';
+  import X from 'lucide-svelte/icons/x';
+  import Lock from 'lucide-svelte/icons/lock';
+  import Unlock from 'lucide-svelte/icons/unlock';
+  import Repeat from 'lucide-svelte/icons/repeat';
+  import ToggleLeft from 'lucide-svelte/icons/toggle-left';
+  import ToggleRight from 'lucide-svelte/icons/toggle-right';
+  import Flame from 'lucide-svelte/icons/flame';
+  import Link2 from 'lucide-svelte/icons/link-2';
+  import CircleCheck from 'lucide-svelte/icons/circle-check';
 
   interface HabitItem {
     id: string;
@@ -16,6 +29,7 @@
     locked: boolean;
     autoDecline: boolean;
     enabled: boolean;
+    dependsOn?: string | null;
   }
 
   // Mock data
@@ -68,12 +82,85 @@
   ];
 
   let habitList = $state<HabitItem[]>(mockHabits);
-  let showForm = $state(false);
+  let showPanel = $state(false);
   let editingId = $state<string | null>(null);
   let loading = $state(true);
   let error = $state('');
   let success = $state('');
   let submitting = $state(false);
+
+  // Calendar list
+  let calendarList = $state<Calendar[]>([]);
+
+  // Streak and completion tracking
+  let streaks = $state<Record<string, number>>({});
+  let completions = $state<Record<string, HabitCompletion[]>>({});
+
+  function getLast7Days(): string[] {
+    const days: string[] = [];
+    const now = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      days.push(d.toISOString().split('T')[0]);
+    }
+    return days;
+  }
+
+  function isDayCompleted(habitId: string, date: string): boolean {
+    const list = completions[habitId] || [];
+    return list.some((c) => c.scheduledDate.startsWith(date));
+  }
+
+  function getDayLabel(dateStr: string): string {
+    const d = new Date(dateStr + 'T12:00:00');
+    return d.toLocaleDateString('en-US', { weekday: 'narrow' });
+  }
+
+  function getParentName(dependsOn: string | null | undefined): string {
+    if (!dependsOn) return '';
+    const parent = habitList.find((h) => h.id === dependsOn);
+    return parent?.name || 'Unknown';
+  }
+
+  async function loadStreaksAndCompletions() {
+    for (const habit of habitList) {
+      try {
+        const [streakData, completionData] = await Promise.all([
+          habitsApi.getStreak(habit.id),
+          habitsApi.getCompletions(habit.id),
+        ]);
+        streaks = { ...streaks, [habit.id]: streakData.streak };
+        completions = { ...completions, [habit.id]: completionData };
+      } catch {
+        // API not available yet, keep defaults
+      }
+    }
+  }
+
+  async function markComplete(habitId: string) {
+    const today = new Date().toISOString().split('T')[0];
+    try {
+      await habitsApi.markComplete(habitId, today);
+      const [streakData, completionData] = await Promise.all([
+        habitsApi.getStreak(habitId),
+        habitsApi.getCompletions(habitId),
+      ]);
+      streaks = { ...streaks, [habitId]: streakData.streak };
+      completions = { ...completions, [habitId]: completionData };
+      showSuccess('Habit marked complete.');
+    } catch {
+      // Optimistic update for offline
+      const now = new Date().toISOString();
+      const existing = completions[habitId] || [];
+      completions = {
+        ...completions,
+        [habitId]: [...existing, { id: crypto.randomUUID(), habitId, scheduledDate: today, completedAt: now }],
+      };
+      streaks = { ...streaks, [habitId]: (streaks[habitId] || 0) + 1 };
+      showSuccess('Habit marked complete (offline).');
+    }
+  }
 
   // Form fields
   let formName = $state('');
@@ -87,14 +174,12 @@
   let formSchedulingHours = $state('working');
   let formLocked = $state(false);
   let formAutoDecline = $state(false);
+  let formCalendarId = $state('');
+  let formColor = $state('');
+
+  let panelEl = $state<HTMLDivElement | null>(null);
 
   const priorityLabels: Record<number, string> = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4' };
-  const priorityColors: Record<number, string> = {
-    1: 'bg-red-100 text-red-700',
-    2: 'bg-orange-100 text-orange-700',
-    3: 'bg-yellow-100 text-yellow-700',
-    4: 'bg-green-100 text-green-700',
-  };
 
   function showSuccess(msg: string) {
     success = msg;
@@ -113,12 +198,15 @@
     formSchedulingHours = 'working';
     formLocked = false;
     formAutoDecline = false;
+    formCalendarId = '';
+    formColor = '';
     editingId = null;
   }
 
   function openAddForm() {
     resetForm();
-    showForm = true;
+    showPanel = true;
+    tick().then(() => focusFirstInPanel());
   }
 
   function openEditForm(habit: HabitItem) {
@@ -134,7 +222,36 @@
     formSchedulingHours = habit.schedulingHours;
     formLocked = habit.locked;
     formAutoDecline = habit.autoDecline;
-    showForm = true;
+    formCalendarId = (habit as any).calendarId ?? '';
+    formColor = (habit as any).color ?? '';
+    showPanel = true;
+    tick().then(() => focusFirstInPanel());
+  }
+
+  function closePanel() {
+    showPanel = false;
+    resetForm();
+  }
+
+  function focusFirstInPanel() {
+    if (!panelEl) return;
+    const focusable = panelEl.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length > 0) focusable[0].focus();
+  }
+
+  function trapFocus(e: KeyboardEvent) {
+    if (e.key === 'Escape') { closePanel(); return; }
+    if (e.key !== 'Tab' || !panelEl) return;
+    const focusable = panelEl.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && showPanel) closePanel();
   }
 
   async function handleSubmit() {
@@ -151,6 +268,8 @@
       schedulingHours: formSchedulingHours,
       locked: formLocked,
       autoDecline: formAutoDecline,
+      calendarId: formCalendarId || undefined,
+      color: formColor || undefined,
     };
 
     try {
@@ -180,8 +299,7 @@
       submitting = false;
     }
 
-    showForm = false;
-    resetForm();
+    closePanel();
   }
 
   async function toggleLock(habit: HabitItem) {
@@ -192,6 +310,19 @@
     } catch {
       habitList = habitList.map((h) =>
         h.id === habit.id ? { ...h, locked: !h.locked } : h
+      );
+    }
+  }
+
+  async function toggleEnabled(habit: HabitItem) {
+    const updated = { ...habit, enabled: !habit.enabled };
+    try {
+      await habitsApi.update(habit.id, updated as any);
+      const list = await habitsApi.list();
+      habitList = list as any;
+    } catch {
+      habitList = habitList.map((h) =>
+        h.id === habit.id ? { ...h, enabled: !h.enabled } : h
       );
     }
   }
@@ -220,247 +351,464 @@
     } finally {
       loading = false;
     }
+    loadStreaksAndCompletions();
+    calendarsApi.list().then((c) => { calendarList = c; }).catch(() => {});
   });
 </script>
 
 <svelte:head>
-  <title>Habits - Reclaim</title>
+  <title>Habits - Cadence</title>
 </svelte:head>
 
-<div class="p-6">
-  <div class="flex items-center justify-between mb-6">
-    <h1 class="text-2xl font-bold text-gray-900">Habits</h1>
-    <button
-      onclick={openAddForm}
-      class="px-4 py-2 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 transition-colors"
-    >
+<svelte:window onkeydown={handleKeydown} />
+
+<div style="padding: var(--space-6);">
+  <!-- Header -->
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6);">
+    <h1 style="font-size: 1.5rem; font-weight: 600; color: var(--color-text);">Habits</h1>
+    <button onclick={openAddForm} class="btn-accent-pill" aria-expanded={showPanel}>
+      <Plus size={16} strokeWidth={1.5} />
       Add Habit
     </button>
   </div>
 
   {#if error}
-    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+    <div class="alert-error" role="alert">{error}</div>
   {/if}
   {#if success}
-    <div class="mb-4 px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm">{success}</div>
-  {/if}
-
-  <!-- Add/Edit Form -->
-  {#if showForm}
-    <div class="bg-white rounded-lg shadow p-6 mb-6">
-      <h2 class="text-lg font-semibold text-gray-900 mb-4">
-        {editingId ? 'Edit Habit' : 'Add New Habit'}
-      </h2>
-      <form
-        onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
-        class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
-      >
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
-          <input
-            type="text"
-            bind:value={formName}
-            required
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-            placeholder="e.g., Lunch Break"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
-          <select
-            bind:value={formPriority}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          >
-            <option value={1}>P1 - Critical</option>
-            <option value={2}>P2 - High</option>
-            <option value={3}>P3 - Medium</option>
-            <option value={4}>P4 - Low</option>
-          </select>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Frequency</label>
-          <select
-            bind:value={formFrequency}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          >
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-          </select>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Window Start</label>
-          <input
-            type="time"
-            bind:value={formWindowStart}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Window End</label>
-          <input
-            type="time"
-            bind:value={formWindowEnd}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Ideal Time</label>
-          <input
-            type="time"
-            bind:value={formIdealTime}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Duration Min (minutes)</label>
-          <input
-            type="number"
-            bind:value={formDurationMin}
-            min="5"
-            max="480"
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Duration Max (minutes)</label>
-          <input
-            type="number"
-            bind:value={formDurationMax}
-            min="5"
-            max="480"
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Scheduling Hours</label>
-          <select
-            bind:value={formSchedulingHours}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          >
-            <option value="working">Working Hours</option>
-            <option value="personal">Personal Hours</option>
-            <option value="custom">Custom</option>
-          </select>
-        </div>
-
-        <div class="flex items-center gap-6 pt-6">
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" bind:checked={formLocked} class="w-4 h-4 rounded" />
-            <span class="text-sm font-medium text-gray-700">Locked</span>
-          </label>
-          <label class="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" bind:checked={formAutoDecline} class="w-4 h-4 rounded" />
-            <span class="text-sm font-medium text-gray-700">Auto-decline</span>
-          </label>
-        </div>
-
-        <div class="flex items-end gap-3 lg:col-span-2">
-          <button
-            type="submit"
-            disabled={submitting}
-            class="px-4 py-2 rounded-lg bg-green-600 text-white font-medium hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {editingId ? 'Update Habit' : 'Create Habit'}
-          </button>
-          <button
-            type="button"
-            onclick={() => { showForm = false; resetForm(); }}
-            class="px-4 py-2 rounded-lg bg-gray-200 text-gray-700 font-medium hover:bg-gray-300 transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
+    <div class="alert-success" role="alert">{success}</div>
   {/if}
 
   {#if loading}
-    <div class="flex items-center justify-center py-12">
-      <p class="text-gray-500">Loading...</p>
+    <div style="display: flex; align-items: center; justify-content: center; padding: var(--space-12) 0;" role="status" aria-live="polite">
+      <p style="color: var(--color-text-secondary);">Loading...</p>
+    </div>
+  {:else if habitList.length === 0}
+    <!-- Empty State -->
+    <div class="empty-state">
+      <Repeat size={48} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+      <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--color-text); margin-top: var(--space-4);">No habits yet</h2>
+      <p style="color: var(--color-text-secondary); margin-top: var(--space-2);">Create your first habit to start scheduling</p>
+      <button onclick={openAddForm} class="btn-accent-pill" style="margin-top: var(--space-5);">
+        <Plus size={16} strokeWidth={1.5} />
+        Add Habit
+      </button>
     </div>
   {:else}
-    <!-- Habit List -->
-    <div class="space-y-4">
-      {#each habitList as habit}
-        <div class="bg-white rounded-lg shadow p-4">
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <div class="flex items-center gap-3 mb-2">
-                <h3 class="text-lg font-semibold text-gray-900">{habit.name}</h3>
-                <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[habit.priority]}">
-                  {priorityLabels[habit.priority]}
-                </span>
-                {#if habit.locked}
-                  <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
-                    Locked
-                  </span>
-                {/if}
-                {#if habit.autoDecline}
-                  <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700">
-                    Auto-decline
-                  </span>
-                {/if}
-              </div>
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-gray-600">
-                <div>
-                  <span class="font-medium text-gray-500">Window:</span>
-                  {habit.windowStart} - {habit.windowEnd}
-                </div>
-                <div>
-                  <span class="font-medium text-gray-500">Ideal:</span>
-                  {habit.idealTime}
-                </div>
-                <div>
-                  <span class="font-medium text-gray-500">Duration:</span>
-                  {habit.durationMin}-{habit.durationMax} min
-                </div>
-                <div>
-                  <span class="font-medium text-gray-500">Frequency:</span>
-                  <span class="capitalize">{habit.frequency}</span>
-                </div>
-              </div>
-            </div>
-            <div class="flex items-center gap-2 ml-4">
-              <button
-                onclick={() => toggleLock(habit)}
-                class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors
-                  {habit.locked
-                    ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
-              >
-                {habit.locked ? 'Locked' : 'Unlocked'}
-              </button>
-              <button
-                onclick={() => openEditForm(habit)}
-                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
-              >
-                Edit
-              </button>
-              <button
-                onclick={() => deleteHabit(habit.id)}
-                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      {/each}
-
-      {#if habitList.length === 0}
-        <div class="bg-white rounded-lg shadow p-8 text-center">
-          <p class="text-gray-500">No habits yet. Click "Add Habit" to create one.</p>
-        </div>
-      {/if}
+    <!-- Table Header -->
+    <div class="table-header" style="grid-template-columns: 1fr 60px 80px 100px 120px 140px 80px;">
+      <span>Name</span>
+      <span>Streak</span>
+      <span>Priority</span>
+      <span>Frequency</span>
+      <span>Duration</span>
+      <span>Window</span>
+      <span>Status</span>
     </div>
+
+    <!-- Table Rows -->
+    {#each habitList as habit}
+      <div
+        class="table-row"
+        style="grid-template-columns: 1fr 60px 80px 100px 120px 140px 80px;"
+        onclick={() => openEditForm(habit)}
+        role="button"
+        tabindex="0"
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditForm(habit); } }}
+      >
+        <span style="display: flex; align-items: center; gap: var(--space-2); font-weight: 500; color: var(--color-text);">
+          {habit.name}
+          {#if habit.locked}
+            <Lock size={14} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+          {/if}
+          {#if habit.dependsOn}
+            <span class="dependency-badge" title="Depends on: {getParentName(habit.dependsOn)}">
+              <Link2 size={12} strokeWidth={1.5} />
+              {getParentName(habit.dependsOn)}
+            </span>
+          {/if}
+        </span>
+        <span>
+          {#if (streaks[habit.id] || 0) > 0}
+            <span class="streak-badge">
+              <Flame size={14} strokeWidth={1.5} />
+              {streaks[habit.id]}
+            </span>
+          {:else}
+            <span style="color: var(--color-text-tertiary); font-size: 0.8125rem;">--</span>
+          {/if}
+        </span>
+        <span>
+          <span class="priority-badge priority-{habit.priority}">{priorityLabels[habit.priority]}</span>
+        </span>
+        <span style="color: var(--color-text-secondary); text-transform: capitalize;">{habit.frequency}</span>
+        <span class="font-mono" style="color: var(--color-text-secondary);">{habit.durationMin}-{habit.durationMax}m</span>
+        <span class="font-mono" style="color: var(--color-text-secondary);">{habit.windowStart}-{habit.windowEnd}</span>
+        <span>
+          <button
+            class="toggle-btn"
+            onclick={(e) => { e.stopPropagation(); toggleEnabled(habit); }}
+            aria-label={habit.enabled ? 'Disable habit' : 'Enable habit'}
+          >
+            {#if habit.enabled}
+              <ToggleRight size={20} strokeWidth={1.5} style="color: var(--color-accent);" />
+            {:else}
+              <ToggleLeft size={20} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+            {/if}
+          </button>
+        </span>
+
+        <!-- Hover actions -->
+        <div class="row-actions">
+          <button
+            class="row-action-btn"
+            onclick={(e) => { e.stopPropagation(); markComplete(habit.id); }}
+            aria-label="Mark habit complete for today"
+            title="Mark complete"
+          >
+            <CircleCheck size={16} strokeWidth={1.5} />
+          </button>
+          <button
+            class="row-action-btn"
+            onclick={(e) => { e.stopPropagation(); openEditForm(habit); }}
+            aria-label="Edit habit"
+          >
+            <Pencil size={16} strokeWidth={1.5} />
+          </button>
+          <button
+            class="row-action-btn row-action-btn--danger"
+            onclick={(e) => { e.stopPropagation(); deleteHabit(habit.id); }}
+            aria-label="Delete habit"
+          >
+            <Trash2 size={16} strokeWidth={1.5} />
+          </button>
+        </div>
+      </div>
+    {/each}
   {/if}
 </div>
+
+<!-- Slide-over Panel -->
+{#if showPanel}
+  <div class="panel-backdrop" onclick={closePanel} aria-hidden="true"></div>
+  <div
+    class="panel-slideover"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="panel-title"
+    tabindex="-1"
+    bind:this={panelEl}
+    onkeydown={trapFocus}
+  >
+    <div class="panel-header">
+      <h2 id="panel-title" style="font-size: 1.125rem; font-weight: 600; color: var(--color-text);">
+        {editingId ? 'Edit Habit' : 'Add Habit'}
+      </h2>
+      <button onclick={closePanel} class="panel-close-btn" aria-label="Close panel">
+        <X size={20} strokeWidth={1.5} />
+      </button>
+    </div>
+
+    <form
+      onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
+      class="panel-body"
+    >
+      <div class="form-field">
+        <label for="habit-name">Name</label>
+        <input id="habit-name" type="text" bind:value={formName} required placeholder="e.g., Lunch Break" />
+      </div>
+
+      <div class="form-field">
+        <label for="habit-priority">Priority</label>
+        <select id="habit-priority" bind:value={formPriority}>
+          <option value={1}>P1 - Critical</option>
+          <option value={2}>P2 - High</option>
+          <option value={3}>P3 - Medium</option>
+          <option value={4}>P4 - Low</option>
+        </select>
+      </div>
+
+      <div class="form-field">
+        <label for="habit-frequency">Frequency</label>
+        <select id="habit-frequency" bind:value={formFrequency}>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <div class="form-field">
+          <label for="habit-dur-min">Duration Min</label>
+          <input id="habit-dur-min" type="number" bind:value={formDurationMin} min="5" max="480" />
+        </div>
+        <div class="form-field">
+          <label for="habit-dur-max">Duration Max</label>
+          <input id="habit-dur-max" type="number" bind:value={formDurationMax} min="5" max="480" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="form-field">
+          <label for="habit-win-start">Window Start</label>
+          <input id="habit-win-start" type="time" bind:value={formWindowStart} />
+        </div>
+        <div class="form-field">
+          <label for="habit-win-end">Window End</label>
+          <input id="habit-win-end" type="time" bind:value={formWindowEnd} />
+        </div>
+      </div>
+
+      <div class="form-field">
+        <label for="habit-ideal">Ideal Time</label>
+        <input id="habit-ideal" type="time" bind:value={formIdealTime} />
+      </div>
+
+      <div class="form-field">
+        <label for="habit-sched">Scheduling Hours</label>
+        <select id="habit-sched" bind:value={formSchedulingHours}>
+          <option value="working">Working Hours</option>
+          <option value="personal">Personal Hours</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+
+      {#if calendarList.length > 0}
+        <div class="form-field">
+          <label for="habit-calendar">Calendar</label>
+          <select id="habit-calendar" bind:value={formCalendarId}>
+            <option value="">Default</option>
+            {#each calendarList as cal}
+              <option value={cal.id}>{cal.name}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+
+      <div class="form-field">
+        <label>Color</label>
+        <div class="color-picker">
+          {#each ['#4285f4', '#ea4335', '#34a853', '#fbbc04', '#ff6d01', '#46bdc6', '#7b61ff', '#e91e63'] as c}
+            <button
+              type="button"
+              class="color-swatch"
+              class:color-swatch--active={formColor === c}
+              style="background: {c};"
+              onclick={() => { formColor = c; }}
+              aria-label="Select color {c}"
+            ></button>
+          {/each}
+          <button
+            type="button"
+            class="color-swatch color-swatch--none"
+            class:color-swatch--active={!formColor}
+            onclick={() => { formColor = ''; }}
+            aria-label="No color"
+          >&#x2715;</button>
+        </div>
+      </div>
+
+      <div class="form-toggles">
+        <label class="toggle-label">
+          <input type="checkbox" bind:checked={formLocked} />
+          <span>Locked</span>
+        </label>
+        <label class="toggle-label">
+          <input type="checkbox" bind:checked={formAutoDecline} />
+          <span>Auto-decline</span>
+        </label>
+      </div>
+
+      {#if editingId}
+        <!-- Last 7 days completion -->
+        <div class="completion-section">
+          <div class="completion-header">
+            <span class="completion-title">Last 7 Days</span>
+            {#if (streaks[editingId] || 0) > 0}
+              <span class="streak-badge">
+                <Flame size={14} strokeWidth={1.5} />
+                {streaks[editingId]} day streak
+              </span>
+            {/if}
+          </div>
+          <div class="completion-dots">
+            {#each getLast7Days() as day}
+              <div class="completion-day">
+                <div class="completion-dot" class:completed={isDayCompleted(editingId, day)}></div>
+                <span class="completion-day-label">{getDayLabel(day)}</span>
+              </div>
+            {/each}
+          </div>
+          <button
+            type="button"
+            class="btn-action"
+            onclick={() => { markComplete(editingId!); }}
+          >
+            <CircleCheck size={16} strokeWidth={1.5} />
+            Mark Complete Today
+          </button>
+        </div>
+      {/if}
+
+      <div class="panel-footer">
+        <button type="submit" class="btn-save" disabled={submitting}>
+          {submitting ? 'Saving...' : 'Save'}
+        </button>
+        <button type="button" class="btn-cancel" onclick={closePanel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+{/if}
+
+<style>
+  /* Toggle button */
+  .toggle-btn {
+    display: flex;
+    align-items: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  .form-toggles {
+    display: flex;
+    gap: var(--space-6);
+    padding: var(--space-2) 0;
+  }
+
+  /* Streak badge */
+  .streak-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--color-warning-amber);
+  }
+
+  /* Dependency badge */
+  .dependency-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--color-text-tertiary);
+    padding: 1px 6px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+  }
+
+  /* Completion section in panel */
+  .completion-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3) 0;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .completion-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .completion-title {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+  }
+
+  .completion-dots {
+    display: flex;
+    gap: var(--space-3);
+    justify-content: space-between;
+  }
+
+  .completion-day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .completion-dot {
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-full);
+    border: 2px solid var(--color-border);
+    background: none;
+    transition: background var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .completion-dot.completed {
+    background: var(--color-success);
+    border-color: var(--color-success);
+  }
+
+  .completion-day-label {
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+    font-weight: 500;
+  }
+
+  /* Action button in panel */
+  .btn-action {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+  .btn-action:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+
+  .color-picker {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .color-swatch {
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-full);
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  }
+  .color-swatch:hover {
+    box-shadow: 0 0 0 2px var(--color-border-strong);
+  }
+  .color-swatch--active {
+    border-color: var(--color-text);
+    box-shadow: 0 0 0 2px var(--color-border-strong);
+  }
+  .color-swatch--none {
+    background: var(--color-surface-hover) !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--color-text-tertiary);
+    line-height: 1;
+  }
+</style>

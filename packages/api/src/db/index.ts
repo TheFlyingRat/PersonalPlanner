@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from './schema.js';
 
-const dbPath = process.env.DB_PATH || './data/reclaim.db';
+const dbPath = process.env.DB_PATH || './data/cadence.db';
 
 // Ensure the data directory exists
 const dbDir = dirname(dbPath);
@@ -40,6 +40,8 @@ sqlite.exec(`
     autoDecline INTEGER DEFAULT 0,
     dependsOn TEXT,
     enabled INTEGER DEFAULT 1,
+    calendarId TEXT,
+    color TEXT,
     createdAt TEXT,
     updatedAt TEXT
   );
@@ -56,6 +58,8 @@ sqlite.exec(`
     schedulingHours TEXT,
     status TEXT DEFAULT 'open',
     isUpNext INTEGER DEFAULT 0,
+    calendarId TEXT,
+    color TEXT,
     createdAt TEXT,
     updatedAt TEXT
   );
@@ -71,6 +75,8 @@ sqlite.exec(`
     windowEnd TEXT,
     location TEXT,
     conferenceType TEXT,
+    calendarId TEXT,
+    color TEXT,
     createdAt TEXT,
     updatedAt TEXT
   );
@@ -110,9 +116,44 @@ sqlite.exec(`
     start TEXT,
     end TEXT,
     status TEXT DEFAULT 'free',
+    isAllDay INTEGER DEFAULT 0,
     alternativeSlotsCount INTEGER,
     createdAt TEXT,
     updatedAt TEXT
+  );
+  CREATE TABLE IF NOT EXISTS calendar_events (
+    id TEXT PRIMARY KEY,
+    calendarId TEXT NOT NULL,
+    googleEventId TEXT NOT NULL,
+    title TEXT NOT NULL,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    status TEXT DEFAULT 'busy',
+    location TEXT,
+    isAllDay INTEGER DEFAULT 0,
+    updatedAt TEXT
+  );
+  CREATE TABLE IF NOT EXISTS habit_completions (
+    id TEXT PRIMARY KEY,
+    habitId TEXT NOT NULL,
+    scheduledDate TEXT NOT NULL,
+    completedAt TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS subtasks (
+    id TEXT PRIMARY KEY,
+    taskId TEXT NOT NULL,
+    name TEXT NOT NULL,
+    completed INTEGER DEFAULT 0,
+    sortOrder INTEGER DEFAULT 0,
+    createdAt TEXT
+  );
+  CREATE TABLE IF NOT EXISTS activity_log (
+    id TEXT PRIMARY KEY,
+    action TEXT NOT NULL,
+    entityType TEXT NOT NULL,
+    entityId TEXT NOT NULL,
+    details TEXT,
+    createdAt TEXT
   );
   CREATE TABLE IF NOT EXISTS scheduling_links (
     id TEXT PRIMARY KEY,
@@ -128,10 +169,18 @@ sqlite.exec(`
 `);
 
 // Migrations for existing databases
-try {
-  sqlite.exec(`ALTER TABLE scheduled_events ADD COLUMN calendarId TEXT`);
-} catch {
-  // Column already exists — ignore
+const migrations = [
+  `ALTER TABLE scheduled_events ADD COLUMN calendarId TEXT`,
+  `ALTER TABLE scheduled_events ADD COLUMN isAllDay INTEGER DEFAULT 0`,
+  `ALTER TABLE habits ADD COLUMN calendarId TEXT`,
+  `ALTER TABLE habits ADD COLUMN color TEXT`,
+  `ALTER TABLE tasks ADD COLUMN calendarId TEXT`,
+  `ALTER TABLE tasks ADD COLUMN color TEXT`,
+  `ALTER TABLE smart_meetings ADD COLUMN calendarId TEXT`,
+  `ALTER TABLE smart_meetings ADD COLUMN color TEXT`,
+];
+for (const sql of migrations) {
+  try { sqlite.exec(sql); } catch { /* Column already exists */ }
 }
 
 export const db = drizzle(sqlite, { schema });

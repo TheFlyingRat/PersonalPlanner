@@ -2,8 +2,9 @@ import { Router } from 'express';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { smartMeetings } from '../db/schema.js';
-import type { CreateMeetingRequest, SmartMeeting } from '@reclaim/shared';
+import type { CreateMeetingRequest, SmartMeeting } from '@cadence/shared';
 import { createMeetingSchema, updateMeetingSchema } from '../validation.js';
+import { logActivity } from './activity.js';
 
 const router = Router();
 
@@ -38,6 +39,8 @@ router.post('/', (req, res) => {
     windowEnd: body.windowEnd,
     location: body.location ?? '',
     conferenceType: body.conferenceType ?? 'none',
+    calendarId: body.calendarId ?? null,
+    color: body.color ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -45,6 +48,7 @@ router.post('/', (req, res) => {
   db.insert(smartMeetings).values(row).run();
 
   const created = db.select().from(smartMeetings).where(eq(smartMeetings.id, id)).get();
+  logActivity('create', 'meeting', id, { name: body.name });
   res.status(201).json(toMeeting(created!));
 });
 
@@ -79,10 +83,13 @@ router.put('/:id', (req, res) => {
   if (body.windowEnd !== undefined) updates.windowEnd = body.windowEnd;
   if (body.location !== undefined) updates.location = body.location;
   if (body.conferenceType !== undefined) updates.conferenceType = body.conferenceType;
+  if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
+  if (body.color !== undefined) updates.color = body.color;
 
   db.update(smartMeetings).set(updates).where(eq(smartMeetings.id, id)).run();
 
   const updated = db.select().from(smartMeetings).where(eq(smartMeetings.id, id)).get();
+  logActivity('update', 'meeting', id, { fields: Object.keys(updates) });
   res.json(toMeeting(updated!));
 });
 
@@ -97,6 +104,7 @@ router.delete('/:id', (req, res) => {
   }
 
   db.delete(smartMeetings).where(eq(smartMeetings.id, id)).run();
+  logActivity('delete', 'meeting', id, { name: existing.name });
 
   res.status(204).send();
 });
@@ -114,6 +122,8 @@ function toMeeting(row: typeof smartMeetings.$inferSelect): SmartMeeting {
     windowEnd: row.windowEnd ?? '',
     location: row.location ?? '',
     conferenceType: row.conferenceType ?? 'none',
+    calendarId: row.calendarId ?? undefined,
+    color: row.color ?? undefined,
     createdAt: row.createdAt ?? '',
     updatedAt: row.updatedAt ?? '',
   };

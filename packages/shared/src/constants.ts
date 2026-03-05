@@ -9,11 +9,11 @@ export const STATUS_PREFIX = {
 
 // Extended property keys stored on Google Calendar events
 export const EXTENDED_PROPS = {
-  reclaimId: 'reclaimId',
-  itemType: 'reclaimItemType',
-  itemId: 'reclaimItemId',
-  status: 'reclaimStatus',
-  lastModifiedByUs: 'reclaimLastModified',
+  cadenceId: 'cadenceId',
+  itemType: 'cadenceItemType',
+  itemId: 'cadenceItemId',
+  status: 'cadenceStatus',
+  lastModifiedByUs: 'cadenceLastModified',
 } as const;
 
 // Type ordering within same priority level (lower = scheduled first)
@@ -48,10 +48,3 @@ export const DEFAULT_PERSONAL_HOURS = {
   end: '22:00',
 };
 
-// Priority sort value (lower = higher priority)
-export const PRIORITY_SORT: Record<Priority, number> = {
-  [Priority.Critical]: 0,
-  [Priority.High]: 1,
-  [Priority.Medium]: 2,
-  [Priority.Low]: 3,
-};

@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { schedulingLinks, scheduledEvents, users } from '../db/schema.js';
-import type { CreateLinkRequest, SchedulingLink, UserSettings } from '@reclaim/shared';
-import { SchedulingHours } from '@reclaim/shared';
+import type { CreateLinkRequest, SchedulingLink, UserSettings } from '@cadence/shared';
+import { SchedulingHours } from '@cadence/shared';
 import { createLinkSchema, updateLinkSchema } from '../validation.js';
 
 const router = Router();

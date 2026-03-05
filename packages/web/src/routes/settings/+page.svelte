@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
+  import Check from 'lucide-svelte/icons/check';
+  import Loader2 from 'lucide-svelte/icons/loader-2';
   import { settings as settingsApi, buffers as buffersApi, calendars as calendarsApi } from '$lib/api';
 
   // Google connection
@@ -102,8 +105,7 @@
         window.location.href = result.redirectUrl;
       }
     } catch {
-      // Mock toggle
-      googleConnected = !googleConnected;
+      error = 'Failed to initiate Google connection.';
     }
   }
 
@@ -111,13 +113,15 @@
     loading = true;
     error = '';
     try {
-      const [config, bufferConfig, cals] = await Promise.all([
+      const [config, bufferConfig, cals, authStatus] = await Promise.all([
         settingsApi.get(),
         buffersApi.get(),
         calendarsApi.list(),
+        settingsApi.getGoogleStatus(),
       ]);
 
       calendarList = cals;
+      googleConnected = authStatus.connected;
 
       if (config.settings) {
         workStart = config.settings.workingHours?.start ?? '09:00';
@@ -129,7 +133,6 @@
         defaultHabitCalendarId = config.settings.defaultHabitCalendarId ?? 'primary';
         defaultTaskCalendarId = config.settings.defaultTaskCalendarId ?? 'primary';
       }
-      googleConnected = !!config.googleSyncToken;
 
       travelTime = bufferConfig.travelTimeMinutes ?? 15;
       decompressionTime = bufferConfig.decompressionMinutes ?? 5;
@@ -144,293 +147,379 @@
 </script>
 
 <svelte:head>
-  <title>Settings - Reclaim</title>
+  <title>Settings - Cadence</title>
 </svelte:head>
 
-<div class="p-6">
-  <h1 class="text-2xl font-bold text-gray-900 mb-6">Settings</h1>
+<div style="padding: 24px; max-width: 720px;">
+  <h1 style="font-size: 20px; font-weight: 600; color: var(--color-text); margin: 0 0 24px 0;">Settings</h1>
 
   {#if error}
-    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+    <div role="alert" style="margin-bottom: 16px; padding: 10px 14px; background: var(--color-danger-muted); color: var(--color-danger); border-radius: var(--radius-md); font-size: 13px;">
+      {error}
+    </div>
   {/if}
   {#if success}
-    <div class="mb-4 px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm">{success}</div>
+    <div role="alert" style="margin-bottom: 16px; padding: 10px 14px; background: var(--color-success-muted); color: var(--color-success); border-radius: var(--radius-md); font-size: 13px;">
+      {success}
+    </div>
   {/if}
 
   {#if loading}
-    <div class="flex items-center justify-center py-12">
-      <p class="text-gray-500">Loading...</p>
+    <div style="display: flex; align-items: center; justify-content: center; padding: 48px 0;" role="status" aria-live="polite">
+      <p style="color: var(--color-text-secondary); font-size: 14px;">Loading...</p>
     </div>
   {:else}
-    <div class="space-y-6 max-w-3xl">
+    <div style="display: flex; flex-direction: column;">
+
       <!-- Google Account -->
-      <div class="bg-white rounded-lg shadow p-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">Google Account</h2>
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <div class="w-3 h-3 rounded-full {googleConnected ? 'bg-green-500' : 'bg-gray-400'}"></div>
-            <div>
-              <p class="text-sm font-medium text-gray-700">
-                {googleConnected ? 'Connected' : 'Not Connected'}
-              </p>
-              <p class="text-xs text-gray-400">
-                {googleConnected
-                  ? 'Google Calendar is synced'
-                  : 'Connect to sync your calendar events'}
-              </p>
-            </div>
+      <div style="padding: 32px 0;">
+        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 16px 0;">Google Account</h2>
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span
+              aria-hidden="true"
+              style="width: 8px; height: 8px; border-radius: var(--radius-full); background: {googleConnected ? 'var(--color-success)' : 'var(--color-danger)'};"
+            ></span>
+            <span style="font-size: 14px; color: var(--color-text);">
+              {googleConnected ? 'Connected' : 'Disconnected'}
+            </span>
+            <span class="sr-only">{googleConnected ? 'Connected' : 'Disconnected'}</span>
           </div>
           <button
             onclick={connectGoogle}
-            class="px-4 py-2 rounded-lg font-medium text-sm transition-colors
-              {googleConnected
-                ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                : 'bg-blue-600 text-white hover:bg-blue-700'}"
+            style="padding: 6px 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius-md);
+              border: 1px solid var(--color-border-strong); background: transparent; color: var(--color-text);
+              cursor: pointer; transition: background var(--transition-fast);"
+            onmouseenter={(e) => e.currentTarget.style.background = 'var(--color-surface-hover)'}
+            onmouseleave={(e) => e.currentTarget.style.background = 'transparent'}
           >
-            {googleConnected ? 'Disconnect' : 'Connect Google Calendar'}
+            {googleConnected ? 'Disconnect' : 'Connect'}
           </button>
         </div>
       </div>
+
+      <div style="height: 1px; background: var(--color-border);"></div>
 
       <!-- Calendars -->
-      <div class="bg-white rounded-lg shadow p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h2 class="text-lg font-semibold text-gray-900">Calendars</h2>
-          <button
-            onclick={discoverCalendars}
-            disabled={discoveringCalendars}
-            class="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50"
-          >
-            {discoveringCalendars ? 'Refreshing...' : 'Refresh from Google'}
-          </button>
-        </div>
-
-        {#if calendarList.length === 0}
-          <p class="text-sm text-gray-500">No calendars found. Click "Refresh from Google" to discover your calendars.</p>
-        {:else}
-          <div class="space-y-3 mb-6">
-            {#each calendarList as cal}
-              <div class="flex items-center justify-between py-2 px-3 rounded-lg border border-gray-100 hover:bg-gray-50">
-                <div class="flex items-center gap-3">
-                  <div class="w-3 h-3 rounded-full" style="background-color: {cal.color}"></div>
-                  <span class="text-sm font-medium text-gray-700">{cal.name}</span>
-                  {#if cal.googleCalendarId === 'primary'}
-                    <span class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Primary</span>
-                  {/if}
-                </div>
-                <div class="flex items-center gap-3">
-                  {#if cal.enabled && cal.googleCalendarId !== 'primary'}
-                    <select
-                      value={cal.mode}
-                      onchange={(e) => setCalendarMode(cal, e.currentTarget.value)}
-                      class="text-sm border border-gray-200 rounded-md px-2 py-1"
-                    >
-                      <option value="writable">Writable</option>
-                      <option value="locked">Locked</option>
-                    </select>
-                  {/if}
-                  {#if cal.googleCalendarId !== 'primary'}
-                    <button
-                      onclick={() => toggleCalendar(cal)}
-                      class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors {cal.enabled ? 'bg-blue-600' : 'bg-gray-300'}"
-                    >
-                      <span class="inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform {cal.enabled ? 'translate-x-4' : 'translate-x-1'}"></span>
-                    </button>
-                  {/if}
-                </div>
-              </div>
-            {/each}
+      {#if googleConnected}
+        <div style="padding: 32px 0;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+            <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0;">Calendars</h2>
+            <button
+              onclick={discoverCalendars}
+              disabled={discoveringCalendars}
+              style="display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 13px; font-weight: 500;
+                border-radius: var(--radius-md); border: 1px solid var(--color-border-strong); background: transparent;
+                color: var(--color-text-secondary); cursor: pointer; transition: background var(--transition-fast);
+                opacity: {discoveringCalendars ? '0.5' : '1'};"
+              onmouseenter={(e) => { if (!discoveringCalendars) e.currentTarget.style.background = 'var(--color-surface-hover)'; }}
+              onmouseleave={(e) => e.currentTarget.style.background = 'transparent'}
+            >
+              <RefreshCw size={14} style={discoveringCalendars ? 'animation: spin 1s linear infinite;' : ''} />
+              {discoveringCalendars ? 'Refreshing...' : 'Refresh'}
+            </button>
           </div>
 
-          <!-- Default Calendar Selection -->
-          <div class="border-t border-gray-100 pt-4">
-            <h3 class="text-sm font-semibold text-gray-700 mb-3">Default Calendars</h3>
-            <div class="grid grid-cols-2 gap-4">
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Habits</label>
-                <select
-                  bind:value={defaultHabitCalendarId}
-                  class="border border-gray-300 rounded-lg px-3 py-2 w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          {#if calendarList.length === 0}
+            <p style="font-size: 13px; color: var(--color-text-tertiary);">No calendars found. Click Refresh to discover your calendars.</p>
+          {:else}
+            <!-- Calendar table -->
+            <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden;">
+              {#each calendarList as cal, i}
+                <div
+                  style="display: flex; align-items: center; justify-content: space-between; padding: 10px 14px;
+                    {i > 0 ? 'border-top: 1px solid var(--color-border);' : ''}"
                 >
-                  {#each calendarList.filter(c => c.enabled && c.mode === 'writable') as cal}
-                    <option value={cal.id}>{cal.name}</option>
-                  {/each}
-                </select>
-              </div>
-              <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Tasks</label>
-                <select
-                  bind:value={defaultTaskCalendarId}
-                  class="border border-gray-300 rounded-lg px-3 py-2 w-full text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                >
-                  {#each calendarList.filter(c => c.enabled && c.mode === 'writable') as cal}
-                    <option value={cal.id}>{cal.name}</option>
-                  {/each}
-                </select>
+                  <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+                    <span style="width: 10px; height: 10px; border-radius: var(--radius-full); flex-shrink: 0; background: {cal.color ?? 'var(--color-accent)'};">
+                    </span>
+                    <span style="font-size: 13px; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                      {cal.name}
+                    </span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 12px; flex-shrink: 0;">
+                    {#if cal.enabled && cal.googleCalendarId !== 'primary'}
+                      <select
+                        value={cal.mode}
+                        onchange={(e) => setCalendarMode(cal, e.currentTarget.value)}
+                        style="font-size: 12px; padding: 4px 8px; border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+                          background: var(--color-surface); color: var(--color-text-secondary); cursor: pointer;"
+                      >
+                        <option value="writable">Writable</option>
+                        <option value="locked">Locked</option>
+                      </select>
+                    {/if}
+                    {#if cal.googleCalendarId !== 'primary'}
+                      <button
+                        onclick={() => toggleCalendar(cal)}
+                        role="switch"
+                        aria-checked={cal.enabled}
+                        aria-label="Toggle {cal.name}"
+                        style="position: relative; width: 36px; height: 20px; border-radius: var(--radius-full); border: none;
+                          background: {cal.enabled ? 'var(--color-accent)' : 'var(--color-border-strong)'}; cursor: pointer;
+                          transition: background var(--transition-fast);"
+                      >
+                        <span
+                          style="position: absolute; top: 2px; left: {cal.enabled ? '18px' : '2px'}; width: 16px; height: 16px;
+                            border-radius: var(--radius-full); background: white; transition: left var(--transition-fast);"
+                        ></span>
+                      </button>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+
+            <!-- Default Calendars -->
+            <div style="margin-top: 20px;">
+              <h3 style="font-size: 13px; font-weight: 600; color: var(--color-text-secondary); margin: 0 0 12px 0;">Default Calendars</h3>
+              <div class="settings-default-cals" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div>
+                  <label for="default-habit-cal" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Habits</label>
+                  <select
+                    id="default-habit-cal"
+                    bind:value={defaultHabitCalendarId}
+                    style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                      border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);
+                      cursor: pointer;"
+                  >
+                    {#each calendarList.filter(c => c.enabled && c.mode === 'writable') as cal}
+                      <option value={cal.id}>{cal.name}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div>
+                  <label for="default-task-cal" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Tasks</label>
+                  <select
+                    id="default-task-cal"
+                    bind:value={defaultTaskCalendarId}
+                    style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                      border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);
+                      cursor: pointer;"
+                  >
+                    {#each calendarList.filter(c => c.enabled && c.mode === 'writable') as cal}
+                      <option value={cal.id}>{cal.name}</option>
+                    {/each}
+                  </select>
+                </div>
               </div>
             </div>
-            <p class="text-xs text-gray-400 mt-2">Choose which calendar habits and tasks are placed on.</p>
-          </div>
-        {/if}
-      </div>
+          {/if}
+        </div>
+
+        <div style="height: 1px; background: var(--color-border);"></div>
+      {/if}
 
       <!-- Working Hours -->
-      <div class="bg-white rounded-lg shadow p-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">Working Hours</h2>
-        <div class="grid grid-cols-2 gap-4">
+      <div style="padding: 32px 0;">
+        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 16px 0;">Working Hours</h2>
+        <div class="settings-hours-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: end;">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
+            <label for="work-start" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Start</label>
             <input
+              id="work-start"
               type="time"
               bind:value={workStart}
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="font-mono"
+              style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
             />
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">End Time</label>
+            <label for="work-end" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">End</label>
             <input
+              id="work-end"
               type="time"
               bind:value={workEnd}
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="font-mono"
+              style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
             />
           </div>
         </div>
-        <p class="text-xs text-gray-400 mt-2">
-          Tasks, habits, and meetings will be scheduled within these hours by default.
-        </p>
       </div>
+
+      <div style="height: 1px; background: var(--color-border);"></div>
 
       <!-- Personal Hours -->
-      <div class="bg-white rounded-lg shadow p-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">Personal Hours</h2>
-        <div class="grid grid-cols-2 gap-4">
+      <div style="padding: 32px 0;">
+        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 16px 0;">Personal Hours</h2>
+        <div class="settings-hours-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: end;">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Start Time</label>
+            <label for="personal-start" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Start</label>
             <input
+              id="personal-start"
               type="time"
               bind:value={personalStart}
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="font-mono"
+              style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
             />
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">End Time</label>
+            <label for="personal-end" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">End</label>
             <input
+              id="personal-end"
               type="time"
               bind:value={personalEnd}
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="font-mono"
+              style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
             />
           </div>
         </div>
-        <p class="text-xs text-gray-400 mt-2">
-          Items set to "Personal Hours" will be scheduled within this window.
-        </p>
       </div>
+
+      <div style="height: 1px; background: var(--color-border);"></div>
 
       <!-- General -->
-      <div class="bg-white rounded-lg shadow p-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">General</h2>
-        <div class="grid grid-cols-2 gap-4">
+      <div style="padding: 32px 0;">
+        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 16px 0;">General</h2>
+        <div class="settings-hours-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Timezone</label>
+            <label for="settings-timezone" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Timezone</label>
             <input
+              id="settings-timezone"
               type="text"
               bind:value={timezone}
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="e.g., America/New_York"
+              style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
             />
           </div>
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Scheduling Window (days)</label>
-            <input
-              type="number"
-              bind:value={schedulingWindowDays}
-              min="1"
-              max="90"
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+            <label for="settings-window" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Scheduling Window</label>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <input
+                id="settings-window"
+                type="number"
+                bind:value={schedulingWindowDays}
+                min="1"
+                max="90"
+                class="font-mono"
+                style="flex: 1; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                  border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
+              />
+              <span style="font-size: 13px; color: var(--color-text-secondary);">days</span>
+            </div>
           </div>
         </div>
-        <p class="text-xs text-gray-400 mt-2">
-          How far ahead the scheduler will plan items on your calendar.
-        </p>
       </div>
 
+      <div style="height: 1px; background: var(--color-border);"></div>
+
       <!-- Buffers -->
-      <div class="bg-white rounded-lg shadow p-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">Buffers</h2>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div style="padding: 32px 0;">
+        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 16px 0;">Buffers</h2>
+        <div class="settings-buffers-grid" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 16px;">
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Travel Time (minutes)</label>
+            <label for="buffer-travel" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Travel (min)</label>
             <input
+              id="buffer-travel"
               type="number"
               bind:value={travelTime}
               min="0"
               max="120"
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="font-mono"
+              style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
             />
-            <p class="text-xs text-gray-400 mt-1">Buffer added before in-person meetings.</p>
           </div>
-
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Decompression Time (minutes)</label>
+            <label for="buffer-decomp" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Decompression (min)</label>
             <input
+              id="buffer-decomp"
               type="number"
               bind:value={decompressionTime}
               min="0"
               max="60"
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="font-mono"
+              style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
             />
-            <p class="text-xs text-gray-400 mt-1">Buffer added after meetings to recover.</p>
           </div>
-
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Break Between Items (minutes)</label>
+            <label for="buffer-break" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Break (min)</label>
             <input
+              id="buffer-break"
               type="number"
               bind:value={breakBetween}
               min="0"
               max="60"
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              class="font-mono"
+              style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
             />
-            <p class="text-xs text-gray-400 mt-1">Minimum gap between scheduled items.</p>
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Apply Decompression To</label>
-            <select
-              bind:value={decompApplyTo}
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="all">All Meetings</option>
-              <option value="video_only">Video Calls Only</option>
-            </select>
-            <p class="text-xs text-gray-400 mt-1">Which meetings get decompression time.</p>
           </div>
         </div>
+        <div>
+          <label for="buffer-decomp-apply" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Apply Decompression To</label>
+          <select
+            id="buffer-decomp-apply"
+            bind:value={decompApplyTo}
+            style="padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+              border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); cursor: pointer;"
+          >
+            <option value="all">All Meetings</option>
+            <option value="video_only">Video Calls Only</option>
+          </select>
+        </div>
       </div>
+    </div>
 
-      <!-- Save Button -->
-      <div class="flex items-center gap-4">
-        <button
-          onclick={saveSettings}
-          disabled={saveStatus === 'saving'}
-          class="px-6 py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
+    <!-- Sticky Save Button -->
+    <div style="position: sticky; bottom: 0; padding: 16px 0; background: var(--color-bg); border-top: 1px solid var(--color-border); margin-top: 8px;">
+      <button
+        onclick={saveSettings}
+        disabled={saveStatus === 'saving'}
+        style="width: 100%; padding: 10px 0; font-size: 14px; font-weight: 500; border: none;
+          border-radius: var(--radius-md); cursor: pointer;
+          background: {saveStatus === 'saved' ? 'var(--color-success)' : 'var(--color-accent)'};
+          color: var(--color-accent-text);
+          opacity: {saveStatus === 'saving' ? '0.7' : '1'};
+          transition: background var(--transition-fast), opacity var(--transition-fast);"
+        onmouseenter={(e) => { if (saveStatus === 'idle') e.currentTarget.style.background = 'var(--color-accent-hover)'; }}
+        onmouseleave={(e) => { if (saveStatus === 'idle') e.currentTarget.style.background = 'var(--color-accent)'; }}
+      >
+        <span style="display: inline-flex; align-items: center; gap: 6px;">
           {#if saveStatus === 'saving'}
+            <Loader2 size={16} style="animation: spin 1s linear infinite;" />
             Saving...
           {:else if saveStatus === 'saved'}
-            Saved!
+            <Check size={16} />
+            Saved
+          {:else if saveStatus === 'error'}
+            Failed -- Retry
           {:else}
             Save Settings
           {/if}
-        </button>
-        {#if saveStatus === 'saved'}
-          <span class="text-sm text-green-600 font-medium">Settings saved successfully.</span>
-        {/if}
-        {#if saveStatus === 'error'}
-          <span class="text-sm text-red-600 font-medium">Failed to save. Please try again.</span>
-        {/if}
-      </div>
+        </span>
+      </button>
     </div>
   {/if}
 </div>
+
+<style>
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-muted);
+  }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    opacity: 1;
+  }
+
+  @media (max-width: 768px) {
+    .settings-buffers-grid {
+      grid-template-columns: 1fr !important;
+    }
+    .settings-hours-grid {
+      grid-template-columns: 1fr !important;
+    }
+    .settings-default-cals {
+      grid-template-columns: 1fr !important;
+    }
+  }
+</style>

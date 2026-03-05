@@ -1,5 +1,5 @@
 services:
-  reclaim:
+  cadence:
     build: .
     ports:
       - "127.0.0.1:3000:3000"
@@ -7,11 +7,17 @@ services:
       - ./data:/app/data
     environment:
       - PORT=3000
-      - DB_PATH=/app/data/reclaim.db
+      - DB_PATH=/app/data/cadence.db
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-http://localhost:3000/api/auth/google/callback}
       - API_KEY=${API_KEY}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped

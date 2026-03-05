@@ -7,7 +7,7 @@ import {
   BufferConfig,
   ItemType,
   Priority,
-} from '@reclaim/shared';
+} from '@cadence/shared';
 
 const defaultBuffer: BufferConfig = {
   id: 'buf-1',

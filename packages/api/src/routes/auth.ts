@@ -7,14 +7,15 @@ import { encrypt } from '../crypto.js';
 
 const router = Router();
 
-// Module-level variable to store the OAuth state for CSRF protection
-let pendingOAuthState: string | null = null;
+// Module-level variable to store the OAuth state for CSRF protection (with expiry)
+let pendingOAuthState: { value: string; expiresAt: number } | null = null;
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 // POST /api/auth/google — initiate OAuth flow
 router.post('/google', (_req, res) => {
   const oauth2Client = createOAuth2Client();
   const state = crypto.randomUUID();
-  pendingOAuthState = state;
+  pendingOAuthState = { value: state, expiresAt: Date.now() + OAUTH_STATE_TTL_MS };
   const url = getAuthUrl(oauth2Client, state);
   res.json({ redirectUrl: url });
 });
@@ -29,7 +30,13 @@ router.get('/google/callback', async (req, res) => {
 
   // Verify OAuth state parameter (CSRF protection)
   const state = req.query.state as string | undefined;
-  if (!pendingOAuthState || state !== pendingOAuthState) {
+  const now = Date.now();
+  if (
+    !pendingOAuthState ||
+    state !== pendingOAuthState.value ||
+    now > pendingOAuthState.expiresAt
+  ) {
+    pendingOAuthState = null;
     res.status(403).json({ error: 'Invalid OAuth state' });
     return;
   }
@@ -51,12 +58,43 @@ router.get('/google/callback', async (req, res) => {
         .run();
     }
 
-    // Redirect to settings page with success
-    res.redirect('/settings?google=connected');
+    // Redirect to frontend settings page with success
+    const frontendOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+    res.redirect(`${frontendOrigin}/settings?google=connected`);
   } catch (error: any) {
     console.error('OAuth error:', error);
-    res.redirect('/settings?google=error');
+    const frontendOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+    res.redirect(`${frontendOrigin}/settings?google=error`);
   }
+});
+
+// POST /api/auth/store-token — manually store a refresh token (dev helper, non-production only)
+router.post('/store-token', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
+  const { refreshToken } = req.body;
+  if (!refreshToken || typeof refreshToken !== 'string') {
+    res.status(400).json({ error: 'Missing refreshToken' });
+    return;
+  }
+  if (refreshToken.length > 512) {
+    res.status(400).json({ error: 'Invalid refreshToken' });
+    return;
+  }
+
+  const encryptedToken = encrypt(refreshToken);
+  const userRows = db.select().from(users).all();
+  if (userRows.length > 0) {
+    db.update(users)
+      .set({ googleRefreshToken: encryptedToken })
+      .where(eq(users.id, userRows[0].id))
+      .run();
+  }
+
+  res.json({ success: true, message: 'Token stored. Restart the server to begin polling.' });
 });
 
 // GET /api/auth/google/status — check connection status

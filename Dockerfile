@@ -4,7 +4,7 @@ RUN npm install -g pnpm@9.15.4
 
 WORKDIR /app
 
-# Copy workspace config
+# Copy workspace config (cached layer — only changes when deps change)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 
 # Copy all package.json files
@@ -22,22 +22,14 @@ COPY packages/engine/ packages/engine/
 COPY packages/api/ packages/api/
 COPY packages/web/ packages/web/
 
-# Build shared types
-RUN pnpm --filter @reclaim/shared build
-
-# Build engine
-RUN pnpm --filter @reclaim/engine build
-
-# Build API
-RUN pnpm --filter @reclaim/api build
-
-# Build frontend
-RUN pnpm --filter web build
+# Build all packages in dependency order
+RUN pnpm -r build
 
 # --- Production image ---
 FROM node:22-alpine
 
-RUN npm install -g pnpm@9.15.4
+RUN npm install -g pnpm@9.15.4 && \
+    addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
@@ -54,15 +46,19 @@ COPY --from=builder /app/packages/engine/dist packages/engine/dist
 COPY --from=builder /app/packages/api/dist packages/api/dist
 COPY --from=builder /app/packages/web/build packages/web/build
 
+# Ensure data directory exists and is owned by appuser
+RUN mkdir -p /app/data && chown -R appuser:appgroup /app
+
 EXPOSE 3000
 
 VOLUME /app/data
 
-ENV DB_PATH=/app/data/reclaim.db
+ENV DB_PATH=/app/data/cadence.db
 ENV NODE_ENV=production
 
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-RUN chown -R appuser:appgroup /app
 USER appuser
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
 
 CMD ["node", "packages/api/dist/index.js"]

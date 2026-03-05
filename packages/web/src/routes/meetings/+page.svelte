@@ -1,6 +1,12 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { meetings as meetingsApi } from '$lib/api';
+  import { onMount, tick } from 'svelte';
+  import { meetings as meetingsApi, calendars as calendarsApi } from '$lib/api';
+  import type { Calendar } from '../../../../shared/src/types';
+  import Plus from 'lucide-svelte/icons/plus';
+  import Pencil from 'lucide-svelte/icons/pencil';
+  import Trash2 from 'lucide-svelte/icons/trash-2';
+  import X from 'lucide-svelte/icons/x';
+  import Users from 'lucide-svelte/icons/users';
 
   interface MeetingItem {
     id: string;
@@ -46,7 +52,7 @@
   ];
 
   let meetingList = $state<MeetingItem[]>(mockMeetings);
-  let showForm = $state(false);
+  let showPanel = $state(false);
   let editingId = $state<string | null>(null);
   let loading = $state(true);
   let error = $state('');
@@ -64,21 +70,27 @@
   let formLocation = $state('');
   let formConferenceType = $state('none');
   let formAttendees = $state('');
+  let formColor = $state('');
+  let formCalendarId = $state('');
+  let calendarList = $state<Calendar[]>([]);
+
+  let panelEl = $state<HTMLDivElement | null>(null);
 
   const priorityLabels: Record<number, string> = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4' };
-  const priorityColors: Record<number, string> = {
-    1: 'bg-red-100 text-red-700',
-    2: 'bg-orange-100 text-orange-700',
-    3: 'bg-yellow-100 text-yellow-700',
-    4: 'bg-green-100 text-green-700',
-  };
 
   const conferenceLabels: Record<string, string> = {
     zoom: 'Zoom',
-    meet: 'Google Meet',
-    teams: 'Microsoft Teams',
+    meet: 'Meet',
+    teams: 'Teams',
     none: 'None',
   };
+
+  function getInitials(email: string): string {
+    const name = email.split('@')[0];
+    const parts = name.split(/[._-]/);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  }
 
   function showSuccess(msg: string) {
     success = msg;
@@ -96,12 +108,15 @@
     formLocation = '';
     formConferenceType = 'none';
     formAttendees = '';
+    formColor = '';
+    formCalendarId = '';
     editingId = null;
   }
 
   function openAddForm() {
     resetForm();
-    showForm = true;
+    showPanel = true;
+    tick().then(() => focusFirstInPanel());
   }
 
   function openEditForm(meeting: MeetingItem) {
@@ -116,7 +131,36 @@
     formLocation = meeting.location;
     formConferenceType = meeting.conferenceType;
     formAttendees = meeting.attendees.join(', ');
-    showForm = true;
+    formColor = (meeting as any).color ?? '';
+    formCalendarId = (meeting as any).calendarId ?? '';
+    showPanel = true;
+    tick().then(() => focusFirstInPanel());
+  }
+
+  function closePanel() {
+    showPanel = false;
+    resetForm();
+  }
+
+  function focusFirstInPanel() {
+    if (!panelEl) return;
+    const focusable = panelEl.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length > 0) focusable[0].focus();
+  }
+
+  function trapFocus(e: KeyboardEvent) {
+    if (e.key === 'Escape') { closePanel(); return; }
+    if (e.key !== 'Tab' || !panelEl) return;
+    const focusable = panelEl.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && showPanel) closePanel();
   }
 
   async function handleSubmit() {
@@ -135,6 +179,8 @@
         .split(',')
         .map((e) => e.trim())
         .filter(Boolean),
+      color: formColor || undefined,
+      calendarId: formCalendarId || undefined,
     };
 
     try {
@@ -163,8 +209,7 @@
       submitting = false;
     }
 
-    showForm = false;
-    resetForm();
+    closePanel();
   }
 
   async function deleteMeeting(id: string) {
@@ -198,241 +243,326 @@
     } finally {
       loading = false;
     }
+    calendarsApi.list().then((c) => { calendarList = c; }).catch(() => {});
   });
 </script>
 
 <svelte:head>
-  <title>Meetings - Reclaim</title>
+  <title>Meetings - Cadence</title>
 </svelte:head>
 
-<div class="p-6">
-  <div class="flex items-center justify-between mb-6">
-    <h1 class="text-2xl font-bold text-gray-900">Smart Meetings</h1>
-    <button
-      onclick={openAddForm}
-      class="px-4 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors"
-    >
+<svelte:window onkeydown={handleKeydown} />
+
+<div style="padding: var(--space-6);">
+  <!-- Header -->
+  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6);">
+    <h1 style="font-size: 1.5rem; font-weight: 600; color: var(--color-text);">Meetings</h1>
+    <button onclick={openAddForm} class="btn-accent-pill" aria-expanded={showPanel}>
+      <Plus size={16} strokeWidth={1.5} />
       Add Meeting
     </button>
   </div>
 
   {#if error}
-    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+    <div class="alert-error" role="alert">{error}</div>
   {/if}
   {#if success}
-    <div class="mb-4 px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm">{success}</div>
+    <div class="alert-success" role="alert">{success}</div>
   {/if}
 
-  <!-- Add/Edit Form -->
-  {#if showForm}
-    <div class="bg-white rounded-lg shadow p-6 mb-6">
-      <h2 class="text-lg font-semibold text-gray-900 mb-4">
-        {editingId ? 'Edit Meeting' : 'Add New Meeting'}
-      </h2>
-      <form
-        onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
-        class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+  {#if loading}
+    <div style="display: flex; align-items: center; justify-content: center; padding: var(--space-12) 0;" role="status" aria-live="polite">
+      <p style="color: var(--color-text-secondary);">Loading...</p>
+    </div>
+  {:else if meetingList.length === 0}
+    <!-- Empty State -->
+    <div class="empty-state">
+      <Users size={48} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+      <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--color-text); margin-top: var(--space-4);">No meetings yet</h2>
+      <p style="color: var(--color-text-secondary); margin-top: var(--space-2);">Create your first smart meeting to start scheduling</p>
+      <button onclick={openAddForm} class="btn-accent-pill" style="margin-top: var(--space-5);">
+        <Plus size={16} strokeWidth={1.5} />
+        Add Meeting
+      </button>
+    </div>
+  {:else}
+    <!-- Table Header -->
+    <div class="table-header" style="grid-template-columns: 1fr 70px 80px 90px 100px 120px;">
+      <span>Name</span>
+      <span>Priority</span>
+      <span>Duration</span>
+      <span>Frequency</span>
+      <span>Conference</span>
+      <span>Attendees</span>
+    </div>
+
+    <!-- Table Rows -->
+    {#each meetingList as meeting}
+      <div
+        class="table-row"
+        style="grid-template-columns: 1fr 70px 80px 90px 100px 120px;"
+        onclick={() => openEditForm(meeting)}
+        role="button"
+        tabindex="0"
+        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditForm(meeting); } }}
       >
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
-          <input
-            type="text"
-            bind:value={formName}
-            required
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            placeholder="e.g., Team Standup"
-          />
-        </div>
+        <span style="font-weight: 500; color: var(--color-text);">{meeting.name}</span>
+        <span>
+          <span class="priority-badge priority-{meeting.priority}">{priorityLabels[meeting.priority]}</span>
+        </span>
+        <span class="font-mono" style="color: var(--color-text-secondary); font-size: 0.8125rem;">{formatDuration(meeting.duration)}</span>
+        <span style="color: var(--color-text-secondary); text-transform: capitalize; font-size: 0.8125rem;">{meeting.frequency}</span>
+        <span>
+          {#if meeting.conferenceType && meeting.conferenceType !== 'none'}
+            <span class="conference-badge">{conferenceLabels[meeting.conferenceType] || meeting.conferenceType}</span>
+          {:else}
+            <span style="color: var(--color-text-tertiary); font-size: 0.8125rem;">--</span>
+          {/if}
+        </span>
+        <span style="display: flex; align-items: center;">
+          {#if meeting.attendees.length > 0}
+            <div class="avatar-group">
+              {#each meeting.attendees.slice(0, 3) as email}
+                <div class="avatar-circle" title={email}>{getInitials(email)}</div>
+              {/each}
+              {#if meeting.attendees.length > 3}
+                <div class="avatar-circle avatar-overflow">+{meeting.attendees.length - 3}</div>
+              {/if}
+            </div>
+          {:else}
+            <span style="color: var(--color-text-tertiary); font-size: 0.8125rem;">--</span>
+          {/if}
+        </span>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
-          <select
-            bind:value={formPriority}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+        <!-- Hover actions -->
+        <div class="row-actions">
+          <button
+            class="row-action-btn"
+            onclick={(e) => { e.stopPropagation(); openEditForm(meeting); }}
+            aria-label="Edit meeting"
           >
-            <option value={1}>P1 - Critical</option>
-            <option value={2}>P2 - High</option>
-            <option value={3}>P3 - Medium</option>
-            <option value={4}>P4 - Low</option>
-          </select>
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Duration (minutes)</label>
-          <input
-            type="number"
-            bind:value={formDuration}
-            min="5"
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-          />
-        </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Frequency</label>
-          <select
-            bind:value={formFrequency}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            <Pencil size={16} strokeWidth={1.5} />
+          </button>
+          <button
+            class="row-action-btn row-action-btn--danger"
+            onclick={(e) => { e.stopPropagation(); deleteMeeting(meeting.id); }}
+            aria-label="Delete meeting"
           >
+            <Trash2 size={16} strokeWidth={1.5} />
+          </button>
+        </div>
+      </div>
+    {/each}
+  {/if}
+</div>
+
+<!-- Slide-over Panel -->
+{#if showPanel}
+  <div class="panel-backdrop" onclick={closePanel} aria-hidden="true"></div>
+  <div
+    class="panel-slideover"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="panel-title"
+    tabindex="-1"
+    bind:this={panelEl}
+    onkeydown={trapFocus}
+  >
+    <div class="panel-header">
+      <h2 id="panel-title" style="font-size: 1.125rem; font-weight: 600; color: var(--color-text);">
+        {editingId ? 'Edit Meeting' : 'Add Meeting'}
+      </h2>
+      <button onclick={closePanel} class="panel-close-btn" aria-label="Close panel">
+        <X size={20} strokeWidth={1.5} />
+      </button>
+    </div>
+
+    <form
+      onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}
+      class="panel-body"
+    >
+      <div class="form-field">
+        <label for="mtg-name">Name</label>
+        <input id="mtg-name" type="text" bind:value={formName} required placeholder="e.g., Team Standup" />
+      </div>
+
+      <div class="form-field">
+        <label for="mtg-priority">Priority</label>
+        <select id="mtg-priority" bind:value={formPriority}>
+          <option value={1}>P1 - Critical</option>
+          <option value={2}>P2 - High</option>
+          <option value={3}>P3 - Medium</option>
+          <option value={4}>P4 - Low</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <div class="form-field">
+          <label for="mtg-dur">Duration (min)</label>
+          <input id="mtg-dur" type="number" bind:value={formDuration} min="5" />
+        </div>
+        <div class="form-field">
+          <label for="mtg-freq">Frequency</label>
+          <select id="mtg-freq" bind:value={formFrequency}>
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
           </select>
         </div>
+      </div>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Ideal Time</label>
-          <input
-            type="time"
-            bind:value={formIdealTime}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-          />
+      <div class="form-field">
+        <label for="mtg-ideal">Ideal Time</label>
+        <input id="mtg-ideal" type="time" bind:value={formIdealTime} />
+      </div>
+
+      <div class="form-row">
+        <div class="form-field">
+          <label for="mtg-win-start">Window Start</label>
+          <input id="mtg-win-start" type="time" bind:value={formWindowStart} />
         </div>
-
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Window Start</label>
-          <input
-            type="time"
-            bind:value={formWindowStart}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-          />
+        <div class="form-field">
+          <label for="mtg-win-end">Window End</label>
+          <input id="mtg-win-end" type="time" bind:value={formWindowEnd} />
         </div>
+      </div>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Window End</label>
-          <input
-            type="time"
-            bind:value={formWindowEnd}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-          />
-        </div>
+      <div class="form-field">
+        <label for="mtg-conf">Conference Type</label>
+        <select id="mtg-conf" bind:value={formConferenceType}>
+          <option value="none">None</option>
+          <option value="zoom">Zoom</option>
+          <option value="meet">Google Meet</option>
+          <option value="teams">Microsoft Teams</option>
+        </select>
+      </div>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Location</label>
-          <input
-            type="text"
-            bind:value={formLocation}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            placeholder="e.g., Conference Room A"
-          />
-        </div>
+      <div class="form-field">
+        <label for="mtg-location">Location</label>
+        <input id="mtg-location" type="text" bind:value={formLocation} placeholder="e.g., Conference Room A" />
+      </div>
 
-        <div>
-          <label class="block text-sm font-medium text-gray-700 mb-1">Conference Type</label>
-          <select
-            bind:value={formConferenceType}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-          >
-            <option value="none">None</option>
-            <option value="zoom">Zoom</option>
-            <option value="meet">Google Meet</option>
-            <option value="teams">Microsoft Teams</option>
+      <div class="form-field">
+        <label for="mtg-attendees">Attendees (comma-separated emails)</label>
+        <input id="mtg-attendees" type="text" bind:value={formAttendees} placeholder="e.g., alice@example.com, bob@example.com" />
+      </div>
+
+      {#if calendarList.length > 0}
+        <div class="form-field">
+          <label for="mtg-calendar">Calendar</label>
+          <select id="mtg-calendar" bind:value={formCalendarId}>
+            <option value="">Default</option>
+            {#each calendarList as cal}
+              <option value={cal.id}>{cal.name}</option>
+            {/each}
           </select>
         </div>
+      {/if}
 
-        <div class="lg:col-span-2">
-          <label class="block text-sm font-medium text-gray-700 mb-1">Attendees (comma-separated emails)</label>
-          <input
-            type="text"
-            bind:value={formAttendees}
-            class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            placeholder="e.g., alice@example.com, bob@example.com"
-          />
-        </div>
-
-        <div class="flex items-end gap-3">
-          <button
-            type="submit"
-            disabled={submitting}
-            class="px-4 py-2 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {editingId ? 'Update Meeting' : 'Create Meeting'}
-          </button>
+      <div class="form-field">
+        <label>Color</label>
+        <div class="color-picker">
+          {#each ['#4285f4', '#ea4335', '#34a853', '#fbbc04', '#ff6d01', '#46bdc6', '#7b61ff', '#e91e63'] as c}
+            <button
+              type="button"
+              class="color-swatch"
+              class:color-swatch--active={formColor === c}
+              style="background: {c};"
+              onclick={() => { formColor = c; }}
+              aria-label="Select color {c}"
+            ></button>
+          {/each}
           <button
             type="button"
-            onclick={() => { showForm = false; resetForm(); }}
-            class="px-4 py-2 rounded-lg bg-gray-200 text-gray-700 font-medium hover:bg-gray-300 transition-colors"
-          >
-            Cancel
-          </button>
+            class="color-swatch color-swatch--none"
+            class:color-swatch--active={!formColor}
+            onclick={() => { formColor = ''; }}
+            aria-label="No color"
+          >&#x2715;</button>
         </div>
-      </form>
-    </div>
-  {/if}
+      </div>
 
-  {#if loading}
-    <div class="flex items-center justify-center py-12">
-      <p class="text-gray-500">Loading...</p>
-    </div>
-  {:else}
-    <!-- Meeting List -->
-    <div class="space-y-4">
-      {#each meetingList as meeting}
-        <div class="bg-white rounded-lg shadow p-4">
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <div class="flex items-center gap-3 mb-2">
-                <h3 class="text-lg font-semibold text-gray-900">{meeting.name}</h3>
-                <span class="px-2 py-0.5 rounded-full text-xs font-semibold {priorityColors[meeting.priority]}">
-                  {priorityLabels[meeting.priority]}
-                </span>
-                <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700 capitalize">
-                  {meeting.frequency}
-                </span>
-              </div>
-              <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-gray-600">
-                <div>
-                  <span class="font-medium text-gray-500">Duration:</span>
-                  {formatDuration(meeting.duration)}
-                </div>
-                <div>
-                  <span class="font-medium text-gray-500">Ideal Time:</span>
-                  {meeting.idealTime}
-                </div>
-                <div>
-                  <span class="font-medium text-gray-500">Window:</span>
-                  {meeting.windowStart} - {meeting.windowEnd}
-                </div>
-                <div>
-                  <span class="font-medium text-gray-500">Conference:</span>
-                  {conferenceLabels[meeting.conferenceType] || meeting.conferenceType}
-                </div>
-              </div>
-              {#if meeting.attendees.length > 0}
-                <div class="mt-2 text-sm text-gray-500">
-                  <span class="font-medium">Attendees:</span>
-                  {meeting.attendees.join(', ')}
-                </div>
-              {/if}
-              {#if meeting.location}
-                <div class="mt-1 text-sm text-gray-500">
-                  <span class="font-medium">Location:</span>
-                  {meeting.location}
-                </div>
-              {/if}
-            </div>
-            <div class="flex items-center gap-2 ml-4">
-              <button
-                onclick={() => openEditForm(meeting)}
-                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
-              >
-                Edit
-              </button>
-              <button
-                onclick={() => deleteMeeting(meeting.id)}
-                class="px-3 py-1.5 rounded-lg text-sm font-medium bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      {/each}
+      <div class="panel-footer">
+        <button type="submit" class="btn-save" disabled={submitting}>
+          {submitting ? 'Saving...' : 'Save'}
+        </button>
+        <button type="button" class="btn-cancel" onclick={closePanel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  </div>
+{/if}
 
-      {#if meetingList.length === 0}
-        <div class="bg-white rounded-lg shadow p-8 text-center">
-          <p class="text-gray-500">No smart meetings yet. Click "Add Meeting" to create one.</p>
-        </div>
-      {/if}
-    </div>
-  {/if}
-</div>
+<style>
+  /* Conference badge */
+  .conference-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border-radius: var(--radius-full);
+    background: var(--color-meeting-bg);
+    color: var(--color-meeting-border);
+  }
+
+  /* Avatar group */
+  .avatar-group {
+    display: flex;
+    align-items: center;
+  }
+  .avatar-circle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-full);
+    background: var(--color-accent-muted);
+    color: var(--color-accent);
+    font-size: 0.625rem;
+    font-weight: 600;
+    border: 2px solid var(--color-surface);
+    margin-left: -6px;
+  }
+  .avatar-circle:first-child {
+    margin-left: 0;
+  }
+  .avatar-overflow {
+    background: var(--color-surface-active);
+    color: var(--color-text-secondary);
+  }
+
+  .color-picker {
+    display: flex;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .color-swatch {
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-full);
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  }
+  .color-swatch:hover {
+    box-shadow: 0 0 0 2px var(--color-border-strong);
+  }
+  .color-swatch--active {
+    border-color: var(--color-text);
+    box-shadow: 0 0 0 2px var(--color-border-strong);
+  }
+  .color-swatch--none {
+    background: var(--color-surface-hover) !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--color-text-tertiary);
+    line-height: 1;
+  }
+</style>

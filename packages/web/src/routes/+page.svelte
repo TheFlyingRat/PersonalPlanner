@@ -1,10 +1,29 @@
 <script lang="ts">
-  import { schedule } from '$lib/api';
+  import { schedule, habits as habitsApi, tasks as tasksApi, meetings as meetingsApi } from '$lib/api';
+  import ChevronLeft from 'lucide-svelte/icons/chevron-left';
+  import ChevronRight from 'lucide-svelte/icons/chevron-right';
+  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
+  import AlertTriangle from 'lucide-svelte/icons/triangle-alert';
+  import X from 'lucide-svelte/icons/x';
+  import Trash2 from 'lucide-svelte/icons/trash-2';
+  import Eye from 'lucide-svelte/icons/eye';
+  import MapPin from 'lucide-svelte/icons/map-pin';
+  import Clock from 'lucide-svelte/icons/clock';
+  import CalendarDays from 'lucide-svelte/icons/calendar-days';
 
   // Dashboard - Week Calendar View
   let currentWeekStart = $state(getMonday(new Date()));
   let loading = $state(true);
   let error = $state('');
+
+  // Selected event for detail panel
+  let selectedEvent = $state<CalEvent | null>(null);
+
+  // Context menu state
+  let contextMenu = $state<{ x: number; y: number; event: CalEvent } | null>(null);
+
+  // Reference to the scroll container for auto-scroll
+  let scrollContainer: HTMLDivElement | undefined = $state();
 
   function getMonday(date: Date): Date {
     const d = new Date(date);
@@ -41,59 +60,121 @@
     });
   }
 
-  function formatDate(d: Date): string {
-    return `${d.getMonth() + 1}/${d.getDate()}`;
-  }
-
   function formatWeekRange(start: Date): string {
     const end = new Date(start);
     end.setDate(end.getDate() + 6);
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     if (start.getMonth() === end.getMonth()) {
-      return `${monthNames[start.getMonth()]} ${start.getDate()} - ${end.getDate()}, ${start.getFullYear()}`;
+      return `${monthNames[start.getMonth()]} ${start.getDate()} \u2013 ${end.getDate()}, ${start.getFullYear()}`;
     }
-    return `${monthNames[start.getMonth()]} ${start.getDate()} - ${monthNames[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
+    return `${monthNames[start.getMonth()]} ${start.getDate()} \u2013 ${monthNames[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
   }
 
-  // Time grid from 7:00 to 22:00
-  const hours = Array.from({ length: 16 }, (_, i) => i + 7);
-  const HOUR_HEIGHT = 64;
-  const GRID_HEIGHT = 16 * HOUR_HEIGHT; // 7am-11pm = 16 hour slots
+  const START_HOUR = 7;
+  const END_HOUR = 23;
+  const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => i + START_HOUR);
+  const HOUR_HEIGHT = 60;
+  const GRID_HEIGHT = (END_HOUR - START_HOUR) * HOUR_HEIGHT;
 
   interface CalEvent {
     dayIndex: number;
     startHour: number;
     duration: number;
     title: string;
-    type: 'habit' | 'task' | 'meeting' | 'focus' | 'manual';
+    type: 'habit' | 'task' | 'meeting' | 'focus' | 'manual' | 'external';
+    calendarColor?: string;
+    calendarName?: string;
+    itemColor?: string;
+    // Extended fields
+    id?: string;
+    itemId?: string;
+    startISO: string;
+    endISO: string;
+    status?: string;
+    location?: string;
+    isAllDay?: boolean;
   }
 
-  // Mock events as fallback
-  const mockEvents: CalEvent[] = [
-    { dayIndex: 0, startHour: 9, duration: 0.5, title: 'Team Standup', type: 'meeting' },
-    { dayIndex: 1, startHour: 12, duration: 1, title: 'Lunch', type: 'habit' },
-    { dayIndex: 2, startHour: 14, duration: 2, title: 'Project Work', type: 'task' },
-    { dayIndex: 3, startHour: 10, duration: 2, title: 'Deep Work', type: 'focus' },
-    { dayIndex: 0, startHour: 14, duration: 1.5, title: 'Code Review', type: 'task' },
-    { dayIndex: 1, startHour: 9, duration: 0.5, title: '1:1 with Manager', type: 'meeting' },
-    { dayIndex: 4, startHour: 8, duration: 1, title: 'Morning Exercise', type: 'habit' },
-    { dayIndex: 4, startHour: 13, duration: 2, title: 'Focus Time', type: 'focus' },
-    { dayIndex: 2, startHour: 9, duration: 1, title: 'Sprint Planning', type: 'meeting' },
-    { dayIndex: 3, startHour: 15, duration: 1, title: 'Bug Fixes', type: 'task' },
-  ];
+  let deleting = $state(false);
+  let rescheduling = $state(false);
+  let rescheduleResult = $state<{ message: string; operationsApplied: number; unschedulable: any[] } | null>(null);
 
-  let events = $state<CalEvent[]>(mockEvents);
+  let events = $state<CalEvent[]>([]);
+  let hasAnyAllDay = $derived(events.some((e) => e.isAllDay));
 
-  const typeColors: Record<string, string> = {
-    habit: 'bg-green-500/90 border-green-600',
-    task: 'bg-blue-500/90 border-blue-600',
-    meeting: 'bg-purple-500/90 border-purple-600',
-    focus: 'bg-orange-500/90 border-orange-600',
-    manual: 'bg-gray-500/90 border-gray-600',
-  };
+  function detectConflicts(evts: CalEvent[]): Map<string, string[]> {
+    const conflicts = new Map<string, string[]>();
+    const timedEvents = evts.filter(e => !e.isAllDay);
+    for (let i = 0; i < timedEvents.length; i++) {
+      for (let j = i + 1; j < timedEvents.length; j++) {
+        const a = timedEvents[i], b = timedEvents[j];
+        if (a.dayIndex !== b.dayIndex) continue;
+        const aEnd = a.startHour + a.duration;
+        const bEnd = b.startHour + b.duration;
+        if (a.startHour < bEnd && b.startHour < aEnd) {
+          const aId = a.id || a.title;
+          const bId = b.id || b.title;
+          if (!conflicts.has(aId)) conflicts.set(aId, []);
+          if (!conflicts.has(bId)) conflicts.set(bId, []);
+          conflicts.get(aId)!.push(b.title);
+          conflicts.get(bId)!.push(a.title);
+        }
+      }
+    }
+    return conflicts;
+  }
 
-  function getEventsForDay(dayIndex: number): CalEvent[] {
-    return events.filter((e) => e.dayIndex === dayIndex);
+  let conflicts = $derived(detectConflicts(events));
+
+  interface LayoutEvent extends CalEvent {
+    col: number;
+    totalCols: number;
+  }
+
+  function getAllDayEventsForDay(dayIndex: number): CalEvent[] {
+    return events.filter((e) => e.dayIndex === dayIndex && e.isAllDay);
+  }
+
+  function getEventsForDay(dayIndex: number): LayoutEvent[] {
+    const dayEvents = events
+      .filter((e) => e.dayIndex === dayIndex && !e.isAllDay)
+      .sort((a, b) => a.startHour - b.startHour || b.duration - a.duration);
+
+    // Assign each event a column. Place into the first column where it doesn't overlap.
+    const columns: { startHour: number; duration: number; idx: number }[][] = [];
+    const layout: { col: number }[] = [];
+
+    for (let i = 0; i < dayEvents.length; i++) {
+      const ev = dayEvents[i];
+      let placed = false;
+      for (let c = 0; c < columns.length; c++) {
+        const hasOverlap = columns[c].some(
+          (o) => ev.startHour < o.startHour + o.duration && ev.startHour + ev.duration > o.startHour,
+        );
+        if (!hasOverlap) {
+          columns[c].push({ startHour: ev.startHour, duration: ev.duration, idx: i });
+          layout[i] = { col: c };
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        columns.push([{ startHour: ev.startHour, duration: ev.duration, idx: i }]);
+        layout[i] = { col: columns.length - 1 };
+      }
+    }
+
+    // For each event, find max columns among its overlapping cluster
+    return dayEvents.map((ev, i) => {
+      let maxCol = layout[i].col;
+      for (let j = 0; j < dayEvents.length; j++) {
+        const other = dayEvents[j];
+        if (ev.startHour < other.startHour + other.duration && ev.startHour + ev.duration > other.startHour) {
+          maxCol = Math.max(maxCol, layout[j].col);
+        }
+      }
+      return { ...ev, col: layout[i].col, totalCols: maxCol + 1 };
+    });
   }
 
   function isToday(date: Date): boolean {
@@ -101,6 +182,13 @@
     return date.getDate() === today.getDate() &&
       date.getMonth() === today.getMonth() &&
       date.getFullYear() === today.getFullYear();
+  }
+
+  function formatHourLabel(hour: number): string {
+    if (hour === 0) return '12 AM';
+    if (hour < 12) return `${hour} AM`;
+    if (hour === 12) return '12 PM';
+    return `${hour - 12} PM`;
   }
 
   function formatStartTime(startHour: number): string {
@@ -116,6 +204,49 @@
     return `${endH.toString().padStart(2, '0')}:${endM.toString().padStart(2, '0')}`;
   }
 
+  function formatHourAmPm(startHour: number): string {
+    const h = Math.floor(startHour);
+    const m = Math.round((startHour - h) * 60);
+    const suffix = h >= 12 ? 'PM' : 'AM';
+    const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+    return `${h12}:${m.toString().padStart(2, '0')} ${suffix}`;
+  }
+
+  /** Returns the current time position in pixels from grid top, or -1 if out of range */
+  function getCurrentTimePosition(): number {
+    const now = new Date();
+    const currentHour = now.getHours() + now.getMinutes() / 60;
+    return (currentHour - START_HOUR) * HOUR_HEIGHT;
+  }
+
+  /** Returns the day index (0=Mon..6=Sun) for today, or -1 if not in current week */
+  function getTodayDayIndex(): number {
+    const today = new Date();
+    const weekDates = getWeekDates(currentWeekStart);
+    for (let i = 0; i < weekDates.length; i++) {
+      if (isToday(weekDates[i])) return i;
+    }
+    return -1;
+  }
+
+  // Event type styling map using CSS custom properties
+  const eventTypeMap: Record<string, { bg: string; border: string; label: string }> = {
+    habit: { bg: 'var(--color-habit-bg)', border: 'var(--color-habit-border)', label: 'Habit' },
+    task: { bg: 'var(--color-task-bg)', border: 'var(--color-task-border)', label: 'Task' },
+    meeting: { bg: 'var(--color-meeting-bg)', border: 'var(--color-meeting-border)', label: 'Meeting' },
+    focus: { bg: 'var(--color-focus-bg)', border: 'var(--color-focus-border)', label: 'Focus' },
+    external: { bg: 'var(--color-external-bg)', border: 'var(--color-external-border)', label: 'External' },
+  };
+
+  // Legend items
+  const legendItems = [
+    { type: 'habit', label: 'Habit' },
+    { type: 'task', label: 'Task' },
+    { type: 'meeting', label: 'Meeting' },
+    { type: 'focus', label: 'Focus' },
+    { type: 'external', label: 'External' },
+  ];
+
   async function fetchEvents() {
     loading = true;
     error = '';
@@ -127,31 +258,122 @@
       const end = endDate.toISOString();
 
       const apiEvents = await schedule.getEvents(start, end);
-      events = apiEvents.map((ev) => {
+      const mapped: CalEvent[] = [];
+      for (const raw of apiEvents) {
+        const ev = raw as any;
+        if (!ev.start || !ev.end) continue;
+        const isAllDay = ev.isAllDay || (!ev.start.includes('T') && !ev.end.includes('T'));
         const startDate = new Date(ev.start);
         const endDateEv = new Date(ev.end);
+        if (isNaN(startDate.getTime()) || isNaN(endDateEv.getTime())) continue;
         const dayOfWeek = startDate.getDay();
-        // Convert Sunday=0..Saturday=6 to Monday=0..Sunday=6
         const dayIndex = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        const startHour = startDate.getHours() + startDate.getMinutes() / 60;
+        const startHour = isAllDay ? 0 : startDate.getHours() + startDate.getMinutes() / 60;
         const durationMs = endDateEv.getTime() - startDate.getTime();
-        const duration = durationMs / (1000 * 60 * 60);
+        const duration = isAllDay ? 24 : durationMs / (1000 * 60 * 60);
         const type = ev.itemType || 'manual';
-        return {
+        mapped.push({
           dayIndex,
           startHour,
           duration,
-          title: ev.title,
+          title: ev.title || '(No title)',
           type: type as CalEvent['type'],
-        };
-      });
+          calendarColor: ev.calendarColor,
+          calendarName: ev.calendarName,
+          itemColor: ev.itemColor,
+          id: ev.id,
+          itemId: ev.itemId,
+          startISO: ev.start,
+          endISO: ev.end,
+          status: ev.status,
+          location: ev.location,
+          isAllDay: !!isAllDay,
+        });
+      }
+      events = mapped;
     } catch {
-      // API unavailable - keep mock data as fallback
-      error = 'Failed to load data from API. Showing cached data.';
-      events = mockEvents;
+      error = 'Failed to load events from API.';
+      events = [];
     } finally {
       loading = false;
     }
+  }
+
+  function handleEventClick(event: CalEvent) {
+    contextMenu = null;
+    selectedEvent = event;
+  }
+
+  function handleEventContextMenu(e: MouseEvent, event: CalEvent) {
+    e.preventDefault();
+    selectedEvent = null;
+    contextMenu = { x: e.clientX, y: e.clientY, event };
+  }
+
+  function closeContextMenu() {
+    contextMenu = null;
+  }
+
+  function closeDetail() {
+    selectedEvent = null;
+  }
+
+  async function deleteEvent(event: CalEvent) {
+    if (!event.itemId) return;
+    const typeLabel = eventTypeMap[event.type]?.label || event.type;
+    if (!confirm(`Delete this ${typeLabel.toLowerCase()} "${event.title}"? This removes the source item, not just this occurrence.`)) return;
+    deleting = true;
+    try {
+      if (event.type === 'habit') await habitsApi.delete(event.itemId);
+      else if (event.type === 'task') await tasksApi.delete(event.itemId);
+      else if (event.type === 'meeting') await meetingsApi.delete(event.itemId);
+      else return;
+      closeDetail();
+      closeContextMenu();
+      await fetchEvents();
+    } catch {
+      error = 'Failed to delete event.';
+    } finally {
+      deleting = false;
+    }
+  }
+
+  async function handleReschedule() {
+    rescheduling = true;
+    rescheduleResult = null;
+    try {
+      const result = await schedule.run();
+      rescheduleResult = result;
+      await fetchEvents();
+    } catch {
+      error = 'Failed to reschedule.';
+    } finally {
+      rescheduling = false;
+    }
+  }
+
+  function canDelete(event: CalEvent): boolean {
+    return !!event.itemId && ['habit', 'task', 'meeting'].includes(event.type);
+  }
+
+  function formatFullDate(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  }
+
+  function formatTime(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+
+  function scrollToCurrentTime() {
+    if (!scrollContainer) return;
+    const now = new Date();
+    const todayInWeek = getTodayDayIndex() >= 0;
+    // Scroll to current time if viewing current week, otherwise scroll to 7 AM
+    const targetHour = todayInWeek ? now.getHours() - 1 : 7;
+    const scrollTarget = Math.max(0, targetHour * HOUR_HEIGHT);
+    scrollContainer.scrollTop = scrollTarget;
   }
 
   $effect(() => {
@@ -159,117 +381,1039 @@
     const _week = currentWeekStart;
     fetchEvents();
   });
+
+  $effect(() => {
+    // Auto-scroll to current time after loading completes
+    if (!loading && scrollContainer) {
+      // Small delay to ensure DOM is rendered
+      requestAnimationFrame(() => scrollToCurrentTime());
+    }
+  });
+
+  $effect(() => {
+    if (rescheduleResult) {
+      const timer = setTimeout(() => { rescheduleResult = null; }, 5000);
+      return () => clearTimeout(timer);
+    }
+  });
 </script>
 
 <svelte:head>
-  <title>Dashboard - Reclaim</title>
+  <title>Schedule - Cadence</title>
 </svelte:head>
 
-<div class="p-6">
+<div class="dashboard">
   <!-- Header -->
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <h1 class="text-2xl font-bold text-gray-900">Dashboard</h1>
-      <p class="text-sm text-gray-500 mt-1">{formatWeekRange(currentWeekStart)}</p>
+  <header class="dashboard-header">
+    <div class="header-left">
+      <h1 class="header-title">Schedule</h1>
+      <span class="header-date-range font-mono">{formatWeekRange(currentWeekStart)}</span>
     </div>
-    <div class="flex items-center gap-2">
+    <div class="header-nav">
+      <button class="reschedule-btn" onclick={handleReschedule} disabled={rescheduling}>
+        <RefreshCw size={16} strokeWidth={1.5} class={rescheduling ? 'spinning' : ''} />
+        {rescheduling ? 'Scheduling...' : 'Reschedule'}
+      </button>
       <button
         onclick={prevWeek}
         aria-label="Previous week"
-        class="px-3 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 font-medium text-sm"
+        class="nav-btn"
       >
-        &larr;
+        <ChevronLeft size={16} strokeWidth={1.5} />
       </button>
       <button
         onclick={goToday}
-        class="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium text-sm"
+        class="today-btn"
       >
         Today
       </button>
       <button
         onclick={nextWeek}
         aria-label="Next week"
-        class="px-3 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 font-medium text-sm"
+        class="nav-btn"
       >
-        &rarr;
+        <ChevronRight size={16} strokeWidth={1.5} />
       </button>
     </div>
-  </div>
+  </header>
 
   {#if error}
-    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
+    <div class="error-banner">{error}</div>
   {/if}
 
-  <!-- Legend -->
-  <div class="flex gap-4 mb-4 text-sm">
-    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-green-500 inline-block"></span> Habit</span>
-    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-blue-500 inline-block"></span> Task</span>
-    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-purple-500 inline-block"></span> Meeting</span>
-    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-orange-500 inline-block"></span> Focus</span>
-    <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-gray-500 inline-block"></span> Manual</span>
-  </div>
+  {#if rescheduleResult}
+    <div class="reschedule-banner">
+      &#10003; {rescheduleResult.operationsApplied} changes applied
+      {#if rescheduleResult.unschedulable.length > 0}
+        &middot; {rescheduleResult.unschedulable.length} items couldn't be scheduled
+      {/if}
+    </div>
+  {/if}
 
   {#if loading}
-    <div class="flex items-center justify-center py-12">
-      <p class="text-gray-500">Loading...</p>
+    <div class="loading-state">
+      <p>Loading schedule...</p>
     </div>
   {:else}
     <!-- Calendar Grid -->
-    <div class="bg-white rounded-lg shadow overflow-hidden">
+    <div class="calendar-container">
       <!-- Day Headers -->
-      <div class="grid grid-cols-[64px_repeat(7,1fr)] border-b border-gray-200">
-        <div class="p-2 bg-gray-50"></div>
+      <div class="day-headers">
+        <div class="time-col-header"></div>
         {#each getWeekDates(currentWeekStart) as date, i}
-          <div class="p-3 text-center border-l border-gray-200 {isToday(date) ? 'bg-blue-50' : 'bg-gray-50'}">
-            <div class="text-xs font-medium text-gray-500 uppercase">{dayNames[i]}</div>
-            <div class="text-lg font-bold {isToday(date) ? 'text-blue-600' : 'text-gray-900'}">
+          <div class="day-header" class:day-header--today={isToday(date)}>
+            <span class="day-header-name">{dayNames[i]}</span>
+            <span class="day-header-date font-mono" class:day-header-date--today={isToday(date)}>
               {date.getDate()}
-            </div>
+              {#if isToday(date)}
+                <span class="today-dot"></span>
+              {/if}
+            </span>
           </div>
         {/each}
       </div>
 
-      <!-- Time Grid with per-column event containers -->
-      <div class="grid grid-cols-[64px_repeat(7,1fr)] overflow-auto" style="max-height: 640px;">
-        <!-- Time Labels Column -->
-        <div style="height: {GRID_HEIGHT}px;" class="relative">
-          {#each hours as hour, idx}
-            <div class="absolute left-0 right-0 flex items-start justify-end pr-2 pt-0.5" style="top: {idx * HOUR_HEIGHT}px; height: {HOUR_HEIGHT}px;">
-              <span class="text-xs text-gray-400 font-medium">
-                {hour.toString().padStart(2, '0')}:00
-              </span>
+      <!-- All-day events row -->
+      {#if hasAnyAllDay}
+        <div class="all-day-row">
+          <div class="time-col-header all-day-label font-mono">All day</div>
+          {#each Array(7) as _, dayIdx}
+            <div class="all-day-cell">
+              {#each getAllDayEventsForDay(dayIdx) as event}
+                {@const styles = eventTypeMap[event.type] || eventTypeMap.external}
+                <button
+                  class="all-day-event"
+                  style="background: {event.itemColor ? event.itemColor + '22' : styles.bg}; border-left: 3px solid {event.itemColor || styles.border};"
+                  onclick={() => handleEventClick(event)}
+                  aria-label="{event.title} (all day)"
+                >
+                  <span class="all-day-event-title">{event.title}</span>
+                </button>
+              {/each}
             </div>
           {/each}
         </div>
+      {/if}
 
-        <!-- Day Columns with Events -->
-        {#each Array(7) as _, dayIdx}
-          <div class="relative border-l border-gray-100" style="height: {GRID_HEIGHT}px;">
-            <!-- Hour grid lines -->
-            {#each hours as _, hourIdx}
-              <div class="absolute left-0 right-0 border-b border-gray-100" style="top: {hourIdx * HOUR_HEIGHT}px; height: {HOUR_HEIGHT}px;">
-                <div class="absolute top-1/2 left-0 right-0 border-t border-gray-50"></div>
-              </div>
-            {/each}
-
-            <!-- Events for this day -->
-            {#each getEventsForDay(dayIdx) as event}
-              {@const topOffset = (event.startHour - 7) * HOUR_HEIGHT}
-              {@const height = event.duration * HOUR_HEIGHT}
-              <div
-                class="absolute left-1 right-1 rounded-md border-l-4 px-2 py-1 text-white text-xs font-medium overflow-hidden cursor-pointer hover:opacity-90 transition-opacity {typeColors[event.type]}"
-                style="top: {topOffset}px; height: {Math.max(height, 20)}px; z-index: 10;"
-              >
-                <div class="truncate">{event.title}</div>
-                <div class="text-white/70 text-[10px]">
-                  {formatStartTime(event.startHour)} - {formatEndTime(event.startHour, event.duration)}
-                </div>
+      <!-- Scrollable time grid -->
+      <div class="time-grid-scroll" bind:this={scrollContainer}>
+        <div class="time-grid" style="height: {GRID_HEIGHT}px;">
+          <!-- Time Labels Column -->
+          <div class="time-labels-col">
+            {#each hours as hour, idx}
+              <div class="time-label font-mono" style="top: {idx * HOUR_HEIGHT}px;">
+                {formatHourLabel(hour)}
               </div>
             {/each}
           </div>
-        {/each}
+
+          <!-- Day Columns -->
+          {#each Array(7) as _, dayIdx}
+            {@const todayIdx = getTodayDayIndex()}
+            <div class="day-col" class:day-col--today={dayIdx === todayIdx}>
+              <!-- Hour grid lines -->
+              {#each hours as _, hourIdx}
+                <div class="hour-line" style="top: {hourIdx * HOUR_HEIGHT}px;"></div>
+              {/each}
+
+              <!-- Current time indicator -->
+              {#if dayIdx === todayIdx && getCurrentTimePosition() >= 0}
+                <div class="current-time-line" style="top: {getCurrentTimePosition()}px;">
+                  <div class="current-time-dot"></div>
+                </div>
+              {/if}
+
+              <!-- Events for this day -->
+              {#each getEventsForDay(dayIdx) as event}
+                {@const topOffset = (event.startHour - START_HOUR) * HOUR_HEIGHT}
+                {@const height = event.duration * HOUR_HEIGHT}
+                {@const colWidth = 100 / event.totalCols}
+                {@const leftPct = event.col * colWidth}
+                {@const styles = eventTypeMap[event.type] || eventTypeMap.external}
+                {@const eventId = event.id || event.title}
+                {@const hasConflict = conflicts.has(eventId)}
+                {@const evBg = event.itemColor ? event.itemColor + '22' : styles.bg}
+                {@const evBorder = event.itemColor || styles.border}
+                <div
+                  class="cal-event"
+                  class:cal-event--conflict={hasConflict}
+                  role="button"
+                  tabindex="0"
+                  style="
+                    top: {topOffset}px;
+                    height: {Math.max(height, 20)}px;
+                    left: calc({leftPct}% + 2px);
+                    width: calc({colWidth}% - 4px);
+                    background-color: {evBg};
+                    border-left-color: {evBorder};
+                  "
+                  aria-label="{formatHourAmPm(event.startHour)} - {formatHourAmPm(event.startHour + event.duration)}: {event.title}"
+                  onclick={() => handleEventClick(event)}
+                  oncontextmenu={(e) => handleEventContextMenu(e, event)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') handleEventClick(event);
+                    if (e.key === 'F10' && e.shiftKey) {
+                      e.preventDefault();
+                      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      handleEventContextMenu(new MouseEvent('contextmenu', { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }), event);
+                    }
+                  }}
+                >
+                  <div class="cal-event-title">{event.title}</div>
+                  {#if height > 28}
+                    <div class="cal-event-time font-mono">
+                      {formatStartTime(event.startHour)} - {formatEndTime(event.startHour, event.duration)}
+                    </div>
+                  {/if}
+                  {#if hasConflict}
+                    <span class="conflict-badge" title="Overlaps with {conflicts.get(eventId)?.join(', ')}">
+                      <AlertTriangle size={10} strokeWidth={2} />
+                    </span>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/each}
+        </div>
       </div>
     </div>
 
+    <!-- Legend -->
+    <div class="legend">
+      {#each legendItems as item}
+        {@const styles = eventTypeMap[item.type]}
+        <span class="legend-chip">
+          <span class="legend-dot" style="background-color: {styles.border};"></span>
+          {item.label}
+        </span>
+      {/each}
+    </div>
   {/if}
 </div>
+
+<!-- Event Detail Slide-over -->
+{#if selectedEvent}
+  {@const styles = eventTypeMap[selectedEvent.type] || eventTypeMap.external}
+  <div class="detail-backdrop" onclick={closeDetail} onkeydown={(e) => { if (e.key === 'Escape') closeDetail(); }} role="button" tabindex="-1"></div>
+  <div class="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detail-panel-title" tabindex="-1">
+    <header class="detail-header">
+      <div class="detail-type-badge" style="background: {styles.bg}; color: {styles.border}; border: 1px solid {styles.border};">
+        {styles.label}
+      </div>
+      <button class="detail-close" onclick={closeDetail} aria-label="Close">
+        <X size={16} strokeWidth={1.5} />
+      </button>
+    </header>
+
+    <h2 id="detail-panel-title" class="detail-title">{selectedEvent.title}</h2>
+
+    <!-- Date & Time -->
+    <div class="detail-section">
+      <div class="detail-icon-row">
+        <CalendarDays size={16} strokeWidth={1.5} class="detail-icon" />
+        <span>{formatFullDate(selectedEvent.startISO)}</span>
+      </div>
+      <div class="detail-icon-row">
+        <Clock size={16} strokeWidth={1.5} class="detail-icon" />
+        <span class="font-mono">{formatTime(selectedEvent.startISO)} – {formatTime(selectedEvent.endISO)}</span>
+        <span class="detail-duration-chip font-mono">{Math.round(selectedEvent.duration * 60)}m</span>
+      </div>
+      {#if selectedEvent.location}
+        <div class="detail-icon-row">
+          <MapPin size={16} strokeWidth={1.5} class="detail-icon" />
+          <span>{selectedEvent.location}</span>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Details grid -->
+    <div class="detail-meta">
+      <div class="detail-row">
+        <span class="detail-label">Type</span>
+        <span class="detail-value">
+          <span class="detail-type-dot" style="background: {styles.border};"></span>
+          {styles.label}
+        </span>
+      </div>
+      {#if selectedEvent.status}
+        <div class="detail-row">
+          <span class="detail-label">Status</span>
+          <span class="detail-value detail-status-badge">{selectedEvent.status}</span>
+        </div>
+      {/if}
+      {#if selectedEvent.calendarName}
+        <div class="detail-row">
+          <span class="detail-label">Calendar</span>
+          <span class="detail-value">
+            {#if selectedEvent.calendarColor}
+              <span class="detail-cal-dot" style="background: {selectedEvent.calendarColor};"></span>
+            {/if}
+            {selectedEvent.calendarName}
+          </span>
+        </div>
+      {/if}
+      {#if selectedEvent.itemId}
+        <div class="detail-row">
+          <span class="detail-label">Source ID</span>
+          <span class="detail-value font-mono" style="font-size: 0.6875rem; opacity: 0.7;">{selectedEvent.itemId.slice(0, 8)}...</span>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Conflicts -->
+    {@const selectedId = selectedEvent.id || selectedEvent.title}
+    {#if conflicts.has(selectedId)}
+      <div class="detail-conflicts">
+        <span class="detail-conflicts-heading">
+          <AlertTriangle size={14} strokeWidth={1.5} />
+          Conflicts
+        </span>
+        <ul class="detail-conflicts-list">
+          {#each conflicts.get(selectedId)! as conflictTitle}
+            <li>{conflictTitle}</li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+
+    <!-- Actions -->
+    {#if canDelete(selectedEvent)}
+      <div class="detail-actions">
+        <button
+          class="detail-delete-btn"
+          onclick={() => deleteEvent(selectedEvent!)}
+          disabled={deleting}
+        >
+          <Trash2 size={14} strokeWidth={1.5} />
+          {deleting ? 'Deleting...' : `Delete ${styles.label}`}
+        </button>
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<!-- Context Menu -->
+{#if contextMenu}
+  {@const styles = eventTypeMap[contextMenu.event.type] || eventTypeMap.external}
+  <div class="ctx-backdrop" onclick={closeContextMenu} onkeydown={(e) => { if (e.key === 'Escape') closeContextMenu(); }} role="button" tabindex="-1"></div>
+  <div
+    class="ctx-menu"
+    role="menu"
+    tabindex="-1"
+    style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    onkeydown={(e) => {
+      if (e.key === 'Escape') { closeContextMenu(); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const items = (e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="menuitem"]');
+        const current = Array.from(items).indexOf(document.activeElement as HTMLElement);
+        const next = e.key === 'ArrowDown'
+          ? (current + 1) % items.length
+          : (current - 1 + items.length) % items.length;
+        items[next]?.focus();
+      }
+    }}
+  >
+    <button class="ctx-item" role="menuitem" onclick={() => { handleEventClick(contextMenu!.event); }}>
+      <Eye size={14} strokeWidth={1.5} />
+      View details
+    </button>
+    {#if canDelete(contextMenu.event)}
+      <button class="ctx-item ctx-item--danger" role="menuitem" onclick={() => { deleteEvent(contextMenu!.event); }}>
+        <Trash2 size={14} strokeWidth={1.5} />
+        Delete {styles.label.toLowerCase()}
+      </button>
+    {/if}
+    <div class="ctx-divider"></div>
+    <div class="ctx-info">
+      <span class="ctx-info-label">{contextMenu.event.title}</span>
+      <span class="ctx-info-sub font-mono">{formatTime(contextMenu.event.startISO)} – {formatTime(contextMenu.event.endISO)}</span>
+    </div>
+  </div>
+{/if}
+
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape') { closeDetail(); closeContextMenu(); } }} />
+
+<style>
+  /* Dashboard Layout */
+  .dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  /* Header */
+  .dashboard-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+  }
+
+  .header-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 0;
+  }
+
+  .header-date-range {
+    font-size: 0.875rem;
+    color: var(--color-text-secondary);
+  }
+
+  .header-nav {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .nav-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: var(--space-2);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+
+  .nav-btn:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+
+  .today-btn {
+    padding: var(--space-1) var(--space-4);
+    height: 32px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-accent);
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+
+  .today-btn:hover {
+    background: var(--color-accent);
+    color: var(--color-accent-text);
+  }
+
+  /* Reschedule Button */
+  .reschedule-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-4);
+    height: 32px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-accent);
+    background: var(--color-accent);
+    color: var(--color-accent-text);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background var(--transition-fast), opacity var(--transition-fast);
+  }
+
+  .reschedule-btn:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+  }
+
+  .reschedule-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  .reschedule-btn :global(.spinning) {
+    animation: spin 1s linear infinite;
+  }
+
+  /* Reschedule Banner */
+  .reschedule-banner {
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-success-muted);
+    color: var(--color-success);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    animation: fadeIn 200ms ease;
+  }
+
+  /* Error */
+  .error-banner {
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-danger-muted);
+    color: var(--color-danger);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+  }
+
+  /* Loading */
+  .loading-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-12) 0;
+    color: var(--color-text-tertiary);
+    font-size: 0.875rem;
+  }
+
+  /* Calendar Container */
+  .calendar-container {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+
+  /* Day Headers */
+  .day-headers {
+    display: grid;
+    grid-template-columns: 64px repeat(7, 1fr);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .time-col-header {
+    border-right: 1px solid var(--color-border);
+  }
+
+  .day-header {
+    padding: var(--space-3);
+    text-align: center;
+    border-left: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .day-header-name {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--color-text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .day-header-date {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .day-header-date--today {
+    color: var(--color-accent);
+  }
+
+  .today-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: var(--radius-full);
+    background: var(--color-accent);
+    display: inline-block;
+  }
+
+  /* All-day events row */
+  .all-day-row {
+    display: grid;
+    grid-template-columns: 64px repeat(7, 1fr);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .all-day-label {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: var(--space-2);
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .all-day-cell {
+    border-left: 1px solid var(--color-border);
+    padding: var(--space-1);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-height: 28px;
+  }
+
+  .all-day-event {
+    display: block;
+    width: 100%;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-sm);
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    transition: filter var(--transition-fast);
+  }
+
+  .all-day-event:hover {
+    filter: brightness(0.95);
+  }
+
+  .all-day-event-title {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Time Grid */
+  .time-grid-scroll {
+    overflow-y: auto;
+    max-height: calc(100vh - 200px);
+  }
+
+  .time-grid {
+    display: grid;
+    grid-template-columns: 64px repeat(7, 1fr);
+    position: relative;
+  }
+
+  .time-labels-col {
+    position: relative;
+    border-right: 1px solid var(--color-border);
+  }
+
+  .time-label {
+    position: absolute;
+    right: var(--space-2);
+    transform: translateY(-50%);
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /* Day Columns */
+  .day-col {
+    position: relative;
+    border-left: 1px solid var(--color-border);
+  }
+
+  .day-col--today {
+    background: var(--color-accent-muted);
+  }
+
+  .hour-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  /* Current Time Indicator */
+  .current-time-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 2px solid var(--color-accent);
+    z-index: 20;
+    pointer-events: none;
+  }
+
+  .current-time-dot {
+    position: absolute;
+    left: -4px;
+    top: -5px;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    background: var(--color-accent);
+  }
+
+  /* Events */
+  .cal-event {
+    position: absolute;
+    z-index: 10;
+    border-radius: var(--radius-md);
+    border-left: 3px solid;
+    padding: var(--space-1) var(--space-2);
+    overflow: hidden;
+    cursor: pointer;
+    transition: filter var(--transition-fast);
+  }
+
+  .cal-event:hover {
+    filter: brightness(0.95);
+  }
+
+  .cal-event-title {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+
+  .cal-event-time {
+    font-size: 0.625rem;
+    color: var(--color-text-secondary);
+    line-height: 1.3;
+  }
+
+  /* Conflict indicator */
+  .cal-event--conflict {
+    box-shadow: 0 0 0 1px var(--color-warning-amber);
+  }
+
+  .conflict-badge {
+    position: absolute;
+    top: 2px;
+    right: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-full);
+    background: var(--color-warning-amber-bg);
+    color: var(--color-warning-amber);
+  }
+
+  /* Detail conflicts section */
+  .detail-conflicts {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    background: var(--color-warning-amber-bg);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-warning-amber);
+  }
+
+  .detail-conflicts-heading {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--color-warning-amber);
+  }
+
+  .detail-conflicts-list {
+    margin: 0;
+    padding-left: var(--space-5);
+    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-4);
+    padding-top: var(--space-2);
+  }
+
+  .legend-chip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    flex-shrink: 0;
+  }
+
+  /* Event Detail Slide-over */
+  .detail-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 40;
+  }
+
+  .detail-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 400px;
+    max-width: 100vw;
+    background: var(--color-surface);
+    border-left: 1px solid var(--color-border);
+    z-index: 50;
+    padding: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    animation: slideInRight 200ms ease;
+  }
+
+  @keyframes slideInRight {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+  }
+
+  .detail-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .detail-type-badge {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .detail-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-md);
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+  }
+
+  .detail-close:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text);
+  }
+
+  .detail-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 0;
+  }
+
+  .detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding-bottom: var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .detail-icon-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.8125rem;
+    color: var(--color-text);
+  }
+
+  .detail-icon-row :global(.detail-icon) {
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+  }
+
+  .detail-duration-chip {
+    font-size: 0.6875rem;
+    background: var(--color-surface-hover);
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    color: var(--color-text-secondary);
+    margin-left: auto;
+  }
+
+  .detail-meta {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border);
+  }
+
+  .detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .detail-label {
+    font-size: 0.8125rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .detail-value {
+    font-size: 0.8125rem;
+    color: var(--color-text);
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .detail-type-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    flex-shrink: 0;
+  }
+
+  .detail-cal-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    flex-shrink: 0;
+  }
+
+  .detail-status-badge {
+    text-transform: capitalize;
+  }
+
+  .detail-actions {
+    padding-top: var(--space-4);
+    margin-top: auto;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .detail-delete-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-danger);
+    background: transparent;
+    color: var(--color-danger);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+    justify-content: center;
+  }
+
+  .detail-delete-btn:hover:not(:disabled) {
+    background: var(--color-danger);
+    color: white;
+  }
+
+  .detail-delete-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  /* Context Menu */
+  .ctx-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+  }
+
+  .ctx-menu {
+    position: fixed;
+    z-index: 60;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    min-width: 180px;
+    padding: var(--space-1);
+    animation: fadeIn 100ms ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .ctx-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: none;
+    background: transparent;
+    color: var(--color-text);
+    font-size: 0.8125rem;
+    text-align: left;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+
+  .ctx-item:hover {
+    background: var(--color-surface-hover);
+  }
+
+  .ctx-item--danger {
+    color: var(--color-danger);
+  }
+
+  .ctx-item--danger:hover {
+    background: var(--color-danger-muted);
+  }
+
+  .ctx-divider {
+    height: 1px;
+    background: var(--color-border);
+    margin: var(--space-1) 0;
+  }
+
+  .ctx-info {
+    padding: var(--space-2) var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .ctx-info-label {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    font-weight: 500;
+  }
+
+  .ctx-info-sub {
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+  }
+
+  /* Mobile adjustments */
+  @media (max-width: 768px) {
+    .dashboard-header {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-3);
+    }
+
+    .header-nav {
+      align-self: flex-end;
+    }
+  }
+</style>

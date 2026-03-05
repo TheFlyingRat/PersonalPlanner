@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { buildTimeline } from '../timeline.js';
-import { UserSettings } from '@reclaim/shared';
+import { UserSettings } from '@cadence/shared';
+
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 const defaultSettings: UserSettings = {
   workingHours: { start: '09:00', end: '17:00' },
   personalHours: { start: '07:00', end: '22:00' },
-  timezone: 'America/New_York',
+  timezone: LOCAL_TZ,
   schedulingWindowDays: 14,
 };
 
@@ -72,7 +74,7 @@ describe('buildTimeline', () => {
     const settings: UserSettings = {
       workingHours: { start: '09:00', end: '17:00' },
       personalHours: { start: '09:00', end: '17:00' },
-      timezone: 'America/New_York',
+      timezone: LOCAL_TZ,
       schedulingWindowDays: 14,
     };
 

@@ -1,11 +1,17 @@
 import { Router } from 'express';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod/v4';
 import { db } from '../db/index.js';
 import { calendars, users } from '../db/schema.js';
 import { createOAuth2Client, setCredentials, GoogleCalendarClient } from '../google/index.js';
 import { decrypt } from '../crypto.js';
-import { CalendarMode } from '@reclaim/shared';
+import { CalendarMode } from '@cadence/shared';
 import { pollerManager } from '../index.js';
+
+const patchCalendarSchema = z.object({
+  mode: z.enum([CalendarMode.Writable, CalendarMode.Locked]).optional(),
+  enabled: z.boolean().optional(),
+});
 
 const router = Router();
 
@@ -19,8 +25,12 @@ router.get('/', (_req, res) => {
 router.get('/discover', async (_req, res) => {
   try {
     const userRows = db.select().from(users).all();
+    const now = new Date().toISOString();
+
+    let googleCalendars: Array<{ googleCalendarId: string; name: string; color: string }>;
+
     if (!userRows[0]?.googleRefreshToken) {
-      res.status(400).json({ error: 'Google Calendar not connected' });
+      res.status(400).json({ error: 'Google Calendar not connected. Connect in Settings first.' });
       return;
     }
 
@@ -28,9 +38,7 @@ router.get('/discover', async (_req, res) => {
     const refreshToken = decrypt(userRows[0].googleRefreshToken);
     setCredentials(oauth2Client, refreshToken);
     const client = new GoogleCalendarClient(oauth2Client);
-
-    const googleCalendars = await client.listCalendars();
-    const now = new Date().toISOString();
+    googleCalendars = await client.listCalendars();
 
     for (const gcal of googleCalendars) {
       const existing = db.select().from(calendars)
@@ -38,7 +46,7 @@ router.get('/discover', async (_req, res) => {
         .all();
 
       if (existing.length > 0) {
-        // Update name and color from Google, keep user's mode/enabled
+        // Update name and color, keep user's mode/enabled
         db.update(calendars)
           .set({ name: gcal.name, color: gcal.color, updatedAt: now })
           .where(eq(calendars.googleCalendarId, gcal.googleCalendarId))
@@ -70,7 +78,13 @@ router.get('/discover', async (_req, res) => {
 // PATCH /api/calendars/:id - update mode or enabled
 router.patch('/:id', async (req, res) => {
   const { id } = req.params;
-  const { mode, enabled } = req.body;
+
+  const parsed = patchCalendarSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    return;
+  }
+  const { mode, enabled } = parsed.data;
 
   const existing = db.select().from(calendars).where(eq(calendars.id, id)).all();
   if (existing.length === 0) {
@@ -90,17 +104,9 @@ router.patch('/:id', async (req, res) => {
     }
   }
 
-  const updates: Record<string, any> = { updatedAt: new Date().toISOString() };
-  if (mode !== undefined) {
-    if (mode !== CalendarMode.Writable && mode !== CalendarMode.Locked) {
-      res.status(400).json({ error: 'Mode must be "writable" or "locked"' });
-      return;
-    }
-    updates.mode = mode;
-  }
-  if (enabled !== undefined) {
-    updates.enabled = enabled;
-  }
+  const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+  if (mode !== undefined) updates.mode = mode;
+  if (enabled !== undefined) updates.enabled = enabled;
 
   db.update(calendars).set(updates).where(eq(calendars.id, id)).run();
 

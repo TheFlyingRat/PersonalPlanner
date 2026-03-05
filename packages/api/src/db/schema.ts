@@ -45,6 +45,8 @@ export const habits = sqliteTable('habits', {
   autoDecline: integer('autoDecline', { mode: 'boolean' }).default(false),
   dependsOn: text('dependsOn'), // FK to habits.id (self-reference)
   enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  calendarId: text('calendarId'),
+  color: text('color'),
   createdAt: text('createdAt'),
   updatedAt: text('updatedAt'),
 });
@@ -65,6 +67,8 @@ export const tasks = sqliteTable('tasks', {
   schedulingHours: text('schedulingHours'),
   status: text('status').default('open'),
   isUpNext: integer('isUpNext', { mode: 'boolean' }).default(false),
+  calendarId: text('calendarId'),
+  color: text('color'),
   createdAt: text('createdAt'),
   updatedAt: text('updatedAt'),
 });
@@ -84,6 +88,8 @@ export const smartMeetings = sqliteTable('smart_meetings', {
   windowEnd: text('windowEnd'),
   location: text('location'),
   conferenceType: text('conferenceType'),
+  calendarId: text('calendarId'),
+  color: text('color'),
   createdAt: text('createdAt'),
   updatedAt: text('updatedAt'),
 });
@@ -124,9 +130,60 @@ export const scheduledEvents = sqliteTable('scheduled_events', {
   start: text('start'),
   end: text('end'),
   status: text('status').default('free'),
+  isAllDay: integer('isAllDay', { mode: 'boolean' }).default(false),
   alternativeSlotsCount: integer('alternativeSlotsCount'),
   createdAt: text('createdAt'),
   updatedAt: text('updatedAt'),
+});
+
+// ============================================================
+// Calendar Events (cached from external calendars)
+// ============================================================
+export const calendarEvents = sqliteTable('calendar_events', {
+  id: text('id').primaryKey(),
+  calendarId: text('calendarId').notNull(),       // FK to calendars.id
+  googleEventId: text('googleEventId').notNull(),
+  title: text('title').notNull(),
+  start: text('start').notNull(),
+  end: text('end').notNull(),
+  status: text('status').default('busy'),
+  location: text('location'),
+  isAllDay: integer('isAllDay', { mode: 'boolean' }).default(false),
+  updatedAt: text('updatedAt'),
+});
+
+// ============================================================
+// Habit Completions
+// ============================================================
+export const habitCompletions = sqliteTable('habit_completions', {
+  id: text('id').primaryKey(),
+  habitId: text('habitId').notNull(),
+  scheduledDate: text('scheduledDate').notNull(), // YYYY-MM-DD
+  completedAt: text('completedAt').notNull(),
+});
+
+// ============================================================
+// Subtasks
+// ============================================================
+export const subtasks = sqliteTable('subtasks', {
+  id: text('id').primaryKey(),
+  taskId: text('taskId').notNull(),
+  name: text('name').notNull(),
+  completed: integer('completed', { mode: 'boolean' }).default(false),
+  sortOrder: integer('sortOrder').default(0),
+  createdAt: text('createdAt'),
+});
+
+// ============================================================
+// Activity Log
+// ============================================================
+export const activityLog = sqliteTable('activity_log', {
+  id: text('id').primaryKey(),
+  action: text('action').notNull(), // 'create' | 'update' | 'delete' | 'schedule'
+  entityType: text('entityType').notNull(), // 'habit' | 'task' | 'meeting' | 'link' | 'schedule'
+  entityId: text('entityId').notNull(),
+  details: text('details'), // JSON
+  createdAt: text('createdAt'),
 });
 
 // ============================================================

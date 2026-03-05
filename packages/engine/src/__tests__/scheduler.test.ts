@@ -15,16 +15,18 @@ import {
   ItemType,
   CalendarOpType,
   DecompressionTarget,
-} from '@reclaim/shared';
+} from '@cadence/shared';
 
 // ============================================================
 // Fixtures
 // ============================================================
 
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
 const defaultSettings: UserSettings = {
   workingHours: { start: '09:00', end: '17:00' },
   personalHours: { start: '07:00', end: '22:00' },
-  timezone: 'America/New_York',
+  timezone: LOCAL_TZ,
   schedulingWindowDays: 7,
 };
 

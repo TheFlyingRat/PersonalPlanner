@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { habits, scheduledEvents } from '../db/schema.js';
-import type { CreateHabitRequest, Habit, FrequencyConfig } from '@reclaim/shared';
+import { habits, scheduledEvents, habitCompletions } from '../db/schema.js';
+import type { CreateHabitRequest, Habit, FrequencyConfig, HabitCompletion } from '@cadence/shared';
 import { createHabitSchema, updateHabitSchema } from '../validation.js';
+import { logActivity } from './activity.js';
 
 const router = Router();
 
@@ -42,6 +43,8 @@ router.post('/', (req, res) => {
     autoDecline: body.autoDecline ?? false,
     dependsOn: body.dependsOn ?? null,
     enabled: true,
+    calendarId: body.calendarId ?? null,
+    color: body.color ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -49,6 +52,7 @@ router.post('/', (req, res) => {
   db.insert(habits).values(row).run();
 
   const created = db.select().from(habits).where(eq(habits.id, id)).get();
+  logActivity('create', 'habit', id, { name: body.name });
   res.status(201).json(toHabit(created!));
 });
 
@@ -87,10 +91,13 @@ router.put('/:id', (req, res) => {
   if (body.autoDecline !== undefined) updates.autoDecline = body.autoDecline;
   if (body.dependsOn !== undefined) updates.dependsOn = body.dependsOn;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
+  if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
+  if (body.color !== undefined) updates.color = body.color;
 
   db.update(habits).set(updates).where(eq(habits.id, id)).run();
 
   const updated = db.select().from(habits).where(eq(habits.id, id)).get();
+  logActivity('update', 'habit', id, { fields: Object.keys(updates) });
   res.json(toHabit(updated!));
 });
 
@@ -106,6 +113,7 @@ router.delete('/:id', (req, res) => {
 
   db.delete(scheduledEvents).where(eq(scheduledEvents.itemId, id)).run();
   db.delete(habits).where(eq(habits.id, id)).run();
+  logActivity('delete', 'habit', id, { name: existing.name });
 
   res.status(204).send();
 });
@@ -133,6 +141,98 @@ router.post('/:id/lock', (req, res) => {
   res.json(toHabit(updated!));
 });
 
+// GET /api/habits/:id/completions — list completions for a habit
+router.get('/:id/completions', (req, res) => {
+  const { id } = req.params;
+  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
+  if (!existing) {
+    res.status(404).json({ error: 'Habit not found' });
+    return;
+  }
+
+  const rows = db.select().from(habitCompletions)
+    .where(eq(habitCompletions.habitId, id))
+    .orderBy(desc(habitCompletions.scheduledDate))
+    .all();
+
+  const result: HabitCompletion[] = rows.map((row) => ({
+    id: row.id,
+    habitId: row.habitId,
+    scheduledDate: row.scheduledDate,
+    completedAt: row.completedAt,
+  }));
+
+  res.json(result);
+});
+
+// POST /api/habits/:id/completions — record a completion
+router.post('/:id/completions', (req, res) => {
+  const { id } = req.params;
+  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
+  if (!existing) {
+    res.status(404).json({ error: 'Habit not found' });
+    return;
+  }
+
+  const { scheduledDate } = req.body;
+  if (!scheduledDate || !/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate)) {
+    res.status(400).json({ error: 'scheduledDate must be YYYY-MM-DD' });
+    return;
+  }
+
+  const completionId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  db.insert(habitCompletions).values({
+    id: completionId,
+    habitId: id,
+    scheduledDate,
+    completedAt: now,
+  }).run();
+
+  logActivity('create', 'habit', id, { completion: scheduledDate });
+
+  res.status(201).json({
+    id: completionId,
+    habitId: id,
+    scheduledDate,
+    completedAt: now,
+  });
+});
+
+// GET /api/habits/:id/streak — compute current streak
+router.get('/:id/streak', (req, res) => {
+  const { id } = req.params;
+  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
+  if (!existing) {
+    res.status(404).json({ error: 'Habit not found' });
+    return;
+  }
+
+  const rows = db.select().from(habitCompletions)
+    .where(eq(habitCompletions.habitId, id))
+    .orderBy(desc(habitCompletions.scheduledDate))
+    .all();
+
+  const completedDates = new Set(rows.map((r) => r.scheduledDate));
+
+  let streak = 0;
+  const today = new Date();
+  // Walk backward from today counting consecutive days with completions
+  for (let i = 0; i < 365; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().slice(0, 10);
+    if (completedDates.has(dateStr)) {
+      streak++;
+    } else {
+      break;
+    }
+  }
+
+  res.json({ habitId: id, currentStreak: streak });
+});
+
 function toHabit(row: typeof habits.$inferSelect): Habit {
   return {
     id: row.id,
@@ -150,6 +250,8 @@ function toHabit(row: typeof habits.$inferSelect): Habit {
     autoDecline: row.autoDecline ?? false,
     dependsOn: row.dependsOn ?? null,
     enabled: row.enabled ?? true,
+    calendarId: row.calendarId ?? undefined,
+    color: row.color ?? undefined,
     createdAt: row.createdAt ?? '',
     updatedAt: row.updatedAt ?? '',
   };

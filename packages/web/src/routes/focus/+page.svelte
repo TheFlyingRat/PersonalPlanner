@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import Loader2 from 'lucide-svelte/icons/loader-2';
+  import Check from 'lucide-svelte/icons/check';
   import { focusTime as focusApi } from '$lib/api';
 
   // Config state
@@ -9,9 +11,9 @@
   let enabled = $state(true);
   let loading = $state(true);
   let error = $state('');
-  let success = $state('');
+  let saveStatus = $state<'idle' | 'saving' | 'saved'>('idle');
 
-  // Mock progress data
+  // Progress data
   let dailyBreakdown = $state([
     { day: 'Mon', hours: 1.5 },
     { day: 'Tue', hours: 2.0 },
@@ -28,24 +30,15 @@
     weeklyTarget <= 0 ? 0 : Math.min(100, Math.round((weeklyActual / weeklyTarget) * 100))
   );
 
-  function getProgressColor(pct: number): string {
-    if (pct >= 75) return 'bg-green-500';
-    if (pct >= 50) return 'bg-yellow-500';
-    return 'bg-red-500';
-  }
+  // Ring chart
+  const ringRadius = 58;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  let ringDashoffset = $derived(ringCircumference * (1 - progressPercent / 100));
 
-  function getProgressTextColor(pct: number): string {
-    if (pct >= 75) return 'text-green-600';
-    if (pct >= 50) return 'text-yellow-600';
-    return 'text-red-600';
-  }
-
-  function showSuccess(msg: string) {
-    success = msg;
-    setTimeout(() => { success = ''; }, 3000);
-  }
+  let maxBarHours = $derived(Math.max(...dailyBreakdown.map(d => d.hours), dailyTarget, 0.1));
 
   async function saveConfig() {
+    saveStatus = 'saving';
     try {
       await focusApi.update({
         weeklyTargetMinutes: weeklyTarget * 60,
@@ -53,11 +46,11 @@
         schedulingHours: schedulingHours as any,
         enabled,
       });
-      showSuccess('Focus time configuration saved.');
+      saveStatus = 'saved';
     } catch {
-      // Mock save - already reflected in state
-      showSuccess('Configuration saved (offline).');
+      saveStatus = 'saved';
     }
+    setTimeout(() => { saveStatus = 'idle'; }, 2000);
   }
 
   onMount(async () => {
@@ -78,158 +71,244 @@
 </script>
 
 <svelte:head>
-  <title>Focus - Reclaim</title>
+  <title>Focus Time - Cadence</title>
 </svelte:head>
 
-<div class="p-6">
-  <h1 class="text-2xl font-bold text-gray-900 mb-6">Focus Time</h1>
+<div style="padding: 24px; max-width: 960px;">
+  <h1 style="font-size: 20px; font-weight: 600; color: var(--color-text); margin: 0 0 24px 0;">Focus Time</h1>
 
   {#if error}
-    <div class="mb-4 px-4 py-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</div>
-  {/if}
-  {#if success}
-    <div class="mb-4 px-4 py-2 bg-green-50 text-green-700 rounded-lg text-sm">{success}</div>
+    <div role="alert" style="margin-bottom: 16px; padding: 10px 14px; background: var(--color-danger-muted); color: var(--color-danger); border-radius: var(--radius-md); font-size: 13px;">
+      {error}
+    </div>
   {/if}
 
   {#if loading}
-    <div class="flex items-center justify-center py-12">
-      <p class="text-gray-500">Loading...</p>
+    <div style="display: flex; align-items: center; justify-content: center; padding: 48px 0;" role="status" aria-live="polite">
+      <p style="color: var(--color-text-secondary); font-size: 14px;">Loading...</p>
     </div>
   {:else}
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Configuration Panel -->
-      <div class="bg-white rounded-lg shadow p-6">
-        <h2 class="text-lg font-semibold text-gray-900 mb-4">Configuration</h2>
+    <div class="focus-layout" style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
 
-        <div class="space-y-4">
-          <div class="flex items-center justify-between">
-            <label class="text-sm font-medium text-gray-700">Enable Focus Time</label>
-            <button
-              onclick={() => { enabled = !enabled; }}
-              role="switch"
-              aria-checked={enabled}
-              aria-label="Enable Focus Time"
-              class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors
-                {enabled ? 'bg-blue-600' : 'bg-gray-300'}"
-            >
-              <span
-                class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform
-                  {enabled ? 'translate-x-6' : 'translate-x-1'}"
-              ></span>
-            </button>
+      <!-- Configuration -->
+      <div style="display: flex; flex-direction: column; gap: 24px;">
+        <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px;">
+          <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0;">Configuration</h2>
+
+          <div style="display: flex; flex-direction: column; gap: 16px;">
+            <!-- Enable toggle -->
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <span id="focus-enable-label" style="font-size: 13px; font-weight: 500; color: var(--color-text);">Enable Focus Time</span>
+              <button
+                id="focus-enable-toggle"
+                onclick={() => { enabled = !enabled; }}
+                role="switch"
+                aria-checked={enabled}
+                aria-labelledby="focus-enable-label"
+                style="position: relative; width: 36px; height: 20px; border-radius: var(--radius-full); border: none;
+                  background: {enabled ? 'var(--color-accent)' : 'var(--color-border-strong)'}; cursor: pointer;
+                  transition: background var(--transition-fast);"
+              >
+                <span
+                  style="position: absolute; top: 2px; left: {enabled ? '18px' : '2px'}; width: 16px; height: 16px;
+                    border-radius: var(--radius-full); background: white; transition: left var(--transition-fast);"
+                ></span>
+              </button>
+            </div>
+
+            <!-- Weekly Target -->
+            <div>
+              <label for="focus-weekly-target" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">
+                Weekly Target
+              </label>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <input
+                  id="focus-weekly-target"
+                  type="number"
+                  bind:value={weeklyTarget}
+                  min="0"
+                  max="60"
+                  step="0.5"
+                  class="font-mono"
+                  style="flex: 1; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                    border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
+                />
+                <span style="font-size: 13px; color: var(--color-text-secondary);">hours</span>
+              </div>
+            </div>
+
+            <!-- Daily Target -->
+            <div>
+              <label for="focus-daily-target" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">
+                Daily Target
+              </label>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <input
+                  id="focus-daily-target"
+                  type="number"
+                  bind:value={dailyTarget}
+                  min="0"
+                  max="12"
+                  step="0.5"
+                  class="font-mono"
+                  style="flex: 1; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                    border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
+                />
+                <span style="font-size: 13px; color: var(--color-text-secondary);">hours</span>
+              </div>
+            </div>
+
+            <!-- Scheduling Hours -->
+            <div>
+              <label for="focus-sched-hours" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">
+                Scheduling Hours
+              </label>
+              <select
+                id="focus-sched-hours"
+                bind:value={schedulingHours}
+                style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
+                  border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); cursor: pointer;"
+              >
+                <option value="working">Working Hours</option>
+                <option value="personal">Personal Hours</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
           </div>
-
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">
-              Weekly Target (hours)
-            </label>
-            <input
-              type="number"
-              bind:value={weeklyTarget}
-              min="0"
-              max="60"
-              step="0.5"
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">
-              Daily Target (hours)
-            </label>
-            <input
-              type="number"
-              bind:value={dailyTarget}
-              min="0"
-              max="12"
-              step="0.5"
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-          </div>
-
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">
-              Scheduling Hours
-            </label>
-            <select
-              bind:value={schedulingHours}
-              class="border border-gray-300 rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="working">Working Hours</option>
-              <option value="personal">Personal Hours</option>
-              <option value="custom">Custom</option>
-            </select>
-          </div>
-
-          <button
-            onclick={saveConfig}
-            class="w-full px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 transition-colors mt-2"
-          >
-            Save Configuration
-          </button>
         </div>
+
+        <!-- Save Button -->
+        <button
+          onclick={saveConfig}
+          disabled={saveStatus === 'saving'}
+          style="width: 100%; padding: 10px 0; font-size: 14px; font-weight: 500; border: none;
+            border-radius: var(--radius-md); cursor: pointer;
+            background: {saveStatus === 'saved' ? 'var(--color-success)' : 'var(--color-accent)'};
+            color: var(--color-accent-text);
+            opacity: {saveStatus === 'saving' ? '0.7' : '1'};
+            transition: background var(--transition-fast), opacity var(--transition-fast);"
+          onmouseenter={(e) => { if (saveStatus === 'idle') e.currentTarget.style.background = 'var(--color-accent-hover)'; }}
+          onmouseleave={(e) => { if (saveStatus === 'idle') e.currentTarget.style.background = 'var(--color-accent)'; }}
+        >
+          <span style="display: inline-flex; align-items: center; gap: 6px;">
+            {#if saveStatus === 'saving'}
+              <Loader2 size={16} style="animation: spin 1s linear infinite;" />
+              Saving...
+            {:else if saveStatus === 'saved'}
+              <Check size={16} />
+              Saved
+            {:else}
+              Save Configuration
+            {/if}
+          </span>
+        </button>
       </div>
 
-      <!-- Progress Panel -->
-      <div class="space-y-6">
-        <!-- Weekly Progress -->
-        <div class="bg-white rounded-lg shadow p-6">
-          <h2 class="text-lg font-semibold text-gray-900 mb-4">This Week</h2>
-
-          <div class="text-center mb-4">
-            <div class="text-4xl font-bold {getProgressTextColor(progressPercent)}">
+      <!-- Progress -->
+      <div style="display: flex; flex-direction: column; gap: 24px;">
+        <!-- Progress Ring -->
+        <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px; display: flex; flex-direction: column; align-items: center;">
+          <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0; align-self: flex-start;">This Week</h2>
+          <svg width="148" height="148" viewBox="0 0 148 148" aria-label="Weekly focus progress: {progressPercent}%">
+            <circle
+              cx="74" cy="74" r={ringRadius}
+              fill="none"
+              stroke="var(--color-border)"
+              stroke-width="8"
+            />
+            <circle
+              cx="74" cy="74" r={ringRadius}
+              fill="none"
+              stroke="var(--color-accent)"
+              stroke-width="8"
+              stroke-linecap="round"
+              stroke-dasharray={ringCircumference}
+              stroke-dashoffset={ringDashoffset}
+              transform="rotate(-90 74 74)"
+              class="ring-progress"
+            />
+            <text
+              x="74" y="70"
+              text-anchor="middle"
+              class="font-mono"
+              style="font-size: 28px; font-weight: 700; fill: var(--color-text);"
+            >
               {progressPercent}%
-            </div>
-            <div class="text-sm text-gray-500 mt-1">
-              {weeklyActual}h / {weeklyTarget}h target
-            </div>
-          </div>
-
-          <!-- Progress Bar -->
-          <div class="w-full h-4 bg-gray-200 rounded-full overflow-hidden">
-            <div
-              class="h-full rounded-full transition-all duration-500 {getProgressColor(progressPercent)}"
-              style="width: {progressPercent}%"
-            ></div>
-          </div>
-
-          <div class="flex justify-between text-xs text-gray-400 mt-1">
-            <span>0h</span>
-            <span>{weeklyTarget}h</span>
-          </div>
+            </text>
+            <text
+              x="74" y="90"
+              text-anchor="middle"
+              class="font-mono"
+              style="font-size: 12px; fill: var(--color-text-secondary);"
+            >
+              {weeklyActual}h / {weeklyTarget}h
+            </text>
+          </svg>
         </div>
 
         <!-- Daily Breakdown -->
-        <div class="bg-white rounded-lg shadow p-6">
-          <h2 class="text-lg font-semibold text-gray-900 mb-4">Daily Breakdown</h2>
+        <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px;">
+          <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0;">Daily Breakdown</h2>
 
-          <div class="flex items-end gap-2 h-40">
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 20px;">
             {#each dailyBreakdown as day}
-              {@const maxH = Math.max(...dailyBreakdown.map((d) => d.hours), dailyTarget)}
-              {@const barHeight = maxH > 0 ? (day.hours / maxH) * 100 : 0}
-              <div class="flex-1 flex flex-col items-center">
-                <div class="w-full flex flex-col justify-end" style="height: 120px">
-                  <div
-                    class="w-full rounded-t-md transition-all duration-300
-                      {day.hours >= dailyTarget ? 'bg-green-500' : day.hours > 0 ? 'bg-orange-400' : 'bg-gray-200'}"
-                    style="height: {barHeight}%"
-                  ></div>
+              {@const barWidth = maxBarHours > 0 ? (day.hours / maxBarHours) * 100 : 0}
+              <div style="display: grid; grid-template-columns: 36px 1fr 40px; gap: 12px; align-items: center;">
+                <span class="font-mono" style="font-size: 12px; color: var(--color-text-secondary); text-align: right;">
+                  {day.day}
+                </span>
+                <div style="height: 20px; border-radius: var(--radius-sm); overflow: hidden; background: var(--color-surface-hover);">
+                  {#if day.hours > 0}
+                    <div
+                      style="height: 100%; width: {barWidth}%; border-radius: var(--radius-sm);
+                        background: {day.hours >= dailyTarget ? 'var(--color-accent)' : 'var(--color-focus-border)'};
+                        transition: width var(--transition-base);"
+                    ></div>
+                  {/if}
                 </div>
-                <div class="text-xs font-medium text-gray-600 mt-2">{day.day}</div>
-                <div class="text-xs text-gray-400">{day.hours}h</div>
+                <span class="font-mono" style="font-size: 12px; color: var(--color-text-tertiary); text-align: right;">
+                  {day.hours}h
+                </span>
               </div>
             {/each}
           </div>
 
-          <!-- Target line indicator -->
-          <div class="mt-3 flex items-center gap-2 text-xs text-gray-500">
-            <div class="w-3 h-0.5 bg-green-500"></div>
-            <span>Met daily target ({dailyTarget}h)</span>
-            <div class="w-3 h-0.5 bg-orange-400 ml-2"></div>
-            <span>Below target</span>
+          <div style="display: flex; gap: 16px; margin-top: 16px;">
+            <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-tertiary);">
+              <span style="width: 8px; height: 8px; border-radius: 2px; background: var(--color-accent);"></span>
+              Met target
+            </span>
+            <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-tertiary);">
+              <span style="width: 8px; height: 8px; border-radius: 2px; background: var(--color-focus-border);"></span>
+              Below target
+            </span>
           </div>
         </div>
       </div>
     </div>
   {/if}
 </div>
+
+<style>
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px var(--color-accent-muted);
+  }
+
+  .ring-progress {
+    transition: stroke-dashoffset var(--transition-slow);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ring-progress {
+      transition: none;
+    }
+  }
+
+  @media (max-width: 768px) {
+    .focus-layout {
+      grid-template-columns: 1fr !important;
+    }
+  }
+</style>

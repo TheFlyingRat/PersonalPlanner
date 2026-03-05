@@ -1,5 +1,5 @@
 {
-  "name": "@reclaim/api",
+  "name": "@cadence/api",
   "version": "0.0.1",
   "type": "module",
   "main": "dist/index.js",
@@ -11,10 +11,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@reclaim/engine": "workspace:*",
-    "@reclaim/shared": "workspace:*",
+    "@cadence/engine": "workspace:*",
+    "@cadence/shared": "workspace:*",
     "better-sqlite3": "^12.6.2",
     "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
@@ -28,7 +29,9 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/express-serve-static-core": "^5.1.1",
+    "@types/supertest": "^7.2.0",
     "drizzle-kit": "^0.31.9",
+    "supertest": "^7.2.2",
     "tsx": "^4.21.0"
   }
 }

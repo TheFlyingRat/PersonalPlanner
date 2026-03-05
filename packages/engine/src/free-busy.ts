@@ -2,8 +2,8 @@ import {
   EventStatus,
   TimeSlot,
   CandidateSlot,
-} from '@reclaim/shared';
-import { FLIP_THRESHOLDS } from '@reclaim/shared';
+} from '@cadence/shared';
+import { FLIP_THRESHOLDS } from '@cadence/shared';
 import { slotsOverlap } from './slots.js';
 
 /**

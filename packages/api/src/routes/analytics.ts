@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db/index.js';
 import { scheduledEvents, habits } from '../db/schema.js';
-import type { AnalyticsData } from '@reclaim/shared';
+import type { AnalyticsData } from '@cadence/shared';
 
 const router = Router();
 

@@ -2,8 +2,14 @@ import {
   TimeSlot,
   UserSettings,
   SchedulingHours,
-} from '@reclaim/shared';
-import { parseTime } from './utils.js';
+} from '@cadence/shared';
+import {
+  parseTime,
+  setTimeInTimezone,
+  getDayOfWeekInTimezone,
+  startOfDayInTimezone,
+  nextDayInTimezone,
+} from './utils.js';
 
 /**
  * Get the scheduling hours (start/end) for a given SchedulingHours type.
@@ -40,6 +46,7 @@ export function buildTimeline(
   userSettings: UserSettings,
 ): TimeSlot[] {
   const slots: TimeSlot[] = [];
+  const tz = userSettings.timezone || 'UTC';
 
   const workStart = parseTime(userSettings.workingHours.start);
   const workEnd = parseTime(userSettings.workingHours.end);
@@ -47,14 +54,12 @@ export function buildTimeline(
   const personalEnd = parseTime(userSettings.personalHours.end);
 
   // Iterate day by day
-  const current = new Date(startDate);
-  current.setHours(0, 0, 0, 0);
+  let current = startOfDayInTimezone(startDate, tz);
+  const endMidnight = startOfDayInTimezone(endDate, tz);
+  const endBound = new Date(endMidnight.getTime() + 86400000);
 
-  const endBound = new Date(endDate);
-  endBound.setHours(23, 59, 59, 999);
-
-  while (current <= endBound) {
-    const dayOfWeek = current.getDay(); // 0=Sun, 6=Sat
+  while (current < endBound) {
+    const dayOfWeek = getDayOfWeekInTimezone(current, tz); // 0=Sun, 6=Sat
 
     // Skip weekends for working hours, but personal hours are every day
     const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
@@ -65,10 +70,8 @@ export function buildTimeline(
         personalStart.hours < workStart.hours ||
         (personalStart.hours === workStart.hours && personalStart.minutes < workStart.minutes)
       ) {
-        const preWorkStart = new Date(current);
-        preWorkStart.setHours(personalStart.hours, personalStart.minutes, 0, 0);
-        const preWorkEnd = new Date(current);
-        preWorkEnd.setHours(workStart.hours, workStart.minutes, 0, 0);
+        const preWorkStart = setTimeInTimezone(current, personalStart.hours, personalStart.minutes, tz);
+        const preWorkEnd = setTimeInTimezone(current, workStart.hours, workStart.minutes, tz);
 
         if (preWorkStart < preWorkEnd) {
           slots.push(clampSlot({ start: preWorkStart, end: preWorkEnd }, startDate, endDate));
@@ -76,10 +79,8 @@ export function buildTimeline(
       }
 
       // Working hours
-      const wStart = new Date(current);
-      wStart.setHours(workStart.hours, workStart.minutes, 0, 0);
-      const wEnd = new Date(current);
-      wEnd.setHours(workEnd.hours, workEnd.minutes, 0, 0);
+      const wStart = setTimeInTimezone(current, workStart.hours, workStart.minutes, tz);
+      const wEnd = setTimeInTimezone(current, workEnd.hours, workEnd.minutes, tz);
 
       if (wStart < wEnd) {
         slots.push(clampSlot({ start: wStart, end: wEnd }, startDate, endDate));
@@ -90,10 +91,8 @@ export function buildTimeline(
         personalEnd.hours > workEnd.hours ||
         (personalEnd.hours === workEnd.hours && personalEnd.minutes > workEnd.minutes)
       ) {
-        const postWorkStart = new Date(current);
-        postWorkStart.setHours(workEnd.hours, workEnd.minutes, 0, 0);
-        const postWorkEnd = new Date(current);
-        postWorkEnd.setHours(personalEnd.hours, personalEnd.minutes, 0, 0);
+        const postWorkStart = setTimeInTimezone(current, workEnd.hours, workEnd.minutes, tz);
+        const postWorkEnd = setTimeInTimezone(current, personalEnd.hours, personalEnd.minutes, tz);
 
         if (postWorkStart < postWorkEnd) {
           slots.push(clampSlot({ start: postWorkStart, end: postWorkEnd }, startDate, endDate));
@@ -101,18 +100,16 @@ export function buildTimeline(
       }
     } else {
       // Weekend: only personal hours
-      const pStart = new Date(current);
-      pStart.setHours(personalStart.hours, personalStart.minutes, 0, 0);
-      const pEnd = new Date(current);
-      pEnd.setHours(personalEnd.hours, personalEnd.minutes, 0, 0);
+      const pStart = setTimeInTimezone(current, personalStart.hours, personalStart.minutes, tz);
+      const pEnd = setTimeInTimezone(current, personalEnd.hours, personalEnd.minutes, tz);
 
       if (pStart < pEnd) {
         slots.push(clampSlot({ start: pStart, end: pEnd }, startDate, endDate));
       }
     }
 
-    // Next day
-    current.setDate(current.getDate() + 1);
+    // Next day (DST-safe)
+    current = nextDayInTimezone(current, tz);
   }
 
   // Filter out any zero or negative duration slots
