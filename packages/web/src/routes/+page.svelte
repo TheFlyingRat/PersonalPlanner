@@ -70,8 +70,8 @@
     return `${monthNames[start.getMonth()]} ${start.getDate()} \u2013 ${monthNames[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
   }
 
-  const START_HOUR = 7;
-  const END_HOUR = 23;
+  const START_HOUR = 0;
+  const END_HOUR = 24;
   const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => i + START_HOUR);
   const HOUR_HEIGHT = 60;
   const GRID_HEIGHT = (END_HOUR - START_HOUR) * HOUR_HEIGHT;
@@ -661,15 +661,14 @@
     </div>
 
     <!-- Conflicts -->
-    {@const selectedId = selectedEvent.id || selectedEvent.title}
-    {#if conflicts.has(selectedId)}
+    {#if conflicts.has(selectedEvent.id || selectedEvent.title)}
       <div class="detail-conflicts">
         <span class="detail-conflicts-heading">
           <AlertTriangle size={14} strokeWidth={1.5} />
           Conflicts
         </span>
         <ul class="detail-conflicts-list">
-          {#each conflicts.get(selectedId)! as conflictTitle}
+          {#each conflicts.get(selectedEvent.id || selectedEvent.title)! as conflictTitle}
             <li>{conflictTitle}</li>
           {/each}
         </ul>

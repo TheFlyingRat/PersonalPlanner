@@ -6,7 +6,7 @@ import { calendars, users } from '../db/schema.js';
 import { createOAuth2Client, setCredentials, GoogleCalendarClient } from '../google/index.js';
 import { decrypt } from '../crypto.js';
 import { CalendarMode } from '@cadence/shared';
-import { pollerManager } from '../index.js';
+import { pollingRef } from '../polling-ref.js';
 
 const patchCalendarSchema = z.object({
   mode: z.enum([CalendarMode.Writable, CalendarMode.Locked]).optional(),
@@ -111,12 +111,12 @@ router.patch('/:id', async (req, res) => {
   db.update(calendars).set(updates).where(eq(calendars.id, id)).run();
 
   // Start/stop poller when enabled state changes
-  if (enabled !== undefined && pollerManager) {
+  if (enabled !== undefined && pollingRef.manager) {
     const cal = db.select().from(calendars).where(eq(calendars.id, id)).all()[0];
     if (enabled) {
-      await pollerManager.startPoller(cal.id, cal.googleCalendarId);
+      await pollingRef.manager.startPoller(cal.id, cal.googleCalendarId);
     } else {
-      pollerManager.stopPoller(cal.id);
+      pollingRef.manager.stopPoller(cal.id);
     }
   }
 

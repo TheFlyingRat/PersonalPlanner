@@ -69,7 +69,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://cdn.jsdelivr.net"],
       fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:"],
       connectSrc: ["'self'"],
     },
@@ -207,6 +207,8 @@ seed();
 // Calendar Polling
 // ============================================================
 
+import { pollingRef } from './polling-ref.js';
+
 export let pollerManager: CalendarPollerManager | null = null;
 
 function toHabit(row: any): Habit {
@@ -256,7 +258,7 @@ function toBufConfig(row: any): BufferConfig {
   };
 }
 
-async function initPolling(): Promise<CalendarPollerManager | null> {
+export async function initPolling(): Promise<CalendarPollerManager | null> {
   const userRows = db.select().from(users).all();
   if (!userRows[0]?.googleRefreshToken) {
     console.log('No Google Calendar connected. Polling disabled.');
@@ -503,10 +505,14 @@ async function initPolling(): Promise<CalendarPollerManager | null> {
   return manager;
 }
 
-initPolling()
-  .then((manager) => {
-    pollerManager = manager;
-  })
+pollingRef.init = async () => {
+  const manager = await initPolling();
+  pollerManager = manager;
+  pollingRef.manager = manager;
+};
+
+pollingRef.init()
+  .then(() => {})
   .catch((err) => {
     console.error('Polling init failed:', err);
   });

@@ -4,6 +4,7 @@ import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
 import { createOAuth2Client, getAuthUrl, exchangeCode } from '../google/index.js';
 import { encrypt } from '../crypto.js';
+import { pollingRef } from '../polling-ref.js';
 
 const router = Router();
 
@@ -56,6 +57,11 @@ router.get('/google/callback', async (req, res) => {
         .set({ googleRefreshToken: encryptedToken })
         .where(eq(users.id, userRows[0].id))
         .run();
+    }
+
+    // Initialize polling if not already running
+    if (!pollingRef.manager && pollingRef.init) {
+      pollingRef.init().catch((err) => console.error('Post-OAuth polling init failed:', err));
     }
 
     // Redirect to frontend settings page with success
