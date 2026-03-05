@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { schedule, habits as habitsApi, tasks as tasksApi, meetings as meetingsApi } from '$lib/api';
+  import { schedule, habits as habitsApi, tasks as tasksApi, meetings as meetingsApi, settings as settingsApi } from '$lib/api';
   import ChevronLeft from 'lucide-svelte/icons/chevron-left';
   import ChevronRight from 'lucide-svelte/icons/chevron-right';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
@@ -24,6 +24,32 @@
 
   // Reference to the scroll container for auto-scroll
   let scrollContainer: HTMLDivElement | undefined = $state();
+
+  // User timezone (fetched from settings, falls back to browser timezone)
+  let userTimezone = $state(Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+  /** Get the hour (0-23) and minute of a Date in the user's timezone */
+  function getHourInTz(date: Date): number {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: userTimezone,
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    }).formatToParts(date);
+    const h = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0');
+    const m = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0');
+    return h + m / 60;
+  }
+
+  /** Get the day of week (0=Sun..6=Sat) of a Date in the user's timezone */
+  function getDayInTz(date: Date): number {
+    const dayStr = new Intl.DateTimeFormat('en-US', {
+      timeZone: userTimezone,
+      weekday: 'short',
+    }).format(date);
+    const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    return dayMap[dayStr] ?? 0;
+  }
 
   function getMonday(date: Date): Date {
     const d = new Date(date);
@@ -215,7 +241,7 @@
   /** Returns the current time position in pixels from grid top, or -1 if out of range */
   function getCurrentTimePosition(): number {
     const now = new Date();
-    const currentHour = now.getHours() + now.getMinutes() / 60;
+    const currentHour = getHourInTz(now);
     return (currentHour - START_HOUR) * HOUR_HEIGHT;
   }
 
@@ -266,9 +292,9 @@
         const startDate = new Date(ev.start);
         const endDateEv = new Date(ev.end);
         if (isNaN(startDate.getTime()) || isNaN(endDateEv.getTime())) continue;
-        const dayOfWeek = startDate.getDay();
+        const dayOfWeek = getDayInTz(startDate);
         const dayIndex = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        const startHour = isAllDay ? 0 : startDate.getHours() + startDate.getMinutes() / 60;
+        const startHour = isAllDay ? 0 : getHourInTz(startDate);
         const durationMs = endDateEv.getTime() - startDate.getTime();
         const duration = isAllDay ? 24 : durationMs / (1000 * 60 * 60);
         const type = ev.itemType || 'manual';
@@ -371,10 +397,19 @@
     const now = new Date();
     const todayInWeek = getTodayDayIndex() >= 0;
     // Scroll to current time if viewing current week, otherwise scroll to 7 AM
-    const targetHour = todayInWeek ? now.getHours() - 1 : 7;
+    const targetHour = todayInWeek ? getHourInTz(now) - 1 : 7;
     const scrollTarget = Math.max(0, targetHour * HOUR_HEIGHT);
     scrollContainer.scrollTop = scrollTarget;
   }
+
+  // Fetch user timezone from settings
+  settingsApi.get()
+    .then((config) => {
+      if (config.settings?.timezone) {
+        userTimezone = config.settings.timezone;
+      }
+    })
+    .catch(() => {});
 
   $effect(() => {
     // Re-fetch whenever the week changes

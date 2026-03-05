@@ -378,14 +378,16 @@
         <div class="settings-hours-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
           <div>
             <label for="settings-timezone" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Timezone</label>
-            <input
+            <select
               id="settings-timezone"
-              type="text"
               bind:value={timezone}
-              placeholder="e.g., America/New_York"
               style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
                 border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
-            />
+            >
+              {#each Intl.supportedValuesOf('timeZone') as tz}
+                <option value={tz}>{tz.replace(/_/g, ' ')}</option>
+              {/each}
+            </select>
           </div>
           <div>
             <label for="settings-window" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">Scheduling Window</label>
