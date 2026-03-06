@@ -7,6 +7,7 @@
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import X from 'lucide-svelte/icons/x';
   import Users from 'lucide-svelte/icons/users';
+  import EllipsisVertical from 'lucide-svelte/icons/ellipsis-vertical';
 
   interface MeetingItem {
     id: string;
@@ -58,6 +59,7 @@
   let error = $state('');
   let success = $state('');
   let submitting = $state(false);
+  let menuOpenId = $state<string | null>(null);
 
   // Form fields
   let formName = $state('');
@@ -160,7 +162,14 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && showPanel) closePanel();
+    if (e.key === 'Escape') {
+      if (menuOpenId) { menuOpenId = null; return; }
+      if (showPanel) closePanel();
+    }
+  }
+
+  function handleWindowClick() {
+    if (menuOpenId) menuOpenId = null;
   }
 
   async function handleSubmit() {
@@ -251,7 +260,7 @@
   <title>Meetings - Cadence</title>
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
 
 <div style="padding: var(--space-6);">
   <!-- Header -->
@@ -287,20 +296,21 @@
     </div>
   {:else}
     <!-- Table Header -->
-    <div class="table-header" style="grid-template-columns: 1fr 70px 80px 90px 100px 120px;">
+    <div class="table-header" style="grid-template-columns: 1fr 70px 80px 90px 100px 120px 40px;">
       <span>Name</span>
       <span>Priority</span>
       <span>Duration</span>
       <span>Frequency</span>
       <span>Conference</span>
       <span>Attendees</span>
+      <span></span>
     </div>
 
     <!-- Table Rows -->
     {#each meetingList as meeting}
       <div
         class="table-row"
-        style="grid-template-columns: 1fr 70px 80px 90px 100px 120px;"
+        style="grid-template-columns: 1fr 70px 80px 90px 100px 120px 40px;"
         onclick={() => openEditForm(meeting)}
         role="button"
         tabindex="0"
@@ -333,24 +343,29 @@
             <span style="color: var(--color-text-tertiary); font-size: 0.8125rem;">--</span>
           {/if}
         </span>
-
-        <!-- Hover actions -->
-        <div class="row-actions">
+        <span class="kebab-cell">
           <button
-            class="row-action-btn"
-            onclick={(e) => { e.stopPropagation(); openEditForm(meeting); }}
-            aria-label="Edit meeting"
+            class="kebab-btn"
+            onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === meeting.id ? null : meeting.id; }}
+            aria-label="Actions"
+            aria-haspopup="true"
+            aria-expanded={menuOpenId === meeting.id}
           >
-            <Pencil size={16} strokeWidth={1.5} />
+            <EllipsisVertical size={16} strokeWidth={1.5} />
           </button>
-          <button
-            class="row-action-btn row-action-btn--danger"
-            onclick={(e) => { e.stopPropagation(); deleteMeeting(meeting.id); }}
-            aria-label="Delete meeting"
-          >
-            <Trash2 size={16} strokeWidth={1.5} />
-          </button>
-        </div>
+          {#if menuOpenId === meeting.id}
+            <div class="kebab-menu" onclick={(e) => e.stopPropagation()}>
+              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; openEditForm(meeting); }}>
+                <Pencil size={15} strokeWidth={1.5} />
+                Edit
+              </button>
+              <button class="kebab-menu-item kebab-menu-item--danger" onclick={() => { menuOpenId = null; deleteMeeting(meeting.id); }}>
+                <Trash2 size={15} strokeWidth={1.5} />
+                Delete
+              </button>
+            </div>
+          {/if}
+        </span>
       </div>
     {/each}
   {/if}
@@ -494,28 +509,21 @@
   </div>
 {/if}
 
-<style>
-  /* Conference badge */
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
   .conference-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    font-size: 0.75rem;
+    @include badge(var(--color-meeting-bg), var(--color-meeting-border));
     font-weight: 500;
-    border-radius: var(--radius-full);
-    background: var(--color-meeting-bg);
-    color: var(--color-meeting-border);
   }
 
-  /* Avatar group */
   .avatar-group {
     display: flex;
     align-items: center;
   }
+
   .avatar-circle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
     width: 28px;
     height: 28px;
     border-radius: var(--radius-full);
@@ -525,44 +533,14 @@
     font-weight: 600;
     border: 2px solid var(--color-surface);
     margin-left: -6px;
+
+    &:first-child {
+      margin-left: 0;
+    }
   }
-  .avatar-circle:first-child {
-    margin-left: 0;
-  }
+
   .avatar-overflow {
     background: var(--color-surface-active);
     color: var(--color-text-secondary);
-  }
-
-  .color-picker {
-    display: flex;
-    gap: var(--space-2);
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .color-swatch {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-full);
-    border: 2px solid transparent;
-    cursor: pointer;
-    padding: 0;
-    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-  }
-  .color-swatch:hover {
-    box-shadow: 0 0 0 2px var(--color-border-strong);
-  }
-  .color-swatch--active {
-    border-color: var(--color-text);
-    box-shadow: 0 0 0 2px var(--color-border-strong);
-  }
-  .color-swatch--none {
-    background: var(--color-surface-hover) !important;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    color: var(--color-text-tertiary);
-    line-height: 1;
   }
 </style>

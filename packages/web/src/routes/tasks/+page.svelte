@@ -9,6 +9,7 @@
   import CheckSquare from 'lucide-svelte/icons/check-square';
   import Zap from 'lucide-svelte/icons/zap';
   import ListChecks from 'lucide-svelte/icons/list-checks';
+  import EllipsisVertical from 'lucide-svelte/icons/ellipsis-vertical';
 
   interface TaskItem {
     id: string;
@@ -86,6 +87,7 @@
   let error = $state('');
   let success = $state('');
   let submitting = $state(false);
+  let menuOpenId = $state<string | null>(null);
 
   // Form fields
   let formName = $state('');
@@ -283,7 +285,14 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && showPanel) closePanel();
+    if (e.key === 'Escape') {
+      if (menuOpenId) { menuOpenId = null; return; }
+      if (showPanel) closePanel();
+    }
+  }
+
+  function handleWindowClick() {
+    if (menuOpenId) menuOpenId = null;
   }
 
   async function handleSubmit() {
@@ -394,7 +403,7 @@
   <title>Tasks - Cadence</title>
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
 
 <div style="padding: var(--space-6);">
   <!-- Header -->
@@ -430,20 +439,21 @@
     </div>
   {:else}
     <!-- Table Header -->
-    <div class="table-header" style="grid-template-columns: 1fr 70px 90px 90px 80px 120px;">
+    <div class="table-header" style="grid-template-columns: 1fr 70px 90px 90px 80px 120px 40px;">
       <span>Name</span>
       <span>Priority</span>
       <span>Duration</span>
       <span>Due Date</span>
       <span>Status</span>
       <span>Progress</span>
+      <span></span>
     </div>
 
     <!-- Table Rows -->
     {#each taskList as task}
       <div
         class="table-row"
-        style="grid-template-columns: 1fr 70px 90px 90px 80px 120px;"
+        style="grid-template-columns: 1fr 70px 90px 90px 80px 120px 40px;"
         onclick={() => openEditForm(task)}
         role="button"
         tabindex="0"
@@ -484,24 +494,29 @@
           </div>
           <span class="font-mono" style="font-size: 0.75rem; color: var(--color-text-secondary);">{progress(task)}%</span>
         </span>
-
-        <!-- Hover actions -->
-        <div class="row-actions">
+        <span class="kebab-cell">
           <button
-            class="row-action-btn"
-            onclick={(e) => { e.stopPropagation(); openEditForm(task); }}
-            aria-label="Edit task"
+            class="kebab-btn"
+            onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === task.id ? null : task.id; }}
+            aria-label="Actions"
+            aria-haspopup="true"
+            aria-expanded={menuOpenId === task.id}
           >
-            <Pencil size={16} strokeWidth={1.5} />
+            <EllipsisVertical size={16} strokeWidth={1.5} />
           </button>
-          <button
-            class="row-action-btn row-action-btn--danger"
-            onclick={(e) => { e.stopPropagation(); deleteTask(task.id); }}
-            aria-label="Delete task"
-          >
-            <Trash2 size={16} strokeWidth={1.5} />
-          </button>
-        </div>
+          {#if menuOpenId === task.id}
+            <div class="kebab-menu" onclick={(e) => e.stopPropagation()}>
+              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; openEditForm(task); }}>
+                <Pencil size={15} strokeWidth={1.5} />
+                Edit
+              </button>
+              <button class="kebab-menu-item kebab-menu-item--danger" onclick={() => { menuOpenId = null; deleteTask(task.id); }}>
+                <Trash2 size={15} strokeWidth={1.5} />
+                Delete
+              </button>
+            </div>
+          {/if}
+        </span>
       </div>
     {/each}
   {/if}
@@ -701,24 +716,24 @@
   </div>
 {/if}
 
-<style>
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
   /* Status badges */
   .status-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    border-radius: var(--radius-full);
+    @include badge;
   }
+
   .status-open {
     background: var(--color-accent-muted);
     color: var(--color-accent);
   }
+
   .status-done_scheduling {
     background: var(--color-warning-amber-bg);
     color: var(--color-warning-amber);
   }
+
   .status-completed {
     background: var(--color-success-muted);
     color: var(--color-success);
@@ -726,15 +741,9 @@
 
   /* Up Next badge */
   .upnext-badge {
-    display: inline-flex;
-    align-items: center;
+    @include badge(var(--color-accent-muted), var(--color-accent));
     gap: 4px;
-    padding: 2px 8px;
     font-size: 0.6875rem;
-    font-weight: 600;
-    border-radius: var(--radius-full);
-    background: var(--color-accent-muted);
-    color: var(--color-accent);
   }
 
   /* Progress bar */
@@ -745,28 +754,12 @@
     border-radius: var(--radius-full);
     overflow: hidden;
   }
+
   .progress-fill {
     height: 100%;
     background: var(--color-accent);
     border-radius: var(--radius-full);
     transition: width var(--transition-base);
-  }
-
-  /* Action buttons inside panel */
-  .btn-action {
-    padding: var(--space-2) var(--space-4);
-    font-size: 0.8125rem;
-    font-weight: 500;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: none;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
-  }
-  .btn-action:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
   }
 
   /* Subtask count badge on rows */
@@ -785,17 +778,13 @@
 
   /* Subtasks Section */
   .subtasks-section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
+    @include flex-col(var(--space-3));
     padding: var(--space-3) 0;
     border-top: 1px solid var(--color-border);
   }
 
   .subtasks-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    @include flex-between;
   }
 
   .subtasks-title {
@@ -814,22 +803,22 @@
   }
 
   .subtasks-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    @include flex-col(2px);
   }
 
   .subtask-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    @include flex-between;
     padding: var(--space-1) var(--space-2);
     border-radius: var(--radius-sm);
     transition: background var(--transition-fast);
-  }
 
-  .subtask-item:hover {
-    background: var(--color-surface-hover);
+    &:hover {
+      background: var(--color-surface-hover);
+
+      .subtask-delete {
+        opacity: 1;
+      }
+    }
   }
 
   .subtask-check {
@@ -841,19 +830,17 @@
     cursor: pointer;
     flex: 1;
     min-width: 0;
-  }
 
-  .subtask-check input[type="checkbox"] {
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-    accent-color: var(--color-accent);
-  }
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      accent-color: var(--color-accent);
+    }
 
-  .subtask-check span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    span {
+      @include text-truncate;
+    }
   }
 
   .subtask-done {
@@ -862,9 +849,7 @@
   }
 
   .subtask-delete {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
     padding: 2px;
     border: none;
     background: none;
@@ -873,41 +858,35 @@
     border-radius: var(--radius-sm);
     opacity: 0;
     transition: opacity var(--transition-fast), color var(--transition-fast);
-  }
 
-  .subtask-item:hover .subtask-delete {
-    opacity: 1;
-  }
-
-  .subtask-delete:hover {
-    color: var(--color-danger);
+    &:hover {
+      color: var(--color-danger);
+    }
   }
 
   .subtask-add {
     display: flex;
     gap: var(--space-2);
     align-items: center;
-  }
 
-  .subtask-add input {
-    flex: 1;
-    padding: var(--space-1) var(--space-2);
-    font-size: 0.8125rem;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-bg);
-    color: var(--color-text);
-    font-family: inherit;
-  }
+    input {
+      flex: 1;
+      padding: var(--space-1) var(--space-2);
+      font-size: 0.8125rem;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      background: var(--color-bg);
+      color: var(--color-text);
+      font-family: inherit;
 
-  .subtask-add input::placeholder {
-    color: var(--color-text-tertiary);
+      &::placeholder {
+        color: var(--color-text-tertiary);
+      }
+    }
   }
 
   .subtask-add-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
     padding: var(--space-1);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
@@ -915,47 +894,15 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     transition: background var(--transition-fast), color var(--transition-fast);
-  }
 
-  .subtask-add-btn:hover:not(:disabled) {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
-  }
+    &:hover:not(:disabled) {
+      background: var(--color-surface-hover);
+      color: var(--color-text);
+    }
 
-  .subtask-add-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
-  .color-picker {
-    display: flex;
-    gap: var(--space-2);
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .color-swatch {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-full);
-    border: 2px solid transparent;
-    cursor: pointer;
-    padding: 0;
-    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-  }
-  .color-swatch:hover {
-    box-shadow: 0 0 0 2px var(--color-border-strong);
-  }
-  .color-swatch--active {
-    border-color: var(--color-text);
-    box-shadow: 0 0 0 2px var(--color-border-strong);
-  }
-  .color-swatch--none {
-    background: var(--color-surface-hover) !important;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    color: var(--color-text-tertiary);
-    line-height: 1;
+    &:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
   }
 </style>

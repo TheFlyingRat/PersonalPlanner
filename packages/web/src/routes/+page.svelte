@@ -10,6 +10,7 @@
   import MapPin from 'lucide-svelte/icons/map-pin';
   import Clock from 'lucide-svelte/icons/clock';
   import CalendarDays from 'lucide-svelte/icons/calendar-days';
+  import { subscribe as subscribeWs } from '$lib/ws';
 
   // Dashboard - Week Calendar View
   let currentWeekStart = $state(getMonday(new Date()));
@@ -49,6 +50,35 @@
     }).format(date);
     const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
     return dayMap[dayStr] ?? 0;
+  }
+
+  /** Get the UTC instant that corresponds to midnight of a local date in the user's timezone.
+   *  E.g. for 2026-03-02 in Australia/Sydney (+11), returns 2026-03-01T13:00:00.000Z */
+  function midnightInTz(year: number, month: number, day: number): number {
+    // Start with a rough UTC estimate and binary-search to find the exact offset
+    const rough = Date.UTC(year, month, day);
+    // Format that instant in the target timezone to find the offset
+    const fmt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: userTimezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    });
+    // Iterate to converge (handles DST transitions)
+    let guess = rough;
+    for (let i = 0; i < 3; i++) {
+      const parts = fmt.formatToParts(new Date(guess));
+      const pY = parseInt(parts.find(p => p.type === 'year')!.value);
+      const pM = parseInt(parts.find(p => p.type === 'month')!.value) - 1;
+      const pD = parseInt(parts.find(p => p.type === 'day')!.value);
+      const pH = parseInt(parts.find(p => p.type === 'hour')!.value);
+      const pMin = parseInt(parts.find(p => p.type === 'minute')!.value);
+      const pS = parseInt(parts.find(p => p.type === 'second')!.value);
+      const localMs = Date.UTC(pY, pM, pD, pH, pMin, pS);
+      const offset = localMs - guess; // offset = local - UTC
+      guess = rough - offset;
+    }
+    return guess;
   }
 
   function getMonday(date: Date): Date {
@@ -203,11 +233,12 @@
     });
   }
 
+  function getDateInTz(date: Date): string {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: userTimezone }).format(date);
+  }
+
   function isToday(date: Date): boolean {
-    const today = new Date();
-    return date.getDate() === today.getDate() &&
-      date.getMonth() === today.getMonth() &&
-      date.getFullYear() === today.getFullYear();
+    return getDateInTz(date) === getDateInTz(new Date());
   }
 
   function formatHourLabel(hour: number): string {
@@ -278,10 +309,17 @@
     error = '';
     try {
       const weekDates = getWeekDates(currentWeekStart);
-      const start = weekDates[0].toISOString();
-      const endDate = new Date(weekDates[6]);
-      endDate.setHours(23, 59, 59, 999);
-      const end = endDate.toISOString();
+      // Compute week boundaries as UTC instants corresponding to midnight in the user's timezone
+      const mon = weekDates[0];
+      const startMs = midnightInTz(mon.getFullYear(), mon.getMonth(), mon.getDate());
+      const sun = weekDates[6];
+      // End of Sunday = midnight of the next day
+      const nextDay = new Date(sun);
+      nextDay.setDate(nextDay.getDate() + 1);
+      const endMs = midnightInTz(nextDay.getFullYear(), nextDay.getMonth(), nextDay.getDate());
+
+      const start = new Date(startMs).toISOString();
+      const end = new Date(endMs).toISOString();
 
       const apiEvents = await schedule.getEvents(start, end);
       const mapped: CalEvent[] = [];
@@ -431,6 +469,22 @@
       return () => clearTimeout(timer);
     }
   });
+
+  // WebSocket: auto-refresh calendar on schedule updates
+  let wsToast = $state('');
+  let wsToastTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  $effect(() => {
+    const unsubscribe = subscribeWs((msg) => {
+      if (msg.type === 'schedule_updated') {
+        fetchEvents();
+        wsToast = msg.reason || 'Schedule updated';
+        if (wsToastTimeout) clearTimeout(wsToastTimeout);
+        wsToastTimeout = setTimeout(() => { wsToast = ''; }, 3000);
+      }
+    });
+    return () => unsubscribe();
+  });
 </script>
 
 <svelte:head>
@@ -438,6 +492,10 @@
 </svelte:head>
 
 <div class="dashboard">
+  {#if wsToast}
+    <div class="ws-toast">{wsToast}</div>
+  {/if}
+
   <!-- Header -->
   <header class="dashboard-header">
     <div class="header-left">
@@ -486,8 +544,23 @@
   {/if}
 
   {#if loading}
-    <div class="loading-state">
-      <p>Loading schedule...</p>
+    <div class="loading-skeleton" aria-busy="true" aria-label="Loading schedule">
+      <div class="skeleton-header">
+        {#each Array(7) as _}
+          <div class="skeleton-day-col">
+            <div class="skeleton-pulse skeleton-day-label"></div>
+          </div>
+        {/each}
+      </div>
+      <div class="skeleton-grid">
+        {#each Array(7) as _}
+          <div class="skeleton-day-col">
+            <div class="skeleton-pulse skeleton-block" style="height: 48px; margin-top: 40px;"></div>
+            <div class="skeleton-pulse skeleton-block" style="height: 72px; margin-top: 24px;"></div>
+            <div class="skeleton-pulse skeleton-block" style="height: 36px; margin-top: 48px;"></div>
+          </div>
+        {/each}
+      </div>
     </div>
   {:else}
     <!-- Calendar Grid -->
@@ -768,19 +841,23 @@
 
 <svelte:window onkeydown={(e) => { if (e.key === 'Escape') { closeDetail(); closeContextMenu(); } }} />
 
-<style>
-  /* Dashboard Layout */
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
+  // Dashboard Layout
   .dashboard {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
+    @include flex-col(var(--space-4));
   }
 
-  /* Header */
+  // Header
   .dashboard-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    @include flex-between;
+
+    @include mobile {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-3);
+    }
   }
 
   .header-left {
@@ -805,26 +882,22 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+
+    @include mobile {
+      align-self: flex-end;
+    }
   }
 
   .nav-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 44px;
-    min-height: 44px;
+    @include flex-center;
+    @include touch-target;
     padding: var(--space-2);
     border-radius: var(--radius-md);
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     color: var(--color-text-secondary);
     cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
-  }
-
-  .nav-btn:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
+    @include hover-surface;
   }
 
   .today-btn {
@@ -838,14 +911,14 @@
     font-weight: 500;
     cursor: pointer;
     transition: background var(--transition-fast), color var(--transition-fast);
+
+    &:hover {
+      background: var(--color-accent);
+      color: var(--color-accent-text);
+    }
   }
 
-  .today-btn:hover {
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-  }
-
-  /* Reschedule Button */
+  // Reschedule Button
   .reschedule-btn {
     display: flex;
     align-items: center;
@@ -860,23 +933,23 @@
     font-weight: 500;
     cursor: pointer;
     transition: background var(--transition-fast), opacity var(--transition-fast);
+
+    &:hover:not(:disabled) {
+      background: var(--color-accent-hover);
+      border-color: var(--color-accent-hover);
+    }
+
+    &:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+    }
+
+    :global(.spinning) {
+      animation: spin 1s linear infinite;
+    }
   }
 
-  .reschedule-btn:hover:not(:disabled) {
-    background: var(--color-accent-hover);
-    border-color: var(--color-accent-hover);
-  }
-
-  .reschedule-btn:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-  }
-
-  .reschedule-btn :global(.spinning) {
-    animation: spin 1s linear infinite;
-  }
-
-  /* Reschedule Banner */
+  // Reschedule Banner
   .reschedule-banner {
     padding: var(--space-3) var(--space-4);
     background: var(--color-success-muted);
@@ -886,7 +959,7 @@
     animation: fadeIn 200ms ease;
   }
 
-  /* Error */
+  // Error
   .error-banner {
     padding: var(--space-3) var(--space-4);
     background: var(--color-danger-muted);
@@ -895,25 +968,65 @@
     font-size: 0.875rem;
   }
 
-  /* Loading */
-  .loading-state {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--space-12) 0;
-    color: var(--color-text-tertiary);
-    font-size: 0.875rem;
-  }
-
-  /* Calendar Container */
-  .calendar-container {
-    background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
+  // Loading Skeleton
+  .loading-skeleton {
+    @include card;
     overflow: hidden;
   }
 
-  /* Day Headers */
+  .skeleton-header {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 1px;
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .skeleton-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 1px;
+    padding: var(--space-4);
+    min-height: 320px;
+  }
+
+  .skeleton-day-col {
+    @include flex-col;
+    padding: 0 var(--space-1);
+  }
+
+  .skeleton-day-label {
+    width: 40px;
+    height: 14px;
+    border-radius: var(--radius-sm);
+  }
+
+  .skeleton-block {
+    width: 100%;
+    border-radius: var(--radius-sm);
+  }
+
+  .skeleton-pulse {
+    background: var(--color-surface-hover);
+    animation: skeleton-pulse 1.5s ease-in-out infinite;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
+  }
+
+  @keyframes skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  // Calendar Container
+  .calendar-container {
+    @include card;
+    overflow: hidden;
+  }
+
+  // Day Headers
   .day-headers {
     display: grid;
     grid-template-columns: 64px repeat(7, 1fr);
@@ -928,32 +1041,28 @@
     padding: var(--space-3);
     text-align: center;
     border-left: 1px solid var(--color-border);
-    display: flex;
-    flex-direction: column;
+    @include flex-col;
     align-items: center;
     gap: 2px;
-  }
 
-  .day-header-name {
-    font-size: 0.6875rem;
-    font-weight: 500;
-    color: var(--color-text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
+    &-name {
+      @include mono-label;
+      color: var(--color-text-tertiary);
+    }
 
-  .day-header-date {
-    font-size: 1.125rem;
-    font-weight: 600;
-    color: var(--color-text);
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
+    &-date {
+      font-size: 1.125rem;
+      font-weight: 600;
+      color: var(--color-text);
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
 
-  .day-header-date--today {
-    color: var(--color-accent);
+      &--today {
+        color: var(--color-accent);
+      }
+    }
   }
 
   .today-dot {
@@ -964,7 +1073,7 @@
     display: inline-block;
   }
 
-  /* All-day events row */
+  // All-day events row
   .all-day-row {
     display: grid;
     grid-template-columns: 64px repeat(7, 1fr);
@@ -983,8 +1092,7 @@
   .all-day-cell {
     border-left: 1px solid var(--color-border);
     padding: var(--space-1);
-    display: flex;
-    flex-direction: column;
+    @include flex-col;
     gap: 2px;
     min-height: 28px;
   }
@@ -998,22 +1106,20 @@
     cursor: pointer;
     text-align: left;
     transition: filter var(--transition-fast);
+
+    &:hover {
+      filter: brightness(0.95);
+    }
+
+    &-title {
+      font-size: 0.6875rem;
+      font-weight: 500;
+      color: var(--color-text);
+      @include text-truncate;
+    }
   }
 
-  .all-day-event:hover {
-    filter: brightness(0.95);
-  }
-
-  .all-day-event-title {
-    font-size: 0.6875rem;
-    font-weight: 500;
-    color: var(--color-text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Time Grid */
+  // Time Grid
   .time-grid-scroll {
     overflow-y: auto;
     max-height: calc(100vh - 200px);
@@ -1040,14 +1146,14 @@
     pointer-events: none;
   }
 
-  /* Day Columns */
+  // Day Columns
   .day-col {
     position: relative;
     border-left: 1px solid var(--color-border);
-  }
 
-  .day-col--today {
-    background: var(--color-accent-muted);
+    &--today {
+      background: var(--color-accent-muted);
+    }
   }
 
   .hour-line {
@@ -1058,7 +1164,7 @@
     border-bottom: 1px solid var(--color-border);
   }
 
-  /* Current Time Indicator */
+  // Current Time Indicator
   .current-time-line {
     position: absolute;
     left: 0;
@@ -1079,7 +1185,7 @@
     background: var(--color-accent);
   }
 
-  /* Events */
+  // Events
   .cal-event {
     position: absolute;
     z-index: 10;
@@ -1089,40 +1195,35 @@
     overflow: hidden;
     cursor: pointer;
     transition: filter var(--transition-fast);
-  }
 
-  .cal-event:hover {
-    filter: brightness(0.95);
-  }
+    &:hover {
+      filter: brightness(0.95);
+    }
 
-  .cal-event-title {
-    font-size: 0.75rem;
-    font-weight: 500;
-    color: var(--color-text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    line-height: 1.3;
-  }
+    &-title {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--color-text);
+      @include text-truncate;
+      line-height: 1.3;
+    }
 
-  .cal-event-time {
-    font-size: 0.625rem;
-    color: var(--color-text-secondary);
-    line-height: 1.3;
-  }
+    &-time {
+      font-size: 0.625rem;
+      color: var(--color-text-secondary);
+      line-height: 1.3;
+    }
 
-  /* Conflict indicator */
-  .cal-event--conflict {
-    box-shadow: 0 0 0 1px var(--color-warning-amber);
+    &--conflict {
+      box-shadow: 0 0 0 1px var(--color-warning-amber);
+    }
   }
 
   .conflict-badge {
     position: absolute;
     top: 2px;
     right: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
     width: 16px;
     height: 16px;
     border-radius: var(--radius-full);
@@ -1130,64 +1231,59 @@
     color: var(--color-warning-amber);
   }
 
-  /* Detail conflicts section */
+  // Detail conflicts section
   .detail-conflicts {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
+    @include flex-col(var(--space-2));
     padding: var(--space-3) var(--space-4);
     background: var(--color-warning-amber-bg);
     border-radius: var(--radius-md);
     border: 1px solid var(--color-warning-amber);
+
+    &-heading {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--color-warning-amber);
+    }
+
+    &-list {
+      margin: 0;
+      padding-left: var(--space-5);
+      font-size: 0.8125rem;
+      color: var(--color-text-secondary);
+      @include flex-col;
+      gap: 2px;
+    }
   }
 
-  .detail-conflicts-heading {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: var(--color-warning-amber);
-  }
-
-  .detail-conflicts-list {
-    margin: 0;
-    padding-left: var(--space-5);
-    font-size: 0.8125rem;
-    color: var(--color-text-secondary);
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  /* Legend */
+  // Legend
   .legend {
     display: flex;
     justify-content: flex-end;
     gap: var(--space-4);
     padding-top: var(--space-2);
+
+    &-chip {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      font-size: 0.75rem;
+      color: var(--color-text-tertiary);
+    }
+
+    &-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: var(--radius-full);
+      flex-shrink: 0;
+    }
   }
 
-  .legend-chip {
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    font-size: 0.75rem;
-    color: var(--color-text-tertiary);
-  }
-
-  .legend-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: var(--radius-full);
-    flex-shrink: 0;
-  }
-
-  /* Event Detail Slide-over */
+  // Event Detail Slide-over
   .detail-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.3);
+    @include backdrop(0.3);
     z-index: 40;
   }
 
@@ -1202,21 +1298,17 @@
     border-left: 1px solid var(--color-border);
     z-index: 50;
     padding: var(--space-6);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-4);
+    @include flex-col(var(--space-4));
     animation: slideInRight 200ms ease;
-  }
 
-  @keyframes slideInRight {
-    from { transform: translateX(100%); }
-    to { transform: translateX(0); }
+    @keyframes slideInRight {
+      from { transform: translateX(100%); }
+      to { transform: translateX(0); }
+    }
   }
 
   .detail-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    @include flex-between;
   }
 
   .detail-type-badge {
@@ -1229,9 +1321,8 @@
   }
 
   .detail-close {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
+    @include touch-target;
     width: 44px;
     height: 44px;
     border-radius: var(--radius-md);
@@ -1240,11 +1331,11 @@
     color: var(--color-text-secondary);
     cursor: pointer;
     transition: background var(--transition-fast);
-  }
 
-  .detail-close:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
+    &:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-text);
+    }
   }
 
   .detail-title {
@@ -1255,9 +1346,7 @@
   }
 
   .detail-section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
+    @include flex-col(var(--space-2));
     padding-bottom: var(--space-4);
     border-bottom: 1px solid var(--color-border);
   }
@@ -1268,11 +1357,11 @@
     gap: var(--space-2);
     font-size: 0.8125rem;
     color: var(--color-text);
-  }
 
-  .detail-icon-row :global(.detail-icon) {
-    color: var(--color-text-tertiary);
-    flex-shrink: 0;
+    :global(.detail-icon) {
+      color: var(--color-text-tertiary);
+      flex-shrink: 0;
+    }
   }
 
   .detail-duration-chip {
@@ -1285,9 +1374,7 @@
   }
 
   .detail-meta {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
+    @include flex-col(var(--space-3));
     padding-top: var(--space-4);
     border-top: 1px solid var(--color-border);
   }
@@ -1338,6 +1425,7 @@
   .detail-delete-btn {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: var(--space-2);
     width: 100%;
     padding: var(--space-2) var(--space-3);
@@ -1349,20 +1437,19 @@
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: background var(--transition-fast), color var(--transition-fast);
-    justify-content: center;
+
+    &:hover:not(:disabled) {
+      background: var(--color-danger);
+      color: white;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
   }
 
-  .detail-delete-btn:hover:not(:disabled) {
-    background: var(--color-danger);
-    color: white;
-  }
-
-  .detail-delete-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  /* Context Menu */
+  // Context Menu
   .ctx-backdrop {
     position: fixed;
     inset: 0;
@@ -1379,11 +1466,11 @@
     min-width: 180px;
     padding: var(--space-1);
     animation: fadeIn 100ms ease;
-  }
 
-  @keyframes fadeIn {
-    from { opacity: 0; transform: scale(0.96); }
-    to { opacity: 1; transform: scale(1); }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.96); }
+      to { opacity: 1; transform: scale(1); }
+    }
   }
 
   .ctx-item {
@@ -1400,18 +1487,18 @@
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: background var(--transition-fast), color var(--transition-fast);
-  }
 
-  .ctx-item:hover {
-    background: var(--color-surface-hover);
-  }
+    &:hover {
+      background: var(--color-surface-hover);
+    }
 
-  .ctx-item--danger {
-    color: var(--color-danger);
-  }
+    &--danger {
+      color: var(--color-danger);
 
-  .ctx-item--danger:hover {
-    background: var(--color-danger-muted);
+      &:hover {
+        background: var(--color-danger-muted);
+      }
+    }
   }
 
   .ctx-divider {
@@ -1422,32 +1509,39 @@
 
   .ctx-info {
     padding: var(--space-2) var(--space-3);
-    display: flex;
-    flex-direction: column;
+    @include flex-col;
     gap: 2px;
-  }
 
-  .ctx-info-label {
-    font-size: 0.75rem;
-    color: var(--color-text-secondary);
-    font-weight: 500;
-  }
-
-  .ctx-info-sub {
-    font-size: 0.6875rem;
-    color: var(--color-text-tertiary);
-  }
-
-  /* Mobile adjustments */
-  @media (max-width: 768px) {
-    .dashboard-header {
-      flex-direction: column;
-      align-items: flex-start;
-      gap: var(--space-3);
+    &-label {
+      font-size: 0.75rem;
+      color: var(--color-text-secondary);
+      font-weight: 500;
     }
 
-    .header-nav {
-      align-self: flex-end;
+    &-sub {
+      font-size: 0.6875rem;
+      color: var(--color-text-tertiary);
+    }
+  }
+
+  // WebSocket toast
+  .ws-toast {
+    position: fixed;
+    bottom: var(--space-6);
+    right: var(--space-6);
+    background: var(--color-surface);
+    color: var(--color-text-secondary);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-lg);
+    font-size: 0.8125rem;
+    border: 1px solid var(--color-border);
+    z-index: 1000;
+    animation: toast-in var(--transition-slow) ease-out;
+    pointer-events: none;
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(0.5rem); }
+      to { opacity: 1; transform: translateY(0); }
     }
   }
 </style>

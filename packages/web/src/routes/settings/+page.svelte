@@ -3,7 +3,7 @@
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import Check from 'lucide-svelte/icons/check';
   import Loader2 from 'lucide-svelte/icons/loader-2';
-  import { settings as settingsApi, buffers as buffersApi, calendars as calendarsApi } from '$lib/api';
+  import { settings as settingsApi, buffers as buffersApi, calendars as calendarsApi, schedule as scheduleApi } from '$lib/api';
 
   // Google connection
   let googleConnected = $state(false);
@@ -37,6 +37,9 @@
 
   // Save status
   let saveStatus = $state<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  // Nuke status
+  let nuking = $state(false);
 
   function showSuccess(msg: string) {
     success = msg;
@@ -95,6 +98,20 @@
       calendarList = calendarList.map(c => c.id === cal.id ? updated : c);
     } catch {
       error = 'Failed to update calendar mode.';
+    }
+  }
+
+  async function nukeAllManagedEvents() {
+    if (!confirm('This will permanently delete ALL Cadence-managed events from your Google Calendar. This cannot be undone. Continue?')) return;
+    nuking = true;
+    error = '';
+    try {
+      const result = await scheduleApi.deleteAllManaged();
+      showSuccess(`Deleted ${result.googleEventsDeleted} events from Google Calendar and ${result.localEventsDeleted} from local database.`);
+    } catch {
+      error = 'Failed to delete managed events.';
+    } finally {
+      nuking = false;
     }
   }
 
@@ -467,6 +484,29 @@
           </select>
         </div>
       </div>
+      <!-- Danger Zone -->
+      {#if googleConnected}
+        <div style="height: 1px; background: var(--color-border);"></div>
+
+        <div style="padding: 32px 0;">
+          <h2 style="font-size: 14px; font-weight: 600; color: var(--color-danger); margin: 0 0 8px 0;">Danger Zone</h2>
+          <p style="font-size: 13px; color: var(--color-text-secondary); margin: 0 0 16px 0;">
+            Delete all Cadence-managed events from your Google Calendar. This removes every event the app created but does not affect your regular calendar events.
+          </p>
+          <button
+            onclick={nukeAllManagedEvents}
+            disabled={nuking}
+            style="padding: 8px 16px; font-size: 13px; font-weight: 500; border-radius: var(--radius-md);
+              border: 1px solid var(--color-danger); background: transparent; color: var(--color-danger);
+              cursor: pointer; transition: background var(--transition-fast), color var(--transition-fast);
+              opacity: {nuking ? '0.6' : '1'};"
+            onmouseenter={(e) => { if (!nuking) { e.currentTarget.style.background = 'var(--color-danger)'; e.currentTarget.style.color = 'white'; } }}
+            onmouseleave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-danger)'; }}
+          >
+            {nuking ? 'Deleting...' : 'Delete All Managed Events'}
+          </button>
+        </div>
+      {/if}
     </div>
 
     <!-- Sticky Save Button -->
@@ -501,7 +541,9 @@
   {/if}
 </div>
 
-<style>
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
   input:focus, select:focus {
     outline: none;
     border-color: var(--color-accent);
@@ -513,7 +555,7 @@
     opacity: 1;
   }
 
-  @media (max-width: 768px) {
+  @include mobile {
     .settings-buffers-grid {
       grid-template-columns: 1fr !important;
     }

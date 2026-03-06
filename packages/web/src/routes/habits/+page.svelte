@@ -14,6 +14,7 @@
   import Flame from 'lucide-svelte/icons/flame';
   import Link2 from 'lucide-svelte/icons/link-2';
   import CircleCheck from 'lucide-svelte/icons/circle-check';
+  import EllipsisVertical from 'lucide-svelte/icons/ellipsis-vertical';
 
   interface HabitItem {
     id: string;
@@ -25,11 +26,43 @@
     durationMin: number;
     durationMax: number;
     frequency: string;
+    frequencyConfig?: { days?: string[] };
     schedulingHours: string;
     locked: boolean;
     autoDecline: boolean;
     enabled: boolean;
     dependsOn?: string | null;
+  }
+
+  const ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+  const DAY_LABELS: Record<string, string> = {
+    mon: 'M', tue: 'T', wed: 'W', thu: 'T', fri: 'F', sat: 'S', sun: 'S',
+  };
+  const DAY_FULL_LABELS: Record<string, string> = {
+    mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun',
+  };
+  const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri'];
+  const WEEKENDS = ['sat', 'sun'];
+
+  function arraysEqual(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) return false;
+    const sorted1 = [...a].sort();
+    const sorted2 = [...b].sort();
+    return sorted1.every((v, i) => v === sorted2[i]);
+  }
+
+  function getActivePreset(days: string[]): string {
+    if (arraysEqual(days, [...ALL_DAYS])) return 'every-day';
+    if (arraysEqual(days, WEEKDAYS)) return 'weekdays';
+    if (arraysEqual(days, WEEKENDS)) return 'weekends';
+    return 'custom';
+  }
+
+  function daysFromHabit(habit: HabitItem): string[] {
+    if (habit.frequencyConfig?.days?.length) return [...habit.frequencyConfig.days];
+    if (habit.frequency === 'daily') return [...ALL_DAYS];
+    if (habit.frequency === 'weekly') return ['mon'];
+    return [...WEEKDAYS];
   }
 
   // Mock data
@@ -88,6 +121,7 @@
   let error = $state('');
   let success = $state('');
   let submitting = $state(false);
+  let menuOpenId = $state<string | null>(null);
 
   // Calendar list
   let calendarList = $state<Calendar[]>([]);
@@ -171,6 +205,7 @@
   let formDurationMin = $state(30);
   let formDurationMax = $state(60);
   let formFrequency = $state('daily');
+  let formDays = $state<string[]>([...WEEKDAYS]);
   let formSchedulingHours = $state('working');
   let formLocked = $state(false);
   let formAutoDecline = $state(false);
@@ -195,6 +230,7 @@
     formDurationMin = 30;
     formDurationMax = 60;
     formFrequency = 'daily';
+    formDays = [...WEEKDAYS];
     formSchedulingHours = 'working';
     formLocked = false;
     formAutoDecline = false;
@@ -219,6 +255,7 @@
     formDurationMin = habit.durationMin;
     formDurationMax = habit.durationMax;
     formFrequency = habit.frequency;
+    formDays = daysFromHabit(habit);
     formSchedulingHours = habit.schedulingHours;
     formLocked = habit.locked;
     formAutoDecline = habit.autoDecline;
@@ -251,11 +288,21 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && showPanel) closePanel();
+    if (e.key === 'Escape') {
+      if (menuOpenId) { menuOpenId = null; return; }
+      if (showPanel) closePanel();
+    }
+  }
+
+  function handleWindowClick() {
+    if (menuOpenId) menuOpenId = null;
   }
 
   async function handleSubmit() {
     submitting = true;
+    const allSelected = arraysEqual(formDays, [...ALL_DAYS]);
+    const weekdaysSelected = arraysEqual(formDays, WEEKDAYS);
+    const mappedFrequency = (allSelected || weekdaysSelected) ? 'daily' : 'custom';
     const habitData = {
       name: formName,
       priority: formPriority,
@@ -264,7 +311,8 @@
       idealTime: formIdealTime,
       durationMin: formDurationMin,
       durationMax: formDurationMax,
-      frequency: formFrequency,
+      frequency: mappedFrequency,
+      frequencyConfig: { days: [...formDays] },
       schedulingHours: formSchedulingHours,
       locked: formLocked,
       autoDecline: formAutoDecline,
@@ -360,7 +408,7 @@
   <title>Habits - Cadence</title>
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
 
 <div style="padding: var(--space-6);">
   <!-- Header -->
@@ -396,7 +444,7 @@
     </div>
   {:else}
     <!-- Table Header -->
-    <div class="table-header" style="grid-template-columns: 1fr 60px 80px 100px 120px 140px 80px;">
+    <div class="table-header" style="grid-template-columns: 1fr 60px 80px 100px 120px 140px 60px 40px;">
       <span>Name</span>
       <span>Streak</span>
       <span>Priority</span>
@@ -404,22 +452,23 @@
       <span>Duration</span>
       <span>Window</span>
       <span>Status</span>
+      <span></span>
     </div>
 
     <!-- Table Rows -->
     {#each habitList as habit}
       <div
         class="table-row"
-        style="grid-template-columns: 1fr 60px 80px 100px 120px 140px 80px;"
+        style="grid-template-columns: 1fr 60px 80px 100px 120px 140px 60px 40px;"
         onclick={() => openEditForm(habit)}
         role="button"
         tabindex="0"
         onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditForm(habit); } }}
       >
-        <span style="display: flex; align-items: center; gap: var(--space-2); font-weight: 500; color: var(--color-text);">
-          {habit.name}
+        <span style="display: flex; align-items: center; gap: var(--space-2); font-weight: 500; color: var(--color-text); overflow: hidden;">
+          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{habit.name}</span>
           {#if habit.locked}
-            <Lock size={14} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+            <Lock size={14} strokeWidth={1.5} style="color: var(--color-text-tertiary); flex-shrink: 0;" />
           {/if}
           {#if habit.dependsOn}
             <span class="dependency-badge" title="Depends on: {getParentName(habit.dependsOn)}">
@@ -457,32 +506,33 @@
             {/if}
           </button>
         </span>
-
-        <!-- Hover actions -->
-        <div class="row-actions">
+        <span class="kebab-cell">
           <button
-            class="row-action-btn"
-            onclick={(e) => { e.stopPropagation(); markComplete(habit.id); }}
-            aria-label="Mark habit complete for today"
-            title="Mark complete"
+            class="kebab-btn"
+            onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === habit.id ? null : habit.id; }}
+            aria-label="Actions"
+            aria-haspopup="true"
+            aria-expanded={menuOpenId === habit.id}
           >
-            <CircleCheck size={16} strokeWidth={1.5} />
+            <EllipsisVertical size={16} strokeWidth={1.5} />
           </button>
-          <button
-            class="row-action-btn"
-            onclick={(e) => { e.stopPropagation(); openEditForm(habit); }}
-            aria-label="Edit habit"
-          >
-            <Pencil size={16} strokeWidth={1.5} />
-          </button>
-          <button
-            class="row-action-btn row-action-btn--danger"
-            onclick={(e) => { e.stopPropagation(); deleteHabit(habit.id); }}
-            aria-label="Delete habit"
-          >
-            <Trash2 size={16} strokeWidth={1.5} />
-          </button>
-        </div>
+          {#if menuOpenId === habit.id}
+            <div class="kebab-menu" onclick={(e) => e.stopPropagation()}>
+              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; markComplete(habit.id); }}>
+                <CircleCheck size={15} strokeWidth={1.5} />
+                Mark complete
+              </button>
+              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; openEditForm(habit); }}>
+                <Pencil size={15} strokeWidth={1.5} />
+                Edit
+              </button>
+              <button class="kebab-menu-item kebab-menu-item--danger" onclick={() => { menuOpenId = null; deleteHabit(habit.id); }}>
+                <Trash2 size={15} strokeWidth={1.5} />
+                Delete
+              </button>
+            </div>
+          {/if}
+        </span>
       </div>
     {/each}
   {/if}
@@ -529,48 +579,102 @@
       </div>
 
       <div class="form-field">
-        <label for="habit-frequency">Frequency</label>
-        <select id="habit-frequency" bind:value={formFrequency}>
-          <option value="daily">Daily</option>
-          <option value="weekly">Weekly</option>
-          <option value="monthly">Monthly</option>
-        </select>
+        <label>Days</label>
+        <div class="day-presets">
+          <button
+            type="button"
+            class="day-preset"
+            class:day-preset--active={getActivePreset(formDays) === 'every-day'}
+            onclick={() => { formDays = [...ALL_DAYS]; }}
+          >Every day</button>
+          <span class="day-preset-sep">&middot;</span>
+          <button
+            type="button"
+            class="day-preset"
+            class:day-preset--active={getActivePreset(formDays) === 'weekdays'}
+            onclick={() => { formDays = [...WEEKDAYS]; }}
+          >Weekdays</button>
+          <span class="day-preset-sep">&middot;</span>
+          <button
+            type="button"
+            class="day-preset"
+            class:day-preset--active={getActivePreset(formDays) === 'weekends'}
+            onclick={() => { formDays = [...WEEKENDS]; }}
+          >Weekends</button>
+          <span class="day-preset-sep">&middot;</span>
+          <button
+            type="button"
+            class="day-preset"
+            class:day-preset--active={getActivePreset(formDays) === 'custom'}
+            onclick={() => { /* already custom, no-op */ }}
+          >Custom</button>
+        </div>
+        <div class="day-picker">
+          {#each ALL_DAYS as day}
+            <button
+              type="button"
+              class="day-pill"
+              class:day-pill--active={formDays.includes(day)}
+              onclick={() => {
+                if (formDays.includes(day)) {
+                  if (formDays.length > 1) {
+                    formDays = formDays.filter((d) => d !== day);
+                  }
+                } else {
+                  formDays = [...formDays, day];
+                }
+              }}
+              aria-label="{DAY_FULL_LABELS[day]}"
+              aria-pressed={formDays.includes(day)}
+            >{DAY_LABELS[day]}</button>
+          {/each}
+        </div>
       </div>
 
-      <div class="form-row">
-        <div class="form-field">
-          <label for="habit-dur-min">Duration Min</label>
-          <input id="habit-dur-min" type="number" bind:value={formDurationMin} min="5" max="480" />
+      <fieldset class="form-section">
+        <legend class="form-section-header">Duration</legend>
+        <span class="form-helper">How long this habit should be (the scheduler picks a duration in this range)</span>
+        <div class="form-row">
+          <div class="form-field">
+            <label for="habit-dur-min">Minimum</label>
+            <input id="habit-dur-min" type="number" bind:value={formDurationMin} min="5" max="480" />
+          </div>
+          <div class="form-field">
+            <label for="habit-dur-max">Maximum</label>
+            <input id="habit-dur-max" type="number" bind:value={formDurationMax} min="5" max="480" />
+          </div>
         </div>
-        <div class="form-field">
-          <label for="habit-dur-max">Duration Max</label>
-          <input id="habit-dur-max" type="number" bind:value={formDurationMax} min="5" max="480" />
-        </div>
-      </div>
+      </fieldset>
 
-      <div class="form-row">
-        <div class="form-field">
-          <label for="habit-win-start">Window Start</label>
-          <input id="habit-win-start" type="time" bind:value={formWindowStart} />
+      <fieldset class="form-section">
+        <legend class="form-section-header">Available time range</legend>
+        <span class="form-helper">The time range this habit can be scheduled within</span>
+        <div class="form-row">
+          <div class="form-field">
+            <label for="habit-win-start">Earliest</label>
+            <input id="habit-win-start" type="time" bind:value={formWindowStart} />
+          </div>
+          <div class="form-field">
+            <label for="habit-win-end">Latest</label>
+            <input id="habit-win-end" type="time" bind:value={formWindowEnd} />
+          </div>
         </div>
-        <div class="form-field">
-          <label for="habit-win-end">Window End</label>
-          <input id="habit-win-end" type="time" bind:value={formWindowEnd} />
-        </div>
-      </div>
+      </fieldset>
 
       <div class="form-field">
-        <label for="habit-ideal">Ideal Time</label>
+        <label for="habit-ideal">Preferred time</label>
         <input id="habit-ideal" type="time" bind:value={formIdealTime} />
+        <span class="form-helper">The scheduler will try to schedule near this time</span>
       </div>
 
       <div class="form-field">
-        <label for="habit-sched">Scheduling Hours</label>
+        <label for="habit-sched">Schedule during</label>
         <select id="habit-sched" bind:value={formSchedulingHours}>
-          <option value="working">Working Hours</option>
-          <option value="personal">Personal Hours</option>
-          <option value="custom">Custom</option>
+          <option value="working">Work hours (from settings)</option>
+          <option value="personal">Personal hours (from settings)</option>
+          <option value="custom">Anytime (custom)</option>
         </select>
+        <span class="form-helper">Uses hours from your settings page</span>
       </div>
 
       {#if calendarList.length > 0}
@@ -662,19 +766,8 @@
   </div>
 {/if}
 
-<style>
-  /* Toggle button */
-  .toggle-btn {
-    display: flex;
-    align-items: center;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0;
-    min-width: 44px;
-    min-height: 44px;
-    justify-content: center;
-  }
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
 
   .form-toggles {
     display: flex;
@@ -682,43 +775,33 @@
     padding: var(--space-2) 0;
   }
 
-  /* Streak badge */
   .streak-badge {
-    display: inline-flex;
-    align-items: center;
+    @include badge;
     gap: 3px;
+    padding: 0;
     font-size: 0.8125rem;
-    font-weight: 600;
     color: var(--color-warning-amber);
   }
 
-  /* Dependency badge */
   .dependency-badge {
-    display: inline-flex;
-    align-items: center;
+    @include badge;
     gap: 3px;
     font-size: 0.6875rem;
     font-weight: 500;
     color: var(--color-text-tertiary);
     padding: 1px 6px;
     border: 1px solid var(--color-border);
-    border-radius: var(--radius-full);
     white-space: nowrap;
   }
 
-  /* Completion section in panel */
   .completion-section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
+    @include flex-col(var(--space-3));
     padding: var(--space-3) 0;
     border-top: 1px solid var(--color-border);
   }
 
   .completion-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    @include flex-between;
   }
 
   .completion-title {
@@ -734,10 +817,8 @@
   }
 
   .completion-day {
-    display: flex;
-    flex-direction: column;
+    @include flex-col(var(--space-1));
     align-items: center;
-    gap: var(--space-1);
   }
 
   .completion-dot {
@@ -747,11 +828,11 @@
     border: 2px solid var(--color-border);
     background: none;
     transition: background var(--transition-fast), border-color var(--transition-fast);
-  }
 
-  .completion-dot.completed {
-    background: var(--color-success);
-    border-color: var(--color-success);
+    &.completed {
+      background: var(--color-success);
+      border-color: var(--color-success);
+    }
   }
 
   .completion-day-label {
@@ -760,55 +841,91 @@
     font-weight: 500;
   }
 
-  /* Action button in panel */
-  .btn-action {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-4);
-    font-size: 0.8125rem;
-    font-weight: 500;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    background: none;
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
-  }
-  .btn-action:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
+  .form-section {
+    border: none;
+    padding: 0;
+    margin: 0;
+    @include flex-col(var(--space-2));
+
+    &-header {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--color-text);
+      padding: 0;
+    }
   }
 
-  .color-picker {
+  .form-helper {
+    font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+    line-height: 1.4;
+  }
+
+  .day-presets {
     display: flex;
+    align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    align-items: center;
   }
-  .color-swatch {
-    width: 24px;
-    height: 24px;
-    border-radius: var(--radius-full);
-    border: 2px solid transparent;
-    cursor: pointer;
+
+  .day-preset {
+    background: none;
+    border: none;
     padding: 0;
-    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-  }
-  .color-swatch:hover {
-    box-shadow: 0 0 0 2px var(--color-border-strong);
-  }
-  .color-swatch--active {
-    border-color: var(--color-text);
-    box-shadow: 0 0 0 2px var(--color-border-strong);
-  }
-  .color-swatch--none {
-    background: var(--color-surface-hover) !important;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
+    font-size: 0.75rem;
+    font-weight: 500;
     color: var(--color-text-tertiary);
-    line-height: 1;
+    cursor: pointer;
+    transition: color var(--transition-fast);
+
+    &:hover {
+      color: var(--color-text);
+    }
+
+    &--active {
+      color: var(--color-accent);
+    }
+
+    &-sep {
+      font-size: 0.75rem;
+      color: var(--color-border-strong);
+      user-select: none;
+    }
+  }
+
+  .day-picker {
+    display: flex;
+    gap: var(--space-1);
+  }
+
+  .day-pill {
+    @include flex-center;
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-border);
+    background: none;
+    color: var(--color-text-tertiary);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+
+    &:hover {
+      border-color: var(--color-border-strong);
+      color: var(--color-text-secondary);
+    }
+
+    &--active {
+      background: var(--color-accent);
+      border-color: var(--color-accent);
+      color: var(--color-accent-text);
+
+      &:hover {
+        background: var(--color-accent-hover);
+        border-color: var(--color-accent-hover);
+        color: var(--color-accent-text);
+      }
+    }
   }
 </style>

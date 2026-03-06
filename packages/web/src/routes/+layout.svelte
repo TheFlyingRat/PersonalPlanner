@@ -1,8 +1,10 @@
 <script lang="ts">
-  import '../app.css';
+  import '$lib/styles/main.scss';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import { navigating } from '$app/stores';
   import { browser } from '$app/environment';
+  import { onMount } from 'svelte';
   import Calendar from 'lucide-svelte/icons/calendar';
   import Repeat from 'lucide-svelte/icons/repeat';
   import CheckSquare from 'lucide-svelte/icons/check-square';
@@ -89,6 +91,10 @@
     }
   }
 
+  onMount(() => {
+    document.body.classList.add('hydrated');
+  });
+
   let collapsed = $state(
     browser ? localStorage.getItem('sidebar-collapsed') === 'true' : false,
   );
@@ -148,6 +154,10 @@
 </script>
 
 <svelte:window onkeydown={handleGlobalKeydown} />
+
+{#if $navigating}
+  <div class="nav-progress" aria-hidden="true"></div>
+{/if}
 
 {#if searchOpen}
   <!-- Command Palette Backdrop -->
@@ -317,30 +327,31 @@
   </main>
 </div>
 
-<style>
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
   .app-layout {
     display: flex;
     min-height: 100vh;
   }
 
-  /* ---- Sidebar ---- */
+  // ---- Sidebar ----
 
   .sidebar {
     width: var(--sidebar-width);
     background: var(--color-surface);
     border-right: 1px solid var(--color-border);
-    display: flex;
-    flex-direction: column;
+    @include flex-col;
     flex-shrink: 0;
     transition: width var(--transition-base);
     overflow: hidden;
     position: sticky;
     top: 0;
     height: 100vh;
-  }
 
-  .sidebar-collapsed .sidebar {
-    width: var(--sidebar-collapsed-width);
+    .sidebar-collapsed & {
+      width: var(--sidebar-collapsed-width);
+    }
   }
 
   .sidebar-header {
@@ -352,9 +363,7 @@
   }
 
   .sidebar-logo {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
     width: 28px;
     height: 28px;
     background: var(--color-accent);
@@ -393,26 +402,25 @@
     background: none;
     width: calc(100% - var(--space-2) * 2);
     text-align: left;
-  }
 
-  .nav-search:hover {
-    background: var(--color-surface-hover);
-  }
+    &:hover {
+      background: var(--color-surface-hover);
+    }
 
-  .nav-search kbd {
-    margin-left: auto;
-    font-family: 'Geist Mono', ui-monospace, monospace;
-    font-size: 0.6875rem;
-    padding: 1px 5px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-tertiary);
+    kbd {
+      margin-left: auto;
+      font-family: $font-mono;
+      font-size: 0.6875rem;
+      padding: 1px 5px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      color: var(--color-text-tertiary);
+    }
   }
 
   .sidebar-nav {
     flex: 1;
-    display: flex;
-    flex-direction: column;
+    @include flex-col;
     padding: var(--space-1) var(--space-2);
   }
 
@@ -431,22 +439,21 @@
     border-left: 2px solid transparent;
     white-space: nowrap;
     min-height: 36px;
-  }
 
-  .nav-item:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
-  }
+    &:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-text);
+    }
 
-  .nav-item.active {
-    background: var(--color-accent-muted);
-    color: var(--color-accent);
-    border-left-color: var(--color-accent);
+    &.active {
+      background: var(--color-accent-muted);
+      color: var(--color-accent);
+      border-left-color: var(--color-accent);
+    }
   }
 
   .nav-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    @include text-truncate;
   }
 
   .sidebar-footer {
@@ -455,9 +462,7 @@
   }
 
   .collapse-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
     width: 100%;
     padding: var(--space-2);
     border: none;
@@ -466,14 +471,14 @@
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: background var(--transition-fast), color var(--transition-fast);
+
+    &:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-text-secondary);
+    }
   }
 
-  .collapse-btn:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text-secondary);
-  }
-
-  /* ---- Main Content ---- */
+  // ---- Main Content ----
 
   .main-content {
     flex: 1;
@@ -482,14 +487,14 @@
     overflow: auto;
   }
 
-  /* ---- Mobile ---- */
+  // ---- Mobile ----
 
   .mobile-menu-btn {
     display: none;
     position: fixed;
     top: var(--space-3);
     left: var(--space-3);
-    z-index: 50;
+    z-index: $z-dropdown;
     padding: var(--space-2);
     border: 1px solid var(--color-border);
     background: var(--color-surface);
@@ -500,19 +505,13 @@
 
   .sidebar-backdrop {
     display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
+    @include backdrop(0.5);
     z-index: 30;
-    border: none;
-    cursor: default;
   }
 
-  @media (max-width: 768px) {
+  @include mobile {
     .mobile-menu-btn {
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      @include flex-center;
     }
 
     .sidebar {
@@ -523,10 +522,10 @@
       transform: translateX(-100%);
       transition: transform var(--transition-base);
       width: var(--sidebar-width) !important;
-    }
 
-    .sidebar.mobile-open {
-      transform: translateX(0);
+      &.mobile-open {
+        transform: translateX(0);
+      }
     }
 
     .sidebar-backdrop {
@@ -543,15 +542,11 @@
     }
   }
 
-  /* ---- Command Palette ---- */
+  // ---- Command Palette ----
 
   .search-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 100;
-    border: none;
-    cursor: default;
+    @include backdrop(0.5);
+    z-index: $z-overlay;
   }
 
   .search-dialog {
@@ -566,9 +561,8 @@
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
-    z-index: 101;
-    display: flex;
-    flex-direction: column;
+    z-index: $z-modal;
+    @include flex-col;
     overflow: hidden;
   }
 
@@ -589,14 +583,14 @@
     font-family: inherit;
     color: var(--color-text);
     outline: none;
-  }
 
-  .search-input::placeholder {
-    color: var(--color-text-tertiary);
+    &::placeholder {
+      color: var(--color-text-tertiary);
+    }
   }
 
   .search-kbd {
-    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-family: $font-mono;
     font-size: 0.6875rem;
     padding: 1px 5px;
     border: 1px solid var(--color-border);
@@ -612,9 +606,7 @@
   }
 
   .search-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
     gap: var(--space-2);
     padding: var(--space-6);
     color: var(--color-text-tertiary);
@@ -635,17 +627,15 @@
     cursor: pointer;
     text-align: left;
     transition: background var(--transition-fast);
-  }
 
-  .search-result:hover {
-    background: var(--color-surface-hover);
+    &:hover {
+      background: var(--color-surface-hover);
+    }
   }
 
   .search-result-name {
     flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    @include text-truncate;
   }
 
   .search-result-type {
@@ -653,5 +643,28 @@
     color: var(--color-text-tertiary);
     text-transform: capitalize;
     flex-shrink: 0;
+  }
+
+  // ---- Navigation Progress Bar ----
+
+  .nav-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--color-accent);
+    z-index: 200;
+    animation: nav-progress-indeterminate 1.2s ease infinite;
+  }
+
+  @keyframes nav-progress-indeterminate {
+    0% { transform: translateX(-100%); }
+    50% { transform: translateX(0%); }
+    100% { transform: translateX(100%); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .nav-progress { animation: none; }
   }
 </style>

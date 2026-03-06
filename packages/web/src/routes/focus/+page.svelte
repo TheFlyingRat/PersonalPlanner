@@ -289,7 +289,9 @@
   {/if}
 </div>
 
-<style>
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
   input:focus, select:focus {
     outline: none;
     border-color: var(--color-accent);
@@ -297,16 +299,10 @@
   }
 
   .ring-progress {
-    transition: stroke-dashoffset var(--transition-slow);
+    @include ring-progress;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .ring-progress {
-      transition: none;
-    }
-  }
-
-  @media (max-width: 768px) {
+  @include mobile {
     .focus-layout {
       grid-template-columns: 1fr !important;
     }

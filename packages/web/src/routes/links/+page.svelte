@@ -10,6 +10,7 @@
   import Check from 'lucide-svelte/icons/check';
   import ToggleLeft from 'lucide-svelte/icons/toggle-left';
   import ToggleRight from 'lucide-svelte/icons/toggle-right';
+  import EllipsisVertical from 'lucide-svelte/icons/ellipsis-vertical';
 
   interface LinkItem {
     id: string;
@@ -47,6 +48,7 @@
   let error = $state('');
   let success = $state('');
   let submitting = $state(false);
+  let menuOpenId = $state<string | null>(null);
 
   // Form fields
   let formName = $state('');
@@ -135,7 +137,14 @@
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape' && showPanel) closePanel();
+    if (e.key === 'Escape') {
+      if (menuOpenId) { menuOpenId = null; return; }
+      if (showPanel) closePanel();
+    }
+  }
+
+  function handleWindowClick() {
+    if (menuOpenId) menuOpenId = null;
   }
 
   async function handleSubmit() {
@@ -231,7 +240,7 @@
   <title>Links - Cadence</title>
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
 
 <div style="padding: var(--space-6);">
   <!-- Header -->
@@ -267,11 +276,12 @@
     </div>
   {:else}
     <!-- Table Header -->
-    <div class="table-header" style="grid-template-columns: 1fr 140px 160px 80px 40px;">
+    <div class="table-header" style="grid-template-columns: 1fr 140px 160px 60px 40px 40px;">
       <span>Name</span>
       <span>Slug</span>
       <span>Durations</span>
       <span>Status</span>
+      <span></span>
       <span></span>
     </div>
 
@@ -279,7 +289,7 @@
     {#each linkList as link}
       <div
         class="table-row"
-        style="grid-template-columns: 1fr 140px 160px 80px 40px;"
+        style="grid-template-columns: 1fr 140px 160px 60px 40px 40px;"
         onclick={() => openEditForm(link)}
         role="button"
         tabindex="0"
@@ -318,24 +328,29 @@
             {/if}
           </button>
         </span>
-
-        <!-- Hover actions -->
-        <div class="row-actions">
+        <span class="kebab-cell">
           <button
-            class="row-action-btn"
-            onclick={(e) => { e.stopPropagation(); openEditForm(link); }}
-            aria-label="Edit link"
+            class="kebab-btn"
+            onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === link.id ? null : link.id; }}
+            aria-label="Actions"
+            aria-haspopup="true"
+            aria-expanded={menuOpenId === link.id}
           >
-            <Pencil size={16} strokeWidth={1.5} />
+            <EllipsisVertical size={16} strokeWidth={1.5} />
           </button>
-          <button
-            class="row-action-btn row-action-btn--danger"
-            onclick={(e) => { e.stopPropagation(); deleteLink(link.id); }}
-            aria-label="Delete link"
-          >
-            <Trash2 size={16} strokeWidth={1.5} />
-          </button>
-        </div>
+          {#if menuOpenId === link.id}
+            <div class="kebab-menu" onclick={(e) => e.stopPropagation()}>
+              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; openEditForm(link); }}>
+                <Pencil size={15} strokeWidth={1.5} />
+                Edit
+              </button>
+              <button class="kebab-menu-item kebab-menu-item--danger" onclick={() => { menuOpenId = null; deleteLink(link.id); }}>
+                <Trash2 size={15} strokeWidth={1.5} />
+                Delete
+              </button>
+            </div>
+          {/if}
+        </span>
       </div>
     {/each}
   {/if}
@@ -416,38 +431,24 @@
   </div>
 {/if}
 
-<style>
-  /* Duration pills */
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
   .duration-pill {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    font-size: 0.75rem;
+    @include badge(var(--color-surface-hover), var(--color-text-secondary));
     font-weight: 500;
     font-family: 'Geist Mono', ui-monospace, monospace;
-    border-radius: var(--radius-full);
-    background: var(--color-surface-hover);
-    color: var(--color-text-secondary);
   }
 
-  /* Toggle / copy buttons */
-  .toggle-btn,
   .copy-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    @include flex-center;
+    @include touch-target;
+    @include hover-surface;
     background: none;
     border: none;
     cursor: pointer;
     padding: var(--space-1);
     border-radius: var(--radius-md);
     color: var(--color-text-secondary);
-    transition: background var(--transition-fast), color var(--transition-fast);
-    min-width: 44px;
-    min-height: 44px;
-  }
-  .copy-btn:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
   }
 </style>

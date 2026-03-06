@@ -304,11 +304,11 @@
   {/if}
 </div>
 
-<style>
+<style lang="scss">
+  @use '$lib/styles/mixins' as *;
+
   .analytics-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    @include flex-between;
     margin-bottom: 24px;
   }
 
@@ -328,36 +328,30 @@
     font-weight: 500;
     cursor: pointer;
     transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
-  }
 
-  .range-btn:hover {
-    background: var(--color-surface-hover);
-    color: var(--color-text);
-  }
+    &:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-text);
+    }
 
-  .range-btn--active {
-    background: var(--color-accent);
-    color: var(--color-accent-text);
-    border-color: var(--color-accent);
-  }
+    &--active {
+      background: var(--color-accent);
+      color: var(--color-accent-text);
+      border-color: var(--color-accent);
 
-  .range-btn--active:hover {
-    background: var(--color-accent-hover);
-    border-color: var(--color-accent-hover);
-    color: var(--color-accent-text);
-  }
-
-  .ring-progress {
-    transition: stroke-dashoffset var(--transition-slow);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .ring-progress {
-      transition: none;
+      &:hover {
+        background: var(--color-accent-hover);
+        border-color: var(--color-accent-hover);
+        color: var(--color-accent-text);
+      }
     }
   }
 
-  @media (max-width: 768px) {
+  .ring-progress {
+    @include ring-progress;
+  }
+
+  @include mobile {
     .analytics-header {
       flex-direction: column;
       align-items: flex-start;
@@ -377,7 +371,7 @@
     }
   }
 
-  @media (max-width: 480px) {
+  @include small {
     .analytics-kpi-grid {
       grid-template-columns: 1fr !important;
     }
