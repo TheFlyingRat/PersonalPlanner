@@ -537,7 +537,7 @@
   {#if rescheduleResult}
     <div class="reschedule-banner">
       &#10003; {rescheduleResult.operationsApplied} changes applied
-      {#if rescheduleResult.unschedulable.length > 0}
+      {#if rescheduleResult.unschedulable?.length > 0}
         &middot; {rescheduleResult.unschedulable.length} items couldn't be scheduled
       {/if}
     </div>

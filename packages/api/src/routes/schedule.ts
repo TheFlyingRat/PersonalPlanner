@@ -158,7 +158,7 @@ router.post('/reschedule', async (_req, res) => {
     if (pollingRef.runReschedule) {
       const ops = await pollingRef.runReschedule('Manual reschedule');
       broadcast('schedule_updated', 'Manual reschedule');
-      res.json({ message: 'Reschedule complete', operationsApplied: ops });
+      res.json({ message: 'Reschedule complete', operationsApplied: ops, unschedulable: [] });
     } else {
       // Google not connected — run local-only reschedule
       const allHabits = db.select().from(habits).all().map(toHabit);
