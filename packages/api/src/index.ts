@@ -379,25 +379,32 @@ async function doRescheduleAndApply(
     calendarId: row.calendarId || 'primary',
   }));
 
-  // Merge events from locked calendars as immovable constraints
+  // Merge cached external events from all enabled calendars as constraints
+  const allCachedExternal = db.select().from(calendarEvents).all();
   const enabledCals = db.select().from(calendars)
     .where(eq(calendars.enabled, true))
     .all();
+  const calModeMap = new Map(enabledCals.map(c => [c.id, c.mode]));
 
-  for (const cal of enabledCals) {
-    if (cal.mode === 'locked') {
-      const syncResult = await calClient.syncEvents(cal.googleCalendarId, cal.syncToken);
-      for (const event of syncResult.events) {
-        if (event.start && event.end) {
-          existingEvents.push({
-            ...event,
-            isManaged: false,
-            status: EventStatus.Locked,
-            calendarId: cal.id,
-          });
-        }
-      }
-    }
+  for (const row of allCachedExternal) {
+    if (!row.start || !row.end) continue;
+    const evEnd = new Date(row.end).getTime();
+    if (isNaN(evEnd) || evEnd < Date.now()) continue; // skip past events
+    const mode = calModeMap.get(row.calendarId);
+    if (!mode) continue; // calendar not enabled
+
+    existingEvents.push({
+      id: row.id,
+      googleEventId: row.googleEventId || '',
+      title: row.title || '',
+      start: row.start,
+      end: row.end,
+      isManaged: false,
+      itemType: null,
+      itemId: null,
+      status: mode === 'locked' ? EventStatus.Locked : EventStatus.Busy,
+      calendarId: row.calendarId,
+    });
   }
 
   // Determine default calendars
@@ -428,6 +435,17 @@ async function doRescheduleAndApply(
     buf,
     userSettings,
   );
+
+  // Filter out trivial updates (< 2 min time change) to prevent drift loops
+  const MIN_CHANGE_MS = 2 * 60 * 1000;
+  result.operations = result.operations.filter((op) => {
+    if (op.type !== CalendarOpType.Update || !op.eventId) return true;
+    const existing = existingEvents.find((e) => e.id === op.eventId);
+    if (!existing) return true;
+    const startDiff = Math.abs(new Date(op.start).getTime() - new Date(existing.start).getTime());
+    const endDiff = Math.abs(new Date(op.end).getTime() - new Date(existing.end).getTime());
+    return startDiff >= MIN_CHANGE_MS || endDiff >= MIN_CHANGE_MS;
+  });
 
   if (result.operations.length === 0) {
     return 0;
@@ -499,6 +517,9 @@ async function doRescheduleAndApply(
   }
 
   manager.markAllWritten();
+  for (const op of result.operations) {
+    console.log(`[scheduler]   ${op.type} ${op.itemType}:${op.title} → ${op.start} - ${op.end}`);
+  }
   console.log(`[scheduler] ${reason}: ${result.operations.length} operations applied`);
   broadcast('schedule_updated', reason);
   return result.operations.length;
@@ -577,28 +598,35 @@ export async function initPolling(): Promise<CalendarPollerManager | null> {
         }
       }
 
-      // Check for conflicts between new/updated external events and managed events
-      const managedEvents = db.select().from(scheduledEvents).all()
-        .filter((r: any) => r.start && r.end);
+      // Only consider truly external events (not Cadence-managed) for conflict detection
+      const externalOnly = polledEvents.filter((ev) => !ev.isManaged);
 
-      const changedTimed = polledEvents.filter(
-        (ev) => ev.start && ev.end && ev.start.includes('T'),
-      );
+      if (externalOnly.length > 0) {
+        broadcast('schedule_updated', 'External calendar events changed');
 
-      const hasConflicts = changedTimed.some((ext) => {
-        const extStart = new Date(ext.start!).getTime();
-        const extEnd = new Date(ext.end!).getTime();
-        return managedEvents.some((managed: any) => {
-          const mStart = new Date(managed.start).getTime();
-          const mEnd = new Date(managed.end).getTime();
-          return extStart < mEnd && mStart < extEnd;
+        // Check for conflicts between external events and managed events
+        const managedEvents = db.select().from(scheduledEvents).all()
+          .filter((r: any) => r.start && r.end);
+
+        const changedTimed = externalOnly.filter(
+          (ev) => ev.start && ev.end && ev.start.includes('T'),
+        );
+
+        const hasConflicts = changedTimed.some((ext) => {
+          const extStart = new Date(ext.start!).getTime();
+          const extEnd = new Date(ext.end!).getTime();
+          return managedEvents.some((managed: any) => {
+            const mStart = new Date(managed.start).getTime();
+            const mEnd = new Date(managed.end).getTime();
+            return extStart < mEnd && mStart < extEnd;
+          });
         });
-      });
 
-      if (hasConflicts) {
-        await runRescheduleAndApply(calClient, manager, 'Conflict detected');
-      } else {
-        console.log('[poller] No conflicts detected, skipping reschedule');
+        if (hasConflicts) {
+          await runRescheduleAndApply(calClient, manager, 'Conflict detected');
+        } else {
+          console.log(`[poller] Cached ${externalOnly.length} external event(s), no conflicts`);
+        }
       }
     },
   );
