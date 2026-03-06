@@ -65,11 +65,11 @@ router.get('/google/callback', async (req, res) => {
     }
 
     // Redirect to frontend settings page with success
-    const frontendOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+    const frontendOrigin = process.env.CORS_ORIGIN || `${req.protocol}://${req.get('host')}`;
     res.redirect(`${frontendOrigin}/settings?google=connected`);
   } catch (error: any) {
     console.error('OAuth error:', error);
-    const frontendOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+    const frontendOrigin = process.env.CORS_ORIGIN || `${req.protocol}://${req.get('host')}`;
     res.redirect(`${frontendOrigin}/settings?google=error`);
   }
 });
