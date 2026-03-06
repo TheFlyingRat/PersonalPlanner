@@ -51,12 +51,13 @@ export class CalendarPollerManager {
           .run();
       }
 
-      // Cache the events
+      // Cache external events only (skip Cadence-managed ones, they live in scheduledEvents)
       const now = new Date().toISOString();
       db.delete(calendarEvents)
         .where(eq(calendarEvents.calendarId, calId))
         .run();
       for (const ev of syncResult.events) {
+        if (ev.isManaged) continue;
         if (ev.start && ev.end && ev.title) {
           db.insert(calendarEvents).values({
             id: crypto.randomUUID(),

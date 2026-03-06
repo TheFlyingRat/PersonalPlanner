@@ -29,6 +29,8 @@ import {
   getDayOfWeekInTimezone,
   startOfDayInTimezone,
   nextDayInTimezone,
+  getDatePartsInTimezone,
+  toLocalDateStr,
 } from './utils.js';
 
 // ============================================================
@@ -41,8 +43,14 @@ function getDayAbbrev(date: Date, tz: string): string {
   return days[dayIndex];
 }
 
-function getWeekNumber(date: Date): number {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+function getWeekNumber(date: Date, tz?: string): number {
+  // Use timezone-aware date parts when available, otherwise fallback to UTC
+  const parts = tz ? getDatePartsInTimezone(date, tz) : null;
+  const year = parts ? parts.year : date.getFullYear();
+  const month = parts ? parts.month - 1 : date.getMonth(); // Date.UTC uses 0-indexed month
+  const day = parts ? parts.day : date.getDate();
+
+  const d = new Date(Date.UTC(year, month, day));
   d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
@@ -118,7 +126,8 @@ function habitsToScheduleItems(
 
         const timeWindow = buildDayWindow(day, habit.windowStart, habit.windowEnd, tz);
         items.push({
-          id: `${habit.id}__${day.toISOString().slice(0, 10)}`,
+          id: `${habit.id}__${toLocalDateStr(day, tz)}`,
+          name: habit.name,
           type: ItemType.Habit,
           priority: habit.priority,
           timeWindow,
@@ -126,7 +135,7 @@ function habitsToScheduleItems(
           duration,
           locked: habit.locked,
           dependsOn: habit.dependsOn
-            ? `${habit.dependsOn}__${day.toISOString().slice(0, 10)}`
+            ? `${habit.dependsOn}__${toLocalDateStr(day, tz)}`
             : null,
         });
       }
@@ -135,27 +144,29 @@ function habitsToScheduleItems(
       const weekInterval = habit.frequencyConfig?.weekInterval ?? 1;
       const applicableDays = habit.frequencyConfig?.days ?? ['mon'];
 
-      const windowStartWeek = getWeekNumber(windowStart);
+      const windowStartWeek = getWeekNumber(windowStart, tz);
       const scheduledWeeks = new Set<number>();
       for (const day of days) {
         const dayAbbrev = getDayAbbrev(day, tz);
         if (!applicableDays.includes(dayAbbrev)) continue;
 
-        const weekNum = getWeekNumber(day);
+        const weekNum = getWeekNumber(day, tz);
         if (scheduledWeeks.has(weekNum)) continue;
         let weeksSinceStart = weekNum - windowStartWeek;
         if (weeksSinceStart < 0) {
           // Handle year boundary properly (ISO years can have 52 or 53 weeks)
-          const lastDayPrevYear = new Date(Date.UTC(day.getFullYear() - 1, 11, 28));
-          weeksSinceStart += getWeekNumber(lastDayPrevYear);
+          const { year: localYear } = getDatePartsInTimezone(day, tz);
+          const lastDayPrevYear = new Date(Date.UTC(localYear - 1, 11, 28));
+          weeksSinceStart += getWeekNumber(lastDayPrevYear, tz);
         }
         if (weekInterval > 1 && weeksSinceStart % weekInterval !== 0) continue;
 
         scheduledWeeks.add(weekNum);
-        const dayStr = day.toISOString().slice(0, 10);
+        const dayStr = toLocalDateStr(day, tz);
         const timeWindow = buildDayWindow(day, habit.windowStart, habit.windowEnd, tz);
         items.push({
           id: `${habit.id}__${dayStr}`,
+          name: habit.name,
           type: ItemType.Habit,
           priority: habit.priority,
           timeWindow,
@@ -173,28 +184,30 @@ function habitsToScheduleItems(
 
       for (const day of days) {
         let isTargetDay = false;
+        const localDay = getDatePartsInTimezone(day, tz).day;
 
         if (config?.monthDay != null) {
           // Schedule on a specific day of the month
-          isTargetDay = day.getDate() === config.monthDay;
+          isTargetDay = localDay === config.monthDay;
         } else if (config?.monthWeek != null && config?.monthWeekday != null) {
           // Schedule on the nth weekday of the month
           const dayAbbrev = getDayAbbrev(day, tz);
           if (dayAbbrev === config.monthWeekday) {
-            const weekOfMonth = Math.ceil(day.getDate() / 7);
+            const weekOfMonth = Math.ceil(localDay / 7);
             isTargetDay = weekOfMonth === config.monthWeek;
           }
         } else {
           // Default: schedule on the 1st of each month
-          isTargetDay = day.getDate() === 1;
+          isTargetDay = localDay === 1;
         }
 
         if (!isTargetDay) continue;
 
-        const dayStr = day.toISOString().slice(0, 10);
+        const dayStr = toLocalDateStr(day, tz);
         const timeWindow = buildDayWindow(day, habit.windowStart, habit.windowEnd, tz);
         items.push({
           id: `${habit.id}__${dayStr}`,
+          name: habit.name,
           type: ItemType.Habit,
           priority: habit.priority,
           timeWindow,
@@ -277,6 +290,7 @@ function tasksToScheduleItems(
 
       items.push({
         id: `${task.id}__chunk${i}`,
+        name: task.name,
         type: ItemType.Task,
         priority,
         timeWindow,
@@ -313,7 +327,8 @@ function meetingsToScheduleItems(
 
         const timeWindow = buildDayWindow(day, meeting.windowStart, meeting.windowEnd, tz);
         items.push({
-          id: `${meeting.id}__${day.toISOString().slice(0, 10)}`,
+          id: `${meeting.id}__${toLocalDateStr(day, tz)}`,
+          name: meeting.name,
           type: ItemType.Meeting,
           priority: meeting.priority,
           timeWindow,
@@ -325,26 +340,28 @@ function meetingsToScheduleItems(
       }
     } else if (meeting.frequency === Frequency.Weekly) {
       const weekInterval = meeting.frequencyConfig?.weekInterval ?? 1;
-      const windowStartWeek = getWeekNumber(windowStart);
+      const windowStartWeek = getWeekNumber(windowStart, tz);
       const scheduledWeeks = new Set<number>();
       for (const day of days) {
         const dow = getDayOfWeekInTimezone(day, tz);
         if (dow === 0 || dow === 6) continue;
-        const weekNum = getWeekNumber(day);
+        const weekNum = getWeekNumber(day, tz);
         if (scheduledWeeks.has(weekNum)) continue;
         let weeksSinceStart = weekNum - windowStartWeek;
         if (weeksSinceStart < 0) {
           // Handle year boundary properly (ISO years can have 52 or 53 weeks)
-          const lastDayPrevYear = new Date(Date.UTC(day.getFullYear() - 1, 11, 28));
-          weeksSinceStart += getWeekNumber(lastDayPrevYear);
+          const { year: localYear } = getDatePartsInTimezone(day, tz);
+          const lastDayPrevYear = new Date(Date.UTC(localYear - 1, 11, 28));
+          weeksSinceStart += getWeekNumber(lastDayPrevYear, tz);
         }
         if (weekInterval > 1 && weeksSinceStart % weekInterval !== 0) continue;
 
         scheduledWeeks.add(weekNum);
-        const dayStr = day.toISOString().slice(0, 10);
+        const dayStr = toLocalDateStr(day, tz);
         const timeWindow = buildDayWindow(day, meeting.windowStart, meeting.windowEnd, tz);
         items.push({
           id: `${meeting.id}__${dayStr}`,
+          name: meeting.name,
           type: ItemType.Meeting,
           priority: meeting.priority,
           timeWindow,
@@ -361,25 +378,27 @@ function meetingsToScheduleItems(
         if (dow === 0 || dow === 6) continue;
 
         let isTargetDay = false;
+        const localDay = getDatePartsInTimezone(day, tz).day;
 
         if (meeting.frequencyConfig?.monthDay != null) {
-          isTargetDay = day.getDate() === meeting.frequencyConfig.monthDay;
+          isTargetDay = localDay === meeting.frequencyConfig.monthDay;
         } else if (meeting.frequencyConfig?.monthWeek != null && meeting.frequencyConfig?.monthWeekday != null) {
           const dayAbbrev = getDayAbbrev(day, tz);
           if (dayAbbrev === meeting.frequencyConfig.monthWeekday) {
-            const weekOfMonth = Math.ceil(day.getDate() / 7);
+            const weekOfMonth = Math.ceil(localDay / 7);
             isTargetDay = weekOfMonth === meeting.frequencyConfig.monthWeek;
           }
         } else {
-          isTargetDay = day.getDate() === 1;
+          isTargetDay = localDay === 1;
         }
 
         if (!isTargetDay) continue;
 
-        const dayStr = day.toISOString().slice(0, 10);
+        const dayStr = toLocalDateStr(day, tz);
         const timeWindow = buildDayWindow(day, meeting.windowStart, meeting.windowEnd, tz);
         items.push({
           id: `${meeting.id}__${dayStr}`,
+          name: meeting.name,
           type: ItemType.Meeting,
           priority: meeting.priority,
           timeWindow,
@@ -581,7 +600,7 @@ export function reschedule(
   for (const item of flexibleItems) {
     // Generate candidates (pass placements and dependsOn for hard dependency constraint)
     const candidates = generateCandidateSlots(
-      item, timeline, occupiedSlots, bufferConfig, placements, item.dependsOn,
+      item, timeline, occupiedSlots, bufferConfig, placements, item.dependsOn, tz,
     );
     candidateSlotsMap.set(item.id, candidates);
 
@@ -597,7 +616,7 @@ export function reschedule(
     // Score each candidate
     const scoredCandidates = candidates.map((candidate) => ({
       ...candidate,
-      score: scoreSlot(candidate, item, placements, bufferConfig),
+      score: scoreSlot(candidate, item, placements, bufferConfig, tz),
     }));
 
     // Sort by score descending
@@ -769,7 +788,7 @@ function placeFocusTime(
       );
 
       const focusItem: ScheduleItem = {
-        id: `focus_${rule.id}__${day.toISOString().slice(0, 10)}`,
+        id: `focus_${rule.id}__${toLocalDateStr(day, tz)}`,
         type: ItemType.Focus,
         priority: Priority.Low,
         timeWindow: buildDayWindow(day, hourStart, hourEnd, tz),
@@ -781,14 +800,14 @@ function placeFocusTime(
 
       itemMap.set(focusItem.id, focusItem);
 
-      const candidates = generateCandidateSlots(focusItem, timeline, occupiedSlots, bufferConfig);
+      const candidates = generateCandidateSlots(focusItem, timeline, occupiedSlots, bufferConfig, undefined, undefined, tz);
       candidateSlotsMap.set(focusItem.id, candidates);
 
       if (candidates.length === 0) continue;
 
       const scored = candidates.map((c) => ({
         ...c,
-        score: scoreSlot(c, focusItem, placements, bufferConfig),
+        score: scoreSlot(c, focusItem, placements, bufferConfig, tz),
       }));
       scored.sort((a, b) => b.score - a.score);
 
@@ -824,7 +843,8 @@ function generateCalendarOperations(
 
     // Extract the original item id (before __ suffix)
     const originalItemId = itemId.split('__')[0];
-    const title = `${STATUS_PREFIX[status]} ${item.type}: ${itemId}`;
+    // Title uses human-readable name; status emoji is added by calendar client
+    const title = item.name || `${item.type}: ${originalItemId}`;
 
     if (existingEvent) {
       processedExistingIds.add(itemId);
@@ -835,13 +855,15 @@ function generateCalendarOperations(
       if (
         existingStart.getTime() !== placement.start.getTime() ||
         existingEnd.getTime() !== placement.end.getTime() ||
-        existingEvent.status !== status
+        existingEvent.status !== status ||
+        existingEvent.title !== title
       ) {
         operations.push({
           type: CalendarOpType.Update,
           eventId: existingEvent.id,
+          googleEventId: existingEvent.googleEventId || undefined,
           itemType: item.type,
-          itemId: originalItemId,
+          itemId,
           title,
           start: placement.start.toISOString(),
           end: placement.end.toISOString(),
@@ -860,7 +882,7 @@ function generateCalendarOperations(
       operations.push({
         type: CalendarOpType.Create,
         itemType: item.type,
-        itemId: originalItemId,
+        itemId,
         title,
         start: placement.start.toISOString(),
         end: placement.end.toISOString(),
@@ -881,8 +903,9 @@ function generateCalendarOperations(
       operations.push({
         type: CalendarOpType.Delete,
         eventId: event.id,
+        googleEventId: event.googleEventId || undefined,
         itemType: event.itemType ?? ItemType.Task,
-        itemId: originalItemId,
+        itemId,
         title: event.title,
         start: event.start,
         end: event.end,

@@ -31,6 +31,7 @@ export function generateCandidateSlots(
   bufferConfig: BufferConfig,
   existingPlacements?: Map<string, TimeSlot>,
   dependsOn?: string | null,
+  tz?: string,
 ): CandidateSlot[] {
   const candidates: CandidateSlot[] = [];
   const durationMs = item.duration * 60 * 1000;
@@ -75,7 +76,7 @@ export function generateCandidateSlots(
       let violatesDependency = false;
       if (depPlacement) {
         if (
-          isSameDay(candidateSlot.start, depPlacement.start) &&
+          isSameDay(candidateSlot.start, depPlacement.start, tz) &&
           candidateStart < depPlacement.end.getTime()
         ) {
           violatesDependency = true;

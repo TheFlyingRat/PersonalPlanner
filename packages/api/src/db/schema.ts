@@ -125,6 +125,7 @@ export const scheduledEvents = sqliteTable('scheduled_events', {
   id: text('id').primaryKey(),
   itemType: text('itemType'),
   itemId: text('itemId'),
+  title: text('title'),
   googleEventId: text('googleEventId'),
   calendarId: text('calendarId'),  // FK to calendars.id
   start: text('start'),

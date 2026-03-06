@@ -252,7 +252,7 @@ describe('reschedule', () => {
     expect(creates.length).toBe(2);
 
     // The first operation should be for the upnext task
-    expect(creates[0].itemId).toBe('task-upnext');
+    expect(creates[0].itemId.startsWith('task-upnext')).toBe(true);
   });
 
   it('should schedule meetings before habits and tasks at same priority', () => {
@@ -464,7 +464,7 @@ describe('reschedule', () => {
     expect(creates.length).toBeGreaterThanOrEqual(2);
 
     // Critical task should get a preferred slot
-    const taskOp = creates.find((op) => op.itemId === 'critical-task');
+    const taskOp = creates.find((op) => op.itemId.startsWith('critical-task'));
     expect(taskOp).toBeDefined();
   });
 
@@ -731,8 +731,8 @@ describe('reschedule', () => {
     // Both should be scheduled
     expect(creates.length).toBe(2);
 
-    const aOp = creates.find((op) => op.itemId === 'habit-a');
-    const bOp = creates.find((op) => op.itemId === 'habit-b');
+    const aOp = creates.find((op) => op.itemId.startsWith('habit-a'));
+    const bOp = creates.find((op) => op.itemId.startsWith('habit-b'));
 
     if (aOp && bOp) {
       // B should be after A
@@ -863,7 +863,7 @@ describe('reschedule', () => {
     );
 
     const creates = result.operations.filter(
-      (op) => op.type === CalendarOpType.Create && op.itemId === 'task-chunkmax',
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('task-chunkmax'),
     );
 
     // Should be 2 chunks (clamped back from 1 to 2 by Fix 2)
@@ -972,7 +972,7 @@ describe('reschedule', () => {
     );
 
     const creates = result.operations.filter(
-      (op) => op.type === CalendarOpType.Create && op.itemId === 'monthly-habit',
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('monthly-habit'),
     );
 
     // March 5 is within our 7-day window starting March 2
@@ -1009,7 +1009,7 @@ describe('reschedule', () => {
     );
 
     const creates = result.operations.filter(
-      (op) => op.type === CalendarOpType.Create && op.itemId === 'monthly-habit-default',
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('monthly-habit-default'),
     );
 
     // March 1 is within the 7-day window starting Feb 28
@@ -1045,7 +1045,7 @@ describe('reschedule', () => {
     );
 
     const creates = result.operations.filter(
-      (op) => op.type === CalendarOpType.Create && op.itemId === 'monthly-meeting',
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('monthly-meeting'),
     );
 
     // April 1 is a Wednesday, within 7-day window from March 30
@@ -1194,8 +1194,8 @@ describe('reschedule', () => {
     );
 
     // Both should be scheduled
-    const dailyOps = creates.filter((op) => op.itemId === 'habit-daily');
-    const weeklyOps = creates.filter((op) => op.itemId === 'habit-weekly');
+    const dailyOps = creates.filter((op) => op.itemId.startsWith('habit-daily'));
+    const weeklyOps = creates.filter((op) => op.itemId.startsWith('habit-weekly'));
     expect(dailyOps.length).toBeGreaterThan(0);
     expect(weeklyOps.length).toBeGreaterThan(0);
 
@@ -1235,7 +1235,7 @@ describe('reschedule', () => {
     );
 
     const creates = result.operations.filter(
-      (op) => op.type === CalendarOpType.Create && op.itemId === 'task-max-check',
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('task-max-check'),
     );
 
     expect(creates.length).toBe(3);
@@ -1275,7 +1275,7 @@ describe('reschedule', () => {
     );
 
     const creates = result.operations.filter(
-      (op) => op.type === CalendarOpType.Create && op.itemId === 'task-order',
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('task-order'),
     );
 
     expect(creates.length).toBe(3);

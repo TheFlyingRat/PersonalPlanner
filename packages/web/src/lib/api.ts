@@ -18,7 +18,7 @@ import type {
   Calendar,
   HabitCompletion,
   Subtask,
-} from '../../../shared/src/types';
+} from '@cadence/shared';
 
 const API_BASE = '/api';
 
@@ -154,6 +154,11 @@ export const schedule = {
   },
   getAlternatives: (itemId: string) =>
     request<{ alternatives: Array<{ start: string; end: string; score: number }> }>(`/schedule/${itemId}/alternatives`),
+  deleteAllManaged: () =>
+    request<{ message: string; googleEventsDeleted: number; localEventsDeleted: number }>(
+      '/schedule/managed-events',
+      { method: 'DELETE' },
+    ),
 };
 
 export const links = {

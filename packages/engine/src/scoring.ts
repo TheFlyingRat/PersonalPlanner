@@ -4,7 +4,7 @@ import {
   TimeSlot,
   BufferConfig,
 } from '@cadence/shared';
-import { isSameDay } from './utils.js';
+import { isSameDay, getDatePartsInTimezone } from './utils.js';
 
 /**
  * Parse "HH:MM" into minutes since midnight.
@@ -18,9 +18,18 @@ function parseTimeToMinutes(hhmm: string): number {
 }
 
 /**
- * Get minutes-since-midnight from a Date.
+ * Get minutes-since-midnight from a Date in a specific timezone.
  */
-function dateToMinutesSinceMidnight(d: Date): number {
+function dateToMinutesSinceMidnight(d: Date, tz?: string): number {
+  if (tz) {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, hour: 'numeric', minute: 'numeric', hour12: false,
+    });
+    const parts = fmt.formatToParts(d);
+    const h = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0');
+    const m = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0');
+    return (h === 24 ? 0 : h) * 60 + m;
+  }
   return d.getHours() * 60 + d.getMinutes();
 }
 
@@ -38,17 +47,18 @@ export function scoreSlot(
   item: ScheduleItem,
   existingPlacements: Map<string, TimeSlot>,
   bufferConfig: BufferConfig,
+  tz?: string,
 ): number {
   let score = 0;
 
   // 1. Proximity to ideal time (40 points)
-  score += scoreIdealTimeProximity(slot, item) * 40;
+  score += scoreIdealTimeProximity(slot, item, tz) * 40;
 
   // 2. Buffer compliance (25 points)
-  score += scoreBufferCompliance(slot, existingPlacements, bufferConfig) * 25;
+  score += scoreBufferCompliance(slot, existingPlacements, bufferConfig, tz) * 25;
 
   // 3. Continuity with related/dependent items (20 points)
-  score += scoreContinuity(slot, item, existingPlacements) * 20;
+  score += scoreContinuity(slot, item, existingPlacements, tz) * 20;
 
   // 4. Time-of-day preference (15 points)
   score += scoreTimeOfDay(slot, item) * 15;
@@ -61,9 +71,9 @@ export function scoreSlot(
  * Ideal time is an HH:MM preference. The closer the slot start is, the better.
  * We measure distance in minutes and normalize by half a day (720 minutes).
  */
-function scoreIdealTimeProximity(slot: CandidateSlot, item: ScheduleItem): number {
+function scoreIdealTimeProximity(slot: CandidateSlot, item: ScheduleItem, tz?: string): number {
   const idealMinutes = parseTimeToMinutes(item.idealTime);
-  const slotMinutes = dateToMinutesSinceMidnight(slot.start);
+  const slotMinutes = dateToMinutesSinceMidnight(slot.start, tz);
 
   const diff = Math.abs(slotMinutes - idealMinutes);
   const maxDiff = 720; // half day
@@ -82,6 +92,7 @@ function scoreBufferCompliance(
   slot: CandidateSlot,
   existingPlacements: Map<string, TimeSlot>,
   bufferConfig: BufferConfig,
+  tz?: string,
 ): number {
   if (existingPlacements.size === 0) {
     return 1; // No neighbors, full compliance
@@ -96,7 +107,7 @@ function scoreBufferCompliance(
 
   for (const [, placement] of existingPlacements) {
     // Only consider placements on the same day
-    if (!isSameDay(slot.start, placement.start)) {
+    if (!isSameDay(slot.start, placement.start, tz)) {
       continue;
     }
 
@@ -131,6 +142,7 @@ function scoreContinuity(
   slot: CandidateSlot,
   item: ScheduleItem,
   existingPlacements: Map<string, TimeSlot>,
+  tz?: string,
 ): number {
   if (!item.dependsOn) {
     return 0.5; // Neutral — no dependency
@@ -142,7 +154,7 @@ function scoreContinuity(
   }
 
   // Must be on the same day
-  if (!isSameDay(slot.start, dependency.start)) {
+  if (!isSameDay(slot.start, dependency.start, tz)) {
     return 0; // Wrong day — worst score
   }
 

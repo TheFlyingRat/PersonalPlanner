@@ -71,7 +71,7 @@ app.use(helmet({
       fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'"],
+      connectSrc: ["'self'", "ws:", "wss:"],
     },
   },
 }));
@@ -84,10 +84,10 @@ app.use(cors({
 
 app.use(express.json());
 
-// Global rate limit: 100 requests per minute per IP
+// Global rate limit: 500 requests per minute per IP
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 100,
+  limit: 500,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' },
@@ -131,12 +131,15 @@ const PUBLIC_ROUTES: Array<{ method: string; pattern: RegExp }> = [
   { method: 'POST', pattern: /^\/api\/links\/[^/]+\/book$/ },
 ];
 
+if (!process.env.API_KEY) {
+  console.warn('\u26a0\ufe0f  WARNING: API_KEY not set. All endpoints are unprotected.');
+}
+
 app.use('/api', (req, res, next) => {
   const apiKey = process.env.API_KEY;
 
-  // If API_KEY is not set, warn and skip auth
+  // If API_KEY is not set, skip auth
   if (!apiKey) {
-    console.warn('\u26a0\ufe0f  WARNING: API_KEY not set. All endpoints are unprotected.');
     next();
     return;
   }
@@ -208,6 +211,7 @@ seed();
 // ============================================================
 
 import { pollingRef } from './polling-ref.js';
+import { initWebSocket, broadcast, closeWebSocket } from './ws.js';
 
 export let pollerManager: CalendarPollerManager | null = null;
 
@@ -258,6 +262,182 @@ function toBufConfig(row: any): BufferConfig {
   };
 }
 
+/**
+ * Run the scheduling engine, apply operations to Google Calendar, and persist to DB.
+ * Shared by both the poller callback and the periodic optimization timer.
+ */
+async function runRescheduleAndApply(
+  calClient: GoogleCalendarClient,
+  manager: CalendarPollerManager,
+  reason: string,
+): Promise<number> {
+  const allHabits = db.select().from(habits).all().map(toHabit);
+  const allTasks = db.select().from(tasks).all().map(toTask);
+  const allMeetings = db.select().from(smartMeetings).all().map(toMeeting);
+  const allFocusRules = db.select().from(focusTimeRules).all().map(toFocusRule);
+  const bufRows = db.select().from(bufferConfig).all();
+  const buf: BufferConfig = bufRows.length > 0
+    ? toBufConfig(bufRows[0])
+    : {
+        id: 'default',
+        travelTimeMinutes: 15,
+        decompressionMinutes: 10,
+        breakBetweenItemsMinutes: 5,
+        applyDecompressionTo: DecompressionTarget.All,
+      };
+
+  const currentUserRows = db.select().from(users).all();
+  const userSettings: UserSettings = currentUserRows.length > 0 && currentUserRows[0].settings
+    ? JSON.parse(currentUserRows[0].settings)
+    : {
+        workingHours: { start: '09:00', end: '17:00' },
+        personalHours: { start: '07:00', end: '22:00' },
+        timezone: 'America/New_York',
+        schedulingWindowDays: 14,
+      };
+
+  // Load existing managed events from DB
+  const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents).all().map((row: any) => ({
+    id: row.id,
+    googleEventId: row.googleEventId || '',
+    title: row.title || '',
+    start: row.start,
+    end: row.end,
+    isManaged: true,
+    itemType: row.itemType as ItemType,
+    itemId: row.itemId,
+    status: (row.status || 'free') as EventStatus,
+    calendarId: row.calendarId || 'primary',
+  }));
+
+  // Merge events from locked calendars as immovable constraints
+  const enabledCals = db.select().from(calendars)
+    .where(eq(calendars.enabled, true))
+    .all();
+
+  for (const cal of enabledCals) {
+    if (cal.mode === 'locked') {
+      const syncResult = await calClient.syncEvents(cal.googleCalendarId, cal.syncToken);
+      for (const event of syncResult.events) {
+        if (event.start && event.end) {
+          existingEvents.push({
+            ...event,
+            isManaged: false,
+            status: EventStatus.Locked,
+            calendarId: cal.id,
+          });
+        }
+      }
+    }
+  }
+
+  // Determine default calendars
+  const defaultHabitCalId = userSettings.defaultHabitCalendarId || 'primary';
+  const defaultTaskCalId = userSettings.defaultTaskCalendarId || 'primary';
+
+  const habitCal = db.select().from(calendars)
+    .where(eq(calendars.id, defaultHabitCalId)).all();
+  const taskCal = db.select().from(calendars)
+    .where(eq(calendars.id, defaultTaskCalId)).all();
+
+  const habitCalRow = habitCal[0];
+  const habitGoogleCalId = (habitCalRow?.enabled && habitCalRow?.mode === 'writable')
+    ? habitCalRow.googleCalendarId
+    : 'primary';
+  const taskCalRow = taskCal[0];
+  const taskGoogleCalId = (taskCalRow?.enabled && taskCalRow?.mode === 'writable')
+    ? taskCalRow.googleCalendarId
+    : 'primary';
+
+  // Run the scheduling engine
+  const result = reschedule(
+    allHabits,
+    allTasks,
+    allMeetings,
+    allFocusRules,
+    existingEvents,
+    buf,
+    userSettings,
+  );
+
+  if (result.operations.length === 0) {
+    return 0;
+  }
+
+  // Tag each operation with the appropriate calendarId
+  for (const op of result.operations) {
+    if (!op.calendarId) {
+      if (op.itemType === ItemType.Habit || op.itemType === ItemType.Focus) {
+        op.calendarId = defaultHabitCalId;
+      } else if (op.itemType === ItemType.Task) {
+        op.calendarId = defaultTaskCalId;
+      } else {
+        op.calendarId = 'primary';
+      }
+    }
+  }
+
+  // Group operations by target Google Calendar and apply
+  const opsByGoogleCal = new Map<string, typeof result.operations>();
+  for (const op of result.operations) {
+    const cal = db.select().from(calendars)
+      .where(eq(calendars.id, op.calendarId!)).all();
+    const googleCalId = cal[0]?.googleCalendarId || 'primary';
+    const existing = opsByGoogleCal.get(googleCalId) || [];
+    existing.push(op);
+    opsByGoogleCal.set(googleCalId, existing);
+  }
+
+  for (const [googleCalId, ops] of opsByGoogleCal) {
+    await calClient.applyOperations(googleCalId, ops);
+  }
+
+  // Persist to DB
+  for (const op of result.operations) {
+    const now = new Date().toISOString();
+    if (op.type === CalendarOpType.Create) {
+      db.insert(scheduledEvents).values({
+        id: crypto.randomUUID(),
+        itemType: op.itemType,
+        itemId: op.itemId,
+        title: op.title,
+        googleEventId: op.googleEventId || null,
+        calendarId: op.calendarId || 'primary',
+        start: op.start,
+        end: op.end,
+        status: op.status,
+        alternativeSlotsCount: null,
+        createdAt: now,
+        updatedAt: now,
+      }).run();
+    } else if (op.type === CalendarOpType.Update && op.eventId) {
+      db.update(scheduledEvents)
+        .set({
+          title: op.title,
+          start: op.start,
+          end: op.end,
+          status: op.status,
+          googleEventId: op.googleEventId || undefined,
+          updatedAt: now,
+        })
+        .where(eq(scheduledEvents.id, op.eventId))
+        .run();
+    } else if (op.type === CalendarOpType.Delete && op.eventId) {
+      db.delete(scheduledEvents)
+        .where(eq(scheduledEvents.id, op.eventId))
+        .run();
+    }
+  }
+
+  manager.markAllWritten();
+  console.log(`[scheduler] ${reason}: ${result.operations.length} operations applied`);
+  broadcast('schedule_updated', reason);
+  return result.operations.length;
+}
+
+// Periodic reschedule interval handle (for cleanup on shutdown)
+let periodicRescheduleTimer: ReturnType<typeof setInterval> | null = null;
+
 export async function initPolling(): Promise<CalendarPollerManager | null> {
   const userRows = db.select().from(users).all();
   if (!userRows[0]?.googleRefreshToken) {
@@ -269,6 +449,14 @@ export async function initPolling(): Promise<CalendarPollerManager | null> {
   const refreshToken = decrypt(userRows[0].googleRefreshToken);
   setCredentials(oauth2Client, refreshToken);
   const calClient = new GoogleCalendarClient(oauth2Client);
+  pollingRef.calClient = calClient;
+
+  // Will be set after manager is created (used by pollingRef.runReschedule)
+  let managerRef: CalendarPollerManager;
+
+  pollingRef.runReschedule = async (reason: string) => {
+    return runRescheduleAndApply(calClient, managerRef, reason);
+  };
 
   const manager = new CalendarPollerManager(
     calClient,
@@ -277,6 +465,7 @@ export async function initPolling(): Promise<CalendarPollerManager | null> {
       const now = new Date().toISOString();
       for (const ev of polledEvents) {
         if (!ev.googleEventId) continue;
+        if (ev.isManaged) continue;
 
         // Handle cancelled/deleted events
         if (!ev.start || !ev.end || !ev.title) {
@@ -337,171 +526,38 @@ export async function initPolling(): Promise<CalendarPollerManager | null> {
         });
       });
 
-      if (!hasConflicts) {
+      if (hasConflicts) {
+        await runRescheduleAndApply(calClient, manager, 'Conflict detected');
+      } else {
         console.log('[poller] No conflicts detected, skipping reschedule');
-        return;
       }
-
-      console.log('[poller] Conflicts detected with managed events, triggering reschedule');
-
-      // Load all scheduling data from DB
-      const allHabits = db.select().from(habits).all().map(toHabit);
-      const allTasks = db.select().from(tasks).all().map(toTask);
-      const allMeetings = db.select().from(smartMeetings).all().map(toMeeting);
-      const allFocusRules = db.select().from(focusTimeRules).all().map(toFocusRule);
-      const bufRows = db.select().from(bufferConfig).all();
-      const buf: BufferConfig = bufRows.length > 0
-        ? toBufConfig(bufRows[0])
-        : {
-            id: 'default',
-            travelTimeMinutes: 15,
-            decompressionMinutes: 10,
-            breakBetweenItemsMinutes: 5,
-            applyDecompressionTo: DecompressionTarget.All,
-          };
-
-      const currentUserRows = db.select().from(users).all();
-      const userSettings: UserSettings = currentUserRows.length > 0 && currentUserRows[0].settings
-        ? JSON.parse(currentUserRows[0].settings)
-        : {
-            workingHours: { start: '09:00', end: '17:00' },
-            personalHours: { start: '07:00', end: '22:00' },
-            timezone: 'America/New_York',
-            schedulingWindowDays: 14,
-          };
-
-      // Get existing managed calendar events from our DB
-      const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents).all().map((row: any) => ({
-        id: row.id,
-        googleEventId: row.googleEventId || '',
-        title: '',
-        start: row.start,
-        end: row.end,
-        isManaged: true,
-        itemType: row.itemType as ItemType,
-        itemId: row.itemId,
-        status: (row.status || 'free') as EventStatus,
-        calendarId: row.calendarId || 'primary',
-      }));
-
-      // Merge events from locked calendars as immovable constraints
-      const enabledCals = db.select().from(calendars)
-        .where(eq(calendars.enabled, true))
-        .all();
-
-      for (const cal of enabledCals) {
-        if (cal.mode === 'locked') {
-          const syncResult = await calClient.syncEvents(cal.googleCalendarId, cal.syncToken);
-          for (const event of syncResult.events) {
-            if (event.start && event.end) {
-              existingEvents.push({
-                ...event,
-                isManaged: false,
-                status: EventStatus.Locked,
-                calendarId: cal.id,
-              });
-            }
-          }
-        }
-      }
-
-      // Determine default calendars for habits/tasks
-      const defaultHabitCalId = userSettings.defaultHabitCalendarId || 'primary';
-      const defaultTaskCalId = userSettings.defaultTaskCalendarId || 'primary';
-
-      // Look up the googleCalendarId for each default
-      const habitCal = db.select().from(calendars)
-        .where(eq(calendars.id, defaultHabitCalId)).all();
-      const taskCal = db.select().from(calendars)
-        .where(eq(calendars.id, defaultTaskCalId)).all();
-
-      // Validate defaults exist, are enabled, and are writable before using them
-      const habitCalRow = habitCal[0];
-      const habitGoogleCalId = (habitCalRow?.enabled && habitCalRow?.mode === 'writable')
-        ? habitCalRow.googleCalendarId
-        : 'primary';
-      const taskCalRow = taskCal[0];
-      const taskGoogleCalId = (taskCalRow?.enabled && taskCalRow?.mode === 'writable')
-        ? taskCalRow.googleCalendarId
-        : 'primary';
-
-      // Run the reschedule engine
-      const result = reschedule(
-        allHabits,
-        allTasks,
-        allMeetings,
-        allFocusRules,
-        existingEvents,
-        buf,
-        userSettings,
-      );
-
-      // Tag each operation with the appropriate calendarId
-      for (const op of result.operations) {
-        if (!op.calendarId) {
-          if (op.itemType === ItemType.Habit || op.itemType === ItemType.Focus) {
-            op.calendarId = defaultHabitCalId;
-          } else if (op.itemType === ItemType.Task) {
-            op.calendarId = defaultTaskCalId;
-          } else {
-            op.calendarId = 'primary';
-          }
-        }
-      }
-
-      // Group operations by target Google Calendar and apply
-      const opsByGoogleCal = new Map<string, typeof result.operations>();
-      for (const op of result.operations) {
-        const cal = db.select().from(calendars)
-          .where(eq(calendars.id, op.calendarId!)).all();
-        const googleCalId = cal[0]?.googleCalendarId || 'primary';
-        const existing = opsByGoogleCal.get(googleCalId) || [];
-        existing.push(op);
-        opsByGoogleCal.set(googleCalId, existing);
-      }
-
-      for (const [googleCalId, ops] of opsByGoogleCal) {
-        await calClient.applyOperations(googleCalId, ops);
-      }
-
-      // Store operations in the scheduled_events table
-      for (const op of result.operations) {
-        const now = new Date().toISOString();
-        if (op.type === CalendarOpType.Create) {
-          db.insert(scheduledEvents).values({
-            id: crypto.randomUUID(),
-            itemType: op.itemType,
-            itemId: op.itemId,
-            googleEventId: op.eventId || null,
-            calendarId: op.calendarId || 'primary',
-            start: op.start,
-            end: op.end,
-            status: op.status,
-            alternativeSlotsCount: null,
-            createdAt: now,
-            updatedAt: now,
-          }).run();
-        } else if (op.type === CalendarOpType.Update && op.eventId) {
-          db.update(scheduledEvents)
-            .set({ start: op.start, end: op.end, status: op.status, updatedAt: now })
-            .where(eq(scheduledEvents.id, op.eventId))
-            .run();
-        } else if (op.type === CalendarOpType.Delete && op.eventId) {
-          db.delete(scheduledEvents)
-            .where(eq(scheduledEvents.id, op.eventId))
-            .run();
-        }
-      }
-
-      // Skip the next poll on all calendars
-      manager.markAllWritten();
-
-      console.log(`[poller] Reschedule complete: ${result.operations.length} operations applied`);
     },
   );
 
+  managerRef = manager;
+
   await manager.startAll();
   console.log('Calendar polling started for all enabled calendars');
+
+  // Periodic reschedule every 5 minutes to optimize placement
+  periodicRescheduleTimer = setInterval(async () => {
+    try {
+      const ops = await runRescheduleAndApply(calClient, manager, 'Periodic optimization');
+      if (ops === 0) {
+        console.log('[scheduler] Periodic check: schedule is optimal, no changes');
+      }
+    } catch (err) {
+      console.error('[scheduler] Periodic reschedule failed:', err);
+    }
+  }, 5 * 60 * 1000);
+
+  // Run an initial reschedule on startup to pick up any new/changed items
+  try {
+    await runRescheduleAndApply(calClient, manager, 'Startup sync');
+  } catch (err) {
+    console.error('[scheduler] Startup reschedule failed:', err);
+  }
+
   return manager;
 }
 
@@ -520,12 +576,17 @@ pollingRef.init()
 const server = app.listen(PORT, () => {
   console.log(`Cadence API server running on http://localhost:${PORT}`);
 });
+initWebSocket(server);
 
 function gracefulShutdown(signal: string) {
   console.log(`${signal} received. Shutting down gracefully...`);
+  if (periodicRescheduleTimer) {
+    clearInterval(periodicRescheduleTimer);
+  }
   if (pollerManager) {
     pollerManager.stopAll();
   }
+  closeWebSocket();
   server.close(() => {
     console.log('HTTP server closed.');
     process.exit(0);

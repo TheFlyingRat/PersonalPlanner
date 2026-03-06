@@ -4,6 +4,7 @@ import { db } from '../db/index.js';
 import { focusTimeRules } from '../db/schema.js';
 import type { FocusTimeRule } from '@cadence/shared';
 import { updateFocusSchema } from '../validation.js';
+import { broadcast } from '../ws.js';
 
 const router = Router();
 
@@ -54,6 +55,7 @@ router.put('/', (req, res) => {
   }
 
   const updated = db.select().from(focusTimeRules).where(eq(focusTimeRules.id, 'default')).get();
+  broadcast('schedule_updated', 'Focus time updated');
   res.json(toFocusTimeRule(updated!));
 });
 

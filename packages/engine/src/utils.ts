@@ -10,9 +10,15 @@ export function parseTime(hhmm: string): { hours: number; minutes: number } {
 }
 
 /**
- * Check if two dates are on the same calendar day.
+ * Check if two dates are on the same calendar day in a specific timezone.
+ * Falls back to UTC comparison when no timezone is provided.
  */
-export function isSameDay(a: Date, b: Date): boolean {
+export function isSameDay(a: Date, b: Date, tz?: string): boolean {
+  if (tz) {
+    const pa = getDatePartsInTimezone(a, tz);
+    const pb = getDatePartsInTimezone(b, tz);
+    return pa.year === pb.year && pa.month === pb.month && pa.day === pb.day;
+  }
   return (
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
@@ -52,13 +58,17 @@ export function setTimeInTimezone(date: Date, hours: number, minutes: number, tz
 
   // Verify the result matches the target day — if formatter shows wrong day, adjust
   const resultParts = formatter.formatToParts(result);
-  const resultDay = parseInt(resultParts.find(p => p.type === 'day')?.value ?? '0');
+  const rGet = (type: string) => parseInt(resultParts.find(p => p.type === type)?.value ?? '0');
   const targetParts = formatter.formatToParts(date);
-  const targetDay = parseInt(targetParts.find(p => p.type === 'day')?.value ?? '0');
+  const tGet = (type: string) => parseInt(targetParts.find(p => p.type === type)?.value ?? '0');
 
-  if (resultDay !== targetDay) {
-    // Day shifted, adjust by 24h in the appropriate direction
-    return new Date(result.getTime() + (targetDay > resultDay ? 86400000 : -86400000));
+  const resultDate = Date.UTC(rGet('year'), rGet('month') - 1, rGet('day'));
+  const targetDate = Date.UTC(tGet('year'), tGet('month') - 1, tGet('day'));
+
+  if (resultDate !== targetDate) {
+    // Day shifted — use the actual date difference for the correction
+    const diffMs = targetDate - resultDate;
+    return new Date(result.getTime() + diffMs);
   }
 
   return result;
@@ -100,4 +110,13 @@ export function getDatePartsInTimezone(date: Date, tz: string): { year: number; 
   const parts = formatter.formatToParts(date);
   const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0');
   return { year: get('year'), month: get('month'), day: get('day') };
+}
+
+/**
+ * Format a Date as "YYYY-MM-DD" in a specific timezone.
+ * Unlike toISOString().slice(0,10), this returns the correct local date.
+ */
+export function toLocalDateStr(date: Date, tz: string): string {
+  const { year, month, day } = getDatePartsInTimezone(date, tz);
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }

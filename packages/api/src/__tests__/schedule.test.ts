@@ -121,11 +121,15 @@ describe('GET /api/schedule', () => {
       },
     ];
 
-    // scheduledEvents.all() returns managed events
+    // Color lookup: habits.all(), tasks.all(), smartMeetings.all()
+    // Then scheduledEvents.all() returns managed events
+    // Then calendarEvents.all() returns empty
     mockDb._mockAll
-      .mockReturnValueOnce(managedEvents)
-      // calendarEvents.all() returns empty
-      .mockReturnValueOnce([]);
+      .mockReturnValueOnce([])             // habits (color lookup)
+      .mockReturnValueOnce([])             // tasks (color lookup)
+      .mockReturnValueOnce([])             // meetings (color lookup)
+      .mockReturnValueOnce(managedEvents)  // scheduledEvents
+      .mockReturnValueOnce([]);            // calendarEvents
     // calendars.where(enabled).all() returns empty
     mockDb._mockWhere.mockReturnValueOnce({
       get: mockDb._mockGet,
@@ -157,9 +161,14 @@ describe('GET /api/schedule', () => {
       },
     ];
 
+    // Color lookup: habits.all(), tasks.all(), smartMeetings.all()
+    // Then scheduledEvents.all(), calendarEvents.all()
     mockDb._mockAll
-      .mockReturnValueOnce(managedEvents)
-      .mockReturnValueOnce([]);
+      .mockReturnValueOnce([])             // habits (color lookup)
+      .mockReturnValueOnce([])             // tasks (color lookup)
+      .mockReturnValueOnce([])             // meetings (color lookup)
+      .mockReturnValueOnce(managedEvents)  // scheduledEvents
+      .mockReturnValueOnce([]);            // calendarEvents
     mockDb._mockWhere.mockReturnValueOnce({
       get: mockDb._mockGet,
       all: vi.fn().mockReturnValue([]),

@@ -213,6 +213,7 @@ export class GoogleCalendarClient {
   /**
    * Apply an ordered list of CalendarOperations.
    * Individual failures are logged but do not abort the batch.
+   * For Create ops, the returned Google event ID is set on `op.googleEventId`.
    */
   async applyOperations(
     calendarId: string = 'primary',
@@ -221,28 +222,84 @@ export class GoogleCalendarClient {
     for (const op of operations) {
       try {
         switch (op.type) {
-          case CalendarOpType.Create:
-            await this.createEvent(calendarId, op);
+          case CalendarOpType.Create: {
+            const googleId = await this.createEvent(calendarId, op);
+            op.googleEventId = googleId;
             break;
-          case CalendarOpType.Update:
-            if (!op.eventId) {
-              console.warn('[calendar] Update op missing eventId, skipping:', op.itemId);
+          }
+          case CalendarOpType.Update: {
+            const gEventId = op.googleEventId;
+            if (!gEventId) {
+              console.warn('[calendar] Update op missing googleEventId, skipping:', op.itemId);
               continue;
             }
-            await this.updateEvent(calendarId, op.eventId, op);
+            await this.updateEvent(calendarId, gEventId, op);
             break;
-          case CalendarOpType.Delete:
-            if (!op.eventId) {
-              console.warn('[calendar] Delete op missing eventId, skipping:', op.itemId);
+          }
+          case CalendarOpType.Delete: {
+            const gEventId = op.googleEventId;
+            if (!gEventId) {
+              console.warn('[calendar] Delete op missing googleEventId, skipping:', op.itemId);
               continue;
             }
-            await this.deleteEvent(calendarId, op.eventId);
+            await this.deleteEvent(calendarId, gEventId);
             break;
+          }
         }
       } catch (err) {
         console.error(`[calendar] Failed to apply ${op.type} for item ${op.itemId}:`, err);
       }
     }
+  }
+
+  // ---------- Nuke (delete all managed events) -----------------------------
+
+  /**
+   * Find and delete all Cadence-managed events from a calendar.
+   * Returns the count of deleted events.
+   */
+  async deleteAllManagedEvents(calendarId: string = 'primary'): Promise<number> {
+    let deleted = 0;
+    let pageToken: string | undefined;
+
+    // Fetch all events in a wide window
+    const timeMin = new Date();
+    timeMin.setDate(timeMin.getDate() - 90);
+    const timeMax = new Date();
+    timeMax.setDate(timeMax.getDate() + 365);
+
+    do {
+      const response = await this.calendar.events.list({
+        calendarId,
+        maxResults: 2500,
+        singleEvents: true,
+        timeMin: timeMin.toISOString(),
+        timeMax: timeMax.toISOString(),
+        ...(pageToken ? { pageToken } : {}),
+      });
+
+      const items = response.data.items ?? [];
+      for (const item of items) {
+        const privateProps = item.extendedProperties?.private ?? {};
+        const isCadence = Boolean(privateProps[EXTENDED_PROPS.cadenceId] || privateProps[EXTENDED_PROPS.itemType]);
+
+        if (isCadence && item.id) {
+          try {
+            await this.calendar.events.delete({ calendarId, eventId: item.id });
+            deleted++;
+          } catch (err: unknown) {
+            if (isGoogleApiError(err) && (err.code === 404 || err.code === 410)) {
+              continue;
+            }
+            console.error(`[calendar] Failed to delete managed event ${item.id}:`, err);
+          }
+        }
+      }
+
+      pageToken = response.data.nextPageToken ?? undefined;
+    } while (pageToken);
+
+    return deleted;
   }
 
   // ---------- Internal helpers ----------------------------------------------
@@ -292,15 +349,17 @@ export class GoogleCalendarClient {
 
   /** Build a Google Calendar event body from a CalendarOperation. */
   private buildEventBody(op: CalendarOperation): calendar_v3.Schema$Event {
-    const prefixedTitle = `${STATUS_EMOJI[op.status]} ${op.title}`;
+    // Add status emoji prefix only if not already present
+    const alreadyPrefixed = Object.values(STATUS_EMOJI).some(e => op.title.startsWith(e));
+    const prefixedTitle = alreadyPrefixed ? op.title : `${STATUS_EMOJI[op.status]} ${op.title}`;
 
-    // Merge any extra extended properties from the operation with our standard ones
+    // Use extended properties from the operation; only fill in defaults for missing keys
     const privateProperties: Record<string, string> = {
-      ...op.extendedProperties,
       [EXTENDED_PROPS.cadenceId]: op.itemId,
       [EXTENDED_PROPS.itemType]: op.itemType,
       [EXTENDED_PROPS.itemId]: op.itemId,
       [EXTENDED_PROPS.status]: op.status,
+      ...op.extendedProperties,
       [EXTENDED_PROPS.lastModifiedByUs]: new Date().toISOString(),
     };
 

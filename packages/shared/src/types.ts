@@ -223,6 +223,7 @@ export interface TimeSlot {
 
 export interface ScheduleItem {
   id: string;
+  name?: string;            // human-readable name for calendar titles
   type: ItemType;
   priority: Priority;
   timeWindow: TimeSlot;     // allowed scheduling window
@@ -244,7 +245,8 @@ export enum CalendarOpType {
 
 export interface CalendarOperation {
   type: CalendarOpType;
-  eventId?: string;         // for update/delete
+  eventId?: string;         // internal DB id for local operations
+  googleEventId?: string;   // Google Calendar event id for API operations
   itemType: ItemType;
   itemId: string;
   title: string;

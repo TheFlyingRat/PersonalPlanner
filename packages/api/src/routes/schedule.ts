@@ -5,6 +5,8 @@ import { scheduledEvents, calendarEvents, calendars, habits, tasks, smartMeeting
 import { reschedule, generateCandidateSlots, scoreSlot, buildTimeline } from '@cadence/engine';
 import type { Habit, Task, SmartMeeting, FocusTimeRule, BufferConfig, CalendarEvent, UserSettings, ScheduleItem, TimeSlot } from '@cadence/shared';
 import { Priority, Frequency, SchedulingHours, TaskStatus, DecompressionTarget, EventStatus, ItemType, CalendarOpType } from '@cadence/shared';
+import { pollingRef } from '../polling-ref.js';
+import { broadcast } from '../ws.js';
 
 const router = Router();
 
@@ -49,11 +51,15 @@ router.get('/', (req, res) => {
 
   // Managed events from the scheduling engine
   const managed = db.select().from(scheduledEvents).all()
-    .map((row: any) => ({
-      ...row,
-      calendarId: row.calendarId || 'primary',
-      itemColor: row.itemId ? itemColorMap.get(row.itemId) || null : null,
-    }))
+    .map((row: any) => {
+      // itemId may be composite (e.g. habitId__2026-03-06); extract original for color lookup
+      const originalId = row.itemId?.split('__')[0] || row.itemId;
+      return {
+        ...row,
+        calendarId: row.calendarId || 'primary',
+        itemColor: originalId ? itemColorMap.get(originalId) || null : null,
+      };
+    })
     .filter((row: any) => row.start && row.end && isInRange(row.start, row.end));
 
   // External events from enabled calendars
@@ -64,7 +70,7 @@ router.get('/', (req, res) => {
   const calColorMap = new Map(enabledCals.map(c => [c.id, c.color]));
   const calNameMap = new Map(enabledCals.map(c => [c.id, c.name]));
 
-  const external = db.select().from(calendarEvents).all()
+  const externalAll = db.select().from(calendarEvents).all()
     .filter((row: any) => enabledCalIds.has(row.calendarId))
     .filter((row: any) => row.start && row.end && isInRange(row.start, row.end))
     .map((row: any) => ({
@@ -82,6 +88,19 @@ router.get('/', (req, res) => {
       location: row.location,
       isAllDay: row.isAllDay,
     }));
+
+  // Deduplicate events that appear in multiple calendars (e.g. accepted invites).
+  // Cross-calendar copies have different googleEventIds and possibly different
+  // timezone representations of the same instant, so dedup by title + parsed timestamps.
+  const seenKeys = new Set<string>();
+  const external = externalAll.filter((ev) => {
+    const startMs = new Date(ev.start).getTime();
+    const endMs = new Date(ev.end).getTime();
+    const key = `${ev.title}|${startMs}|${endMs}`;
+    if (seenKeys.has(key)) return false;
+    seenKeys.add(key);
+    return true;
+  });
 
   res.json([...managed, ...external]);
 });
@@ -134,87 +153,82 @@ function toBufConfig(row: any): BufferConfig {
 }
 
 // POST /api/schedule/reschedule — run the scheduling engine
-router.post('/reschedule', (_req, res) => {
+router.post('/reschedule', async (_req, res) => {
   try {
-    const allHabits = db.select().from(habits).all().map(toHabit);
-    const allTasks = db.select().from(tasks).all().map(toTask);
-    const allMeetings = db.select().from(smartMeetings).all().map(toMeeting);
-    const allFocusRules = db.select().from(focusTimeRules).all().map(toFocusRule);
-    const bufRows = db.select().from(bufferConfig).all();
-    const buf = bufRows.length > 0 ? toBufConfig(bufRows[0]) : {
-      id: 'default',
-      travelTimeMinutes: 15,
-      decompressionMinutes: 10,
-      breakBetweenItemsMinutes: 5,
-      applyDecompressionTo: DecompressionTarget.All,
-    };
+    if (pollingRef.runReschedule) {
+      const ops = await pollingRef.runReschedule('Manual reschedule');
+      broadcast('schedule_updated', 'Manual reschedule');
+      res.json({ message: 'Reschedule complete', operationsApplied: ops });
+    } else {
+      // Google not connected — run local-only reschedule
+      const allHabits = db.select().from(habits).all().map(toHabit);
+      const allTasks = db.select().from(tasks).all().map(toTask);
+      const allMeetings = db.select().from(smartMeetings).all().map(toMeeting);
+      const allFocusRules = db.select().from(focusTimeRules).all().map(toFocusRule);
+      const bufRows = db.select().from(bufferConfig).all();
+      const buf = bufRows.length > 0 ? toBufConfig(bufRows[0]) : {
+        id: 'default',
+        travelTimeMinutes: 15,
+        decompressionMinutes: 10,
+        breakBetweenItemsMinutes: 5,
+        applyDecompressionTo: DecompressionTarget.All,
+      };
 
-    const userRows = db.select().from(users).all();
-    const userSettings: UserSettings = userRows.length > 0 && userRows[0].settings
-      ? JSON.parse(userRows[0].settings)
-      : {
-          workingHours: { start: '09:00', end: '17:00' },
-          personalHours: { start: '07:00', end: '22:00' },
-          timezone: 'America/New_York',
-          schedulingWindowDays: 14,
-        };
+      const userRows = db.select().from(users).all();
+      const userSettings: UserSettings = userRows.length > 0 && userRows[0].settings
+        ? JSON.parse(userRows[0].settings)
+        : {
+            workingHours: { start: '09:00', end: '17:00' },
+            personalHours: { start: '07:00', end: '22:00' },
+            timezone: 'America/New_York',
+            schedulingWindowDays: 14,
+          };
 
-    // Get existing managed calendar events from our DB
-    const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents).all().map((row: any) => ({
-      id: row.id,
-      googleEventId: row.googleEventId || '',
-      title: '',
-      start: row.start,
-      end: row.end,
-      isManaged: true,
-      itemType: row.itemType as ItemType,
-      itemId: row.itemId,
-      status: (row.status || 'free') as EventStatus,
-    }));
+      const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents).all().map((row: any) => ({
+        id: row.id,
+        googleEventId: row.googleEventId || '',
+        title: row.title || '',
+        start: row.start,
+        end: row.end,
+        isManaged: true,
+        itemType: row.itemType as ItemType,
+        itemId: row.itemId,
+        status: (row.status || 'free') as EventStatus,
+      }));
 
-    const result = reschedule(
-      allHabits,
-      allTasks,
-      allMeetings,
-      allFocusRules,
-      existingEvents,
-      buf,
-      userSettings,
-    );
+      const result = reschedule(allHabits, allTasks, allMeetings, allFocusRules, existingEvents, buf, userSettings);
 
-    // Apply operations to our local scheduled_events table
-    for (const op of result.operations) {
-      const now = new Date().toISOString();
-      if (op.type === CalendarOpType.Create) {
-        db.insert(scheduledEvents).values({
-          id: crypto.randomUUID(),
-          itemType: op.itemType,
-          itemId: op.itemId,
-          googleEventId: op.eventId || null,
-          start: op.start,
-          end: op.end,
-          status: op.status,
-          alternativeSlotsCount: null,
-          createdAt: now,
-          updatedAt: now,
-        }).run();
-      } else if (op.type === CalendarOpType.Update && op.eventId) {
-        db.update(scheduledEvents)
-          .set({ start: op.start, end: op.end, status: op.status, updatedAt: now })
-          .where(eq(scheduledEvents.id, op.eventId))
-          .run();
-      } else if (op.type === CalendarOpType.Delete && op.eventId) {
-        db.delete(scheduledEvents)
-          .where(eq(scheduledEvents.id, op.eventId))
-          .run();
+      for (const op of result.operations) {
+        const now = new Date().toISOString();
+        if (op.type === CalendarOpType.Create) {
+          db.insert(scheduledEvents).values({
+            id: crypto.randomUUID(),
+            itemType: op.itemType,
+            itemId: op.itemId,
+            title: op.title,
+            googleEventId: null,
+            start: op.start,
+            end: op.end,
+            status: op.status,
+            alternativeSlotsCount: null,
+            createdAt: now,
+            updatedAt: now,
+          }).run();
+        } else if (op.type === CalendarOpType.Update && op.eventId) {
+          db.update(scheduledEvents)
+            .set({ title: op.title, start: op.start, end: op.end, status: op.status, updatedAt: now })
+            .where(eq(scheduledEvents.id, op.eventId))
+            .run();
+        } else if (op.type === CalendarOpType.Delete && op.eventId) {
+          db.delete(scheduledEvents)
+            .where(eq(scheduledEvents.id, op.eventId))
+            .run();
+        }
       }
-    }
 
-    res.json({
-      message: 'Reschedule complete',
-      operationsApplied: result.operations.length,
-      unschedulable: result.unschedulable,
-    });
+      broadcast('schedule_updated', 'Manual reschedule');
+      res.json({ message: 'Reschedule complete', operationsApplied: result.operations.length, unschedulable: result.unschedulable });
+    }
   } catch (error: any) {
     console.error('Reschedule error:', error);
     res.status(500).json({ error: 'Reschedule failed' });
@@ -277,7 +291,7 @@ router.get('/export', (req, res) => {
       lines.push('BEGIN:VEVENT');
       lines.push(`DTSTART:${toICSDate(ev.start!)}`);
       lines.push(`DTEND:${toICSDate(ev.end!)}`);
-      lines.push(`SUMMARY:${ev.itemType || 'Event'} - ${ev.itemId || ''}`);
+      lines.push(`SUMMARY:${ev.title || ev.itemType || 'Event'}`);
       lines.push(`UID:${ev.id}@cadence`);
       lines.push(`DTSTAMP:${toICSDate(ev.createdAt || new Date().toISOString())}`);
       lines.push('END:VEVENT');
@@ -408,6 +422,7 @@ router.get('/:itemId/alternatives', (req, res) => {
 
     // Build timeline and generate candidates
     const timeline = buildTimeline(now, windowEnd, userSettings);
+    const tz = userSettings.timezone || 'UTC';
     const candidates = generateCandidateSlots(
       scheduleItem,
       timeline,
@@ -415,13 +430,14 @@ router.get('/:itemId/alternatives', (req, res) => {
       buf,
       existingPlacements,
       scheduleItem.dependsOn,
+      tz,
     );
 
     // Score and sort
     const scored = candidates.map((slot) => ({
       start: slot.start.toISOString(),
       end: slot.end.toISOString(),
-      score: scoreSlot(slot, scheduleItem, existingPlacements, buf),
+      score: scoreSlot(slot, scheduleItem, existingPlacements, buf, tz),
     }));
 
     scored.sort((a, b) => b.score - a.score);
@@ -430,6 +446,50 @@ router.get('/:itemId/alternatives', (req, res) => {
   } catch (error: any) {
     console.error('Alternatives error:', error);
     res.status(500).json({ error: 'Failed to compute alternatives' });
+  }
+});
+
+// DELETE /api/schedule/managed-events — delete ALL Cadence-managed events from Google Calendar and local DB
+router.delete('/managed-events', async (_req, res) => {
+  try {
+    const calClient = pollingRef.calClient;
+    let googleDeleted = 0;
+
+    if (calClient) {
+      // Delete from all enabled writable calendars
+      const enabledCals = db.select().from(calendars)
+        .where(eq(calendars.enabled, true))
+        .all();
+
+      for (const cal of enabledCals) {
+        const count = await calClient.deleteAllManagedEvents(cal.googleCalendarId);
+        googleDeleted += count;
+      }
+
+      // Also delete from primary calendar
+      const primaryCount = await calClient.deleteAllManagedEvents('primary');
+      googleDeleted += primaryCount;
+    }
+
+    // Clear all local scheduled events
+    const localRows = db.select().from(scheduledEvents).all();
+    const localCount = localRows.length;
+    for (const row of localRows) {
+      db.delete(scheduledEvents).where(eq(scheduledEvents.id, row.id)).run();
+    }
+
+    // Mark all pollers as written to skip the next poll cycle
+    pollingRef.manager?.markAllWritten();
+
+    broadcast('schedule_updated', 'Managed events cleared');
+    res.json({
+      message: 'All managed events deleted',
+      googleEventsDeleted: googleDeleted,
+      localEventsDeleted: localCount,
+    });
+  } catch (error: any) {
+    console.error('Nuke managed events error:', error);
+    res.status(500).json({ error: 'Failed to delete managed events' });
   }
 });
 

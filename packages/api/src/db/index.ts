@@ -111,6 +111,7 @@ sqlite.exec(`
     id TEXT PRIMARY KEY,
     itemType TEXT,
     itemId TEXT,
+    title TEXT,
     googleEventId TEXT,
     calendarId TEXT,
     start TEXT,
@@ -178,6 +179,7 @@ const migrations = [
   `ALTER TABLE tasks ADD COLUMN color TEXT`,
   `ALTER TABLE smart_meetings ADD COLUMN calendarId TEXT`,
   `ALTER TABLE smart_meetings ADD COLUMN color TEXT`,
+  `ALTER TABLE scheduled_events ADD COLUMN title TEXT`,
 ];
 for (const sql of migrations) {
   try { sqlite.exec(sql); } catch { /* Column already exists */ }
