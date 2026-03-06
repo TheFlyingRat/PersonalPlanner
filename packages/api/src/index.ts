@@ -262,11 +262,43 @@ function toBufConfig(row: any): BufferConfig {
   };
 }
 
+// Concurrency guard: only one reschedule at a time.
+// If a reschedule is requested while one is in progress, it is queued
+// and runs once the current one finishes.
+let isRescheduling = false;
+let pendingReschedule: { calClient: GoogleCalendarClient; manager: CalendarPollerManager; reason: string } | null = null;
+
 /**
  * Run the scheduling engine, apply operations to Google Calendar, and persist to DB.
  * Shared by both the poller callback and the periodic optimization timer.
  */
 async function runRescheduleAndApply(
+  calClient: GoogleCalendarClient,
+  manager: CalendarPollerManager,
+  reason: string,
+): Promise<number> {
+  if (isRescheduling) {
+    console.log(`[scheduler] Reschedule already in progress, queuing: ${reason}`);
+    pendingReschedule = { calClient, manager, reason };
+    return 0;
+  }
+
+  isRescheduling = true;
+  try {
+    return await doRescheduleAndApply(calClient, manager, reason);
+  } finally {
+    isRescheduling = false;
+    if (pendingReschedule) {
+      const next = pendingReschedule;
+      pendingReschedule = null;
+      runRescheduleAndApply(next.calClient, next.manager, next.reason).catch((err) => {
+        console.error(`[scheduler] Queued reschedule failed (${next.reason}):`, err);
+      });
+    }
+  }
+}
+
+async function doRescheduleAndApply(
   calClient: GoogleCalendarClient,
   manager: CalendarPollerManager,
   reason: string,
@@ -298,8 +330,40 @@ async function runRescheduleAndApply(
 
   // Load existing managed events from DB (future only — don't touch past events)
   const nowISO = new Date().toISOString();
-  const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents)
-    .where(gte(scheduledEvents.end, nowISO)).all().map((row: any) => ({
+  const rawRows = db.select().from(scheduledEvents)
+    .where(gte(scheduledEvents.end, nowISO)).all();
+
+  // Deduplicate: if multiple rows share the same itemId (from past race conditions),
+  // keep only the one with a googleEventId (or the newest) and delete the rest.
+  const byItemId = new Map<string, any[]>();
+  for (const row of rawRows) {
+    const key = row.itemId || row.id;
+    const group = byItemId.get(key) || [];
+    group.push(row);
+    byItemId.set(key, group);
+  }
+
+  const dedupedRows: any[] = [];
+  for (const [, group] of byItemId) {
+    if (group.length === 1) {
+      dedupedRows.push(group[0]);
+      continue;
+    }
+    // Prefer the row that has a googleEventId
+    group.sort((a: any, b: any) => {
+      if (a.googleEventId && !b.googleEventId) return -1;
+      if (!a.googleEventId && b.googleEventId) return 1;
+      return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+    });
+    dedupedRows.push(group[0]);
+    // Delete duplicate rows from DB
+    for (let i = 1; i < group.length; i++) {
+      db.delete(scheduledEvents).where(eq(scheduledEvents.id, group[i].id)).run();
+      console.log(`[scheduler] Removed duplicate scheduledEvent row: ${group[i].id} (itemId: ${group[i].itemId})`);
+    }
+  }
+
+  const existingEvents: CalendarEvent[] = dedupedRows.map((row: any) => ({
     id: row.id,
     googleEventId: row.googleEventId || '',
     title: row.title || '',
