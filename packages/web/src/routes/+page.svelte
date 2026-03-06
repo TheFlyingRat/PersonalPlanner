@@ -7,6 +7,8 @@
   import X from 'lucide-svelte/icons/x';
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import Eye from 'lucide-svelte/icons/eye';
+  import Lock from 'lucide-svelte/icons/lock';
+  import Unlock from 'lucide-svelte/icons/unlock';
   import MapPin from 'lucide-svelte/icons/map-pin';
   import Clock from 'lucide-svelte/icons/clock';
   import CalendarDays from 'lucide-svelte/icons/calendar-days';
@@ -420,6 +422,26 @@
     return !!event.itemId && ['habit', 'task', 'meeting'].includes(event.type);
   }
 
+  function canLock(event: CalEvent): boolean {
+    return event.type === 'habit' && !!event.itemId;
+  }
+
+  function isLocked(event: CalEvent): boolean {
+    return event.status === 'locked';
+  }
+
+  async function toggleLock(event: CalEvent) {
+    if (!event.itemId) return;
+    try {
+      await habitsApi.lock(event.itemId, !isLocked(event));
+      await fetchEvents();
+    } catch {
+      error = 'Failed to toggle lock.';
+    }
+    closeContextMenu();
+    closeDetail();
+  }
+
   function formatFullDate(iso: string): string {
     const d = new Date(iso);
     return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
@@ -784,16 +806,32 @@
     {/if}
 
     <!-- Actions -->
-    {#if canDelete(selectedEvent)}
+    {#if canLock(selectedEvent) || canDelete(selectedEvent)}
       <div class="detail-actions">
-        <button
-          class="detail-delete-btn"
-          onclick={() => deleteEvent(selectedEvent!)}
-          disabled={deleting}
-        >
-          <Trash2 size={14} strokeWidth={1.5} />
-          {deleting ? 'Deleting...' : `Delete ${styles.label}`}
-        </button>
+        {#if canLock(selectedEvent)}
+          <button
+            class="detail-lock-btn"
+            onclick={() => toggleLock(selectedEvent!)}
+          >
+            {#if isLocked(selectedEvent)}
+              <Unlock size={14} strokeWidth={1.5} />
+              Unlock
+            {:else}
+              <Lock size={14} strokeWidth={1.5} />
+              Lock
+            {/if}
+          </button>
+        {/if}
+        {#if canDelete(selectedEvent)}
+          <button
+            class="detail-delete-btn"
+            onclick={() => deleteEvent(selectedEvent!)}
+            disabled={deleting}
+          >
+            <Trash2 size={14} strokeWidth={1.5} />
+            {deleting ? 'Deleting...' : `Delete ${styles.label}`}
+          </button>
+        {/if}
       </div>
     {/if}
   </div>
@@ -825,6 +863,17 @@
       <Eye size={14} strokeWidth={1.5} />
       View details
     </button>
+    {#if canLock(contextMenu.event)}
+      <button class="ctx-item" role="menuitem" onclick={() => { toggleLock(contextMenu!.event); }}>
+        {#if isLocked(contextMenu.event)}
+          <Unlock size={14} strokeWidth={1.5} />
+          Unlock
+        {:else}
+          <Lock size={14} strokeWidth={1.5} />
+          Lock
+        {/if}
+      </button>
+    {/if}
     {#if canDelete(contextMenu.event)}
       <button class="ctx-item ctx-item--danger" role="menuitem" onclick={() => { deleteEvent(contextMenu!.event); }}>
         <Trash2 size={14} strokeWidth={1.5} />
@@ -1417,9 +1466,34 @@
   }
 
   .detail-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
     padding-top: var(--space-4);
     margin-top: auto;
     border-top: 1px solid var(--color-border);
+  }
+
+  .detail-lock-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+
+    &:hover {
+      background: var(--color-surface-active);
+      color: var(--color-text);
+    }
   }
 
   .detail-delete-btn {
