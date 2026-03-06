@@ -5,6 +5,7 @@ import { bufferConfig } from '../db/schema.js';
 import type { BufferConfig } from '@cadence/shared';
 import { updateBufferSchema } from '../validation.js';
 import { broadcast } from '../ws.js';
+import { triggerReschedule } from '../polling-ref.js';
 
 const router = Router();
 
@@ -53,6 +54,7 @@ router.put('/', (req, res) => {
 
   const updated = db.select().from(bufferConfig).where(eq(bufferConfig.id, 'default')).get();
   broadcast('schedule_updated', 'Buffer config updated');
+  triggerReschedule('Buffer config updated');
   res.json(toBufferConfig(updated!));
 });
 

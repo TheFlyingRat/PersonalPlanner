@@ -5,6 +5,7 @@ import { focusTimeRules } from '../db/schema.js';
 import type { FocusTimeRule } from '@cadence/shared';
 import { updateFocusSchema } from '../validation.js';
 import { broadcast } from '../ws.js';
+import { triggerReschedule } from '../polling-ref.js';
 
 const router = Router();
 
@@ -56,6 +57,7 @@ router.put('/', (req, res) => {
 
   const updated = db.select().from(focusTimeRules).where(eq(focusTimeRules.id, 'default')).get();
   broadcast('schedule_updated', 'Focus time updated');
+  triggerReschedule('Focus time updated');
   res.json(toFocusTimeRule(updated!));
 });
 

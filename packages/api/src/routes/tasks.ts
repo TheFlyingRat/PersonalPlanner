@@ -6,6 +6,7 @@ import type { CreateTaskRequest, Task, Subtask } from '@cadence/shared';
 import { createTaskSchema, updateTaskSchema } from '../validation.js';
 import { logActivity } from './activity.js';
 import { broadcast } from '../ws.js';
+import { triggerReschedule } from '../polling-ref.js';
 
 const router = Router();
 
@@ -52,6 +53,7 @@ router.post('/', (req, res) => {
   const created = db.select().from(tasks).where(eq(tasks.id, id)).get();
   logActivity('create', 'task', id, { name: body.name });
   broadcast('schedule_updated', 'Task created');
+  triggerReschedule('Task created');
   res.status(201).json(toTask(created!));
 });
 
@@ -95,6 +97,7 @@ router.put('/:id', (req, res) => {
   const updated = db.select().from(tasks).where(eq(tasks.id, id)).get();
   logActivity('update', 'task', id, { fields: Object.keys(updates) });
   broadcast('schedule_updated', 'Task updated');
+  triggerReschedule('Task updated');
   res.json(toTask(updated!));
 });
 
@@ -112,6 +115,7 @@ router.delete('/:id', (req, res) => {
   db.delete(tasks).where(eq(tasks.id, id)).run();
   logActivity('delete', 'task', id, { name: existing.name });
   broadcast('schedule_updated', 'Task deleted');
+  triggerReschedule('Task deleted');
 
   res.status(204).send();
 });
@@ -134,6 +138,7 @@ router.post('/:id/complete', (req, res) => {
 
   const updated = db.select().from(tasks).where(eq(tasks.id, id)).get();
   broadcast('schedule_updated', 'Task completed');
+  triggerReschedule('Task completed');
   res.json(toTask(updated!));
 });
 
@@ -158,6 +163,7 @@ router.post('/:id/up-next', (req, res) => {
 
   const updated = db.select().from(tasks).where(eq(tasks.id, id)).get();
   broadcast('schedule_updated', 'Task priority changed');
+  triggerReschedule('Task priority changed');
   res.json(toTask(updated!));
 });
 

@@ -7,7 +7,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { existsSync } from 'fs';
 import { timingSafeEqual } from 'crypto';
-import { eq } from 'drizzle-orm';
+import { eq, gte } from 'drizzle-orm';
 
 import { seed } from './db/seed.js';
 import { db } from './db/index.js';
@@ -296,8 +296,10 @@ async function runRescheduleAndApply(
         schedulingWindowDays: 14,
       };
 
-  // Load existing managed events from DB
-  const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents).all().map((row: any) => ({
+  // Load existing managed events from DB (future only — don't touch past events)
+  const nowISO = new Date().toISOString();
+  const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents)
+    .where(gte(scheduledEvents.end, nowISO)).all().map((row: any) => ({
     id: row.id,
     googleEventId: row.googleEventId || '',
     title: row.title || '',

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, gte } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { scheduledEvents, calendarEvents, calendars, habits, tasks, smartMeetings, focusTimeRules, bufferConfig, users } from '../db/schema.js';
 import { reschedule, generateCandidateSlots, scoreSlot, buildTimeline } from '@cadence/engine';
@@ -184,7 +184,9 @@ router.post('/reschedule', async (_req, res) => {
             schedulingWindowDays: 14,
           };
 
-      const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents).all().map((row: any) => ({
+      const nowISO = new Date().toISOString();
+      const existingEvents: CalendarEvent[] = db.select().from(scheduledEvents)
+        .where(gte(scheduledEvents.end, nowISO)).all().map((row: any) => ({
         id: row.id,
         googleEventId: row.googleEventId || '',
         title: row.title || '',

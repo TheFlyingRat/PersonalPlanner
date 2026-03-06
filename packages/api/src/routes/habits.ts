@@ -6,6 +6,7 @@ import type { CreateHabitRequest, Habit, FrequencyConfig, HabitCompletion } from
 import { createHabitSchema, updateHabitSchema } from '../validation.js';
 import { logActivity } from './activity.js';
 import { broadcast } from '../ws.js';
+import { triggerReschedule } from '../polling-ref.js';
 
 const router = Router();
 
@@ -55,6 +56,7 @@ router.post('/', (req, res) => {
   const created = db.select().from(habits).where(eq(habits.id, id)).get();
   logActivity('create', 'habit', id, { name: body.name });
   broadcast('schedule_updated', 'Habit created');
+  triggerReschedule('Habit created');
   res.status(201).json(toHabit(created!));
 });
 
@@ -101,6 +103,7 @@ router.put('/:id', (req, res) => {
   const updated = db.select().from(habits).where(eq(habits.id, id)).get();
   logActivity('update', 'habit', id, { fields: Object.keys(updates) });
   broadcast('schedule_updated', 'Habit updated');
+  triggerReschedule('Habit updated');
   res.json(toHabit(updated!));
 });
 
@@ -118,6 +121,7 @@ router.delete('/:id', (req, res) => {
   db.delete(habits).where(eq(habits.id, id)).run();
   logActivity('delete', 'habit', id, { name: existing.name });
   broadcast('schedule_updated', 'Habit deleted');
+  triggerReschedule('Habit deleted');
 
   res.status(204).send();
 });
@@ -143,6 +147,7 @@ router.post('/:id/lock', (req, res) => {
 
   const updated = db.select().from(habits).where(eq(habits.id, id)).get();
   broadcast('schedule_updated', 'Habit lock toggled');
+  triggerReschedule('Habit lock toggled');
   res.json(toHabit(updated!));
 });
 

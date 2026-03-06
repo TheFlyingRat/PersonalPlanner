@@ -6,6 +6,7 @@ import type { CreateMeetingRequest, SmartMeeting } from '@cadence/shared';
 import { createMeetingSchema, updateMeetingSchema } from '../validation.js';
 import { logActivity } from './activity.js';
 import { broadcast } from '../ws.js';
+import { triggerReschedule } from '../polling-ref.js';
 
 const router = Router();
 
@@ -51,6 +52,7 @@ router.post('/', (req, res) => {
   const created = db.select().from(smartMeetings).where(eq(smartMeetings.id, id)).get();
   logActivity('create', 'meeting', id, { name: body.name });
   broadcast('schedule_updated', 'Meeting created');
+  triggerReschedule('Meeting created');
   res.status(201).json(toMeeting(created!));
 });
 
@@ -93,6 +95,7 @@ router.put('/:id', (req, res) => {
   const updated = db.select().from(smartMeetings).where(eq(smartMeetings.id, id)).get();
   logActivity('update', 'meeting', id, { fields: Object.keys(updates) });
   broadcast('schedule_updated', 'Meeting updated');
+  triggerReschedule('Meeting updated');
   res.json(toMeeting(updated!));
 });
 
@@ -109,6 +112,7 @@ router.delete('/:id', (req, res) => {
   db.delete(smartMeetings).where(eq(smartMeetings.id, id)).run();
   logActivity('delete', 'meeting', id, { name: existing.name });
   broadcast('schedule_updated', 'Meeting deleted');
+  triggerReschedule('Meeting deleted');
 
   res.status(204).send();
 });
