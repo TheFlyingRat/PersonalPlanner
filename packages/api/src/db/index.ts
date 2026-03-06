@@ -40,6 +40,7 @@ sqlite.exec(`
     autoDecline INTEGER DEFAULT 0,
     dependsOn TEXT,
     enabled INTEGER DEFAULT 1,
+    skipBuffer INTEGER DEFAULT 0,
     calendarId TEXT,
     color TEXT,
     createdAt TEXT,
@@ -58,6 +59,7 @@ sqlite.exec(`
     schedulingHours TEXT,
     status TEXT DEFAULT 'open',
     isUpNext INTEGER DEFAULT 0,
+    skipBuffer INTEGER DEFAULT 0,
     calendarId TEXT,
     color TEXT,
     createdAt TEXT,
@@ -75,6 +77,7 @@ sqlite.exec(`
     windowEnd TEXT,
     location TEXT,
     conferenceType TEXT,
+    skipBuffer INTEGER DEFAULT 0,
     calendarId TEXT,
     color TEXT,
     createdAt TEXT,
@@ -180,6 +183,9 @@ const migrations = [
   `ALTER TABLE smart_meetings ADD COLUMN calendarId TEXT`,
   `ALTER TABLE smart_meetings ADD COLUMN color TEXT`,
   `ALTER TABLE scheduled_events ADD COLUMN title TEXT`,
+  `ALTER TABLE habits ADD COLUMN skipBuffer INTEGER DEFAULT 0`,
+  `ALTER TABLE tasks ADD COLUMN skipBuffer INTEGER DEFAULT 0`,
+  `ALTER TABLE smart_meetings ADD COLUMN skipBuffer INTEGER DEFAULT 0`,
 ];
 for (const sql of migrations) {
   try { sqlite.exec(sql); } catch { /* Column already exists */ }
