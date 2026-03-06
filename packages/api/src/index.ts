@@ -225,6 +225,7 @@ function toHabit(row: any): Habit {
     locked: !!row.locked,
     autoDecline: !!row.autoDecline,
     enabled: row.enabled !== false && row.enabled !== 0,
+    skipBuffer: !!row.skipBuffer,
   };
 }
 
@@ -235,6 +236,7 @@ function toTask(row: any): Task {
     schedulingHours: (row.schedulingHours || 'working') as SchedulingHours,
     status: (row.status || 'open') as TaskStatus,
     isUpNext: !!row.isUpNext,
+    skipBuffer: !!row.skipBuffer,
   };
 }
 
@@ -244,6 +246,7 @@ function toMeeting(row: any): SmartMeeting {
     priority: row.priority as Priority,
     frequency: row.frequency as Frequency,
     attendees: row.attendees ? JSON.parse(row.attendees) : [],
+    skipBuffer: !!row.skipBuffer,
   };
 }
 

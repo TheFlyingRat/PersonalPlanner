@@ -74,6 +74,7 @@
   let formAttendees = $state('');
   let formColor = $state('');
   let formCalendarId = $state('');
+  let formSkipBuffer = $state(false);
   let calendarList = $state<Calendar[]>([]);
 
   let panelEl = $state<HTMLDivElement | null>(null);
@@ -112,6 +113,7 @@
     formAttendees = '';
     formColor = '';
     formCalendarId = '';
+    formSkipBuffer = false;
     editingId = null;
   }
 
@@ -135,6 +137,7 @@
     formAttendees = meeting.attendees.join(', ');
     formColor = (meeting as any).color ?? '';
     formCalendarId = (meeting as any).calendarId ?? '';
+    formSkipBuffer = (meeting as any).skipBuffer ?? false;
     showPanel = true;
     tick().then(() => focusFirstInPanel());
   }
@@ -190,6 +193,7 @@
         .filter(Boolean),
       color: formColor || undefined,
       calendarId: formCalendarId || undefined,
+      skipBuffer: formSkipBuffer,
     };
 
     try {
@@ -495,6 +499,13 @@
             aria-label="No color"
           >&#x2715;</button>
         </div>
+      </div>
+
+      <div class="form-field" style="display: flex; gap: var(--space-4);">
+        <label class="toggle-label">
+          <input type="checkbox" bind:checked={formSkipBuffer} />
+          <span>No buffer time</span>
+        </label>
       </div>
 
       <div class="panel-footer">

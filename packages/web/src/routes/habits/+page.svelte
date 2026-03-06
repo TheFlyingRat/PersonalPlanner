@@ -209,6 +209,7 @@
   let formSchedulingHours = $state('working');
   let formLocked = $state(false);
   let formAutoDecline = $state(false);
+  let formSkipBuffer = $state(false);
   let formCalendarId = $state('');
   let formColor = $state('');
 
@@ -234,6 +235,7 @@
     formSchedulingHours = 'working';
     formLocked = false;
     formAutoDecline = false;
+    formSkipBuffer = false;
     formCalendarId = '';
     formColor = '';
     editingId = null;
@@ -259,6 +261,7 @@
     formSchedulingHours = habit.schedulingHours;
     formLocked = habit.locked;
     formAutoDecline = habit.autoDecline;
+    formSkipBuffer = (habit as any).skipBuffer ?? false;
     formCalendarId = (habit as any).calendarId ?? '';
     formColor = (habit as any).color ?? '';
     showPanel = true;
@@ -316,6 +319,7 @@
       schedulingHours: formSchedulingHours,
       locked: formLocked,
       autoDecline: formAutoDecline,
+      skipBuffer: formSkipBuffer,
       calendarId: formCalendarId || undefined,
       color: formColor || undefined,
     };
@@ -720,6 +724,10 @@
         <label class="toggle-label">
           <input type="checkbox" bind:checked={formAutoDecline} />
           <span>Auto-decline</span>
+        </label>
+        <label class="toggle-label">
+          <input type="checkbox" bind:checked={formSkipBuffer} />
+          <span>No buffer time</span>
         </label>
       </div>
 

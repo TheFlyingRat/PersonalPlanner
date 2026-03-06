@@ -42,6 +42,7 @@ router.post('/', (req, res) => {
     schedulingHours: body.schedulingHours ?? 'working',
     status: 'open',
     isUpNext: false,
+    skipBuffer: body.skipBuffer ?? false,
     calendarId: body.calendarId ?? null,
     color: body.color ?? null,
     createdAt: now,
@@ -89,6 +90,7 @@ router.put('/:id', (req, res) => {
   if (body.schedulingHours !== undefined) updates.schedulingHours = body.schedulingHours;
   if (body.status !== undefined) updates.status = body.status;
   if (body.isUpNext !== undefined) updates.isUpNext = body.isUpNext;
+  if (body.skipBuffer !== undefined) updates.skipBuffer = body.skipBuffer;
   if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
   if (body.color !== undefined) updates.color = body.color;
 
@@ -286,6 +288,7 @@ function toTask(row: typeof tasks.$inferSelect): Task {
     schedulingHours: (row.schedulingHours ?? 'working') as Task['schedulingHours'],
     status: (row.status ?? 'open') as Task['status'],
     isUpNext: row.isUpNext ?? false,
+    skipBuffer: row.skipBuffer ?? false,
     calendarId: row.calendarId ?? undefined,
     color: row.color ?? undefined,
     createdAt: row.createdAt ?? '',

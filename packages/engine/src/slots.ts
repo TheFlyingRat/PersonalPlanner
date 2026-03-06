@@ -36,7 +36,7 @@ export function generateCandidateSlots(
   const candidates: CandidateSlot[] = [];
   const durationMs = item.duration * 60 * 1000;
   const stepMs = 15 * 60 * 1000; // 15-minute step for sliding window
-  const bufferMs = bufferConfig.breakBetweenItemsMinutes * 60 * 1000;
+  const bufferMs = item.skipBuffer ? 0 : bufferConfig.breakBetweenItemsMinutes * 60 * 1000;
 
   // Resolve dependency placement for hard constraint
   const depPlacement = (dependsOn && existingPlacements)

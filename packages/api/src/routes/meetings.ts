@@ -41,6 +41,7 @@ router.post('/', (req, res) => {
     windowEnd: body.windowEnd,
     location: body.location ?? '',
     conferenceType: body.conferenceType ?? 'none',
+    skipBuffer: body.skipBuffer ?? false,
     calendarId: body.calendarId ?? null,
     color: body.color ?? null,
     createdAt: now,
@@ -87,6 +88,7 @@ router.put('/:id', (req, res) => {
   if (body.windowEnd !== undefined) updates.windowEnd = body.windowEnd;
   if (body.location !== undefined) updates.location = body.location;
   if (body.conferenceType !== undefined) updates.conferenceType = body.conferenceType;
+  if (body.skipBuffer !== undefined) updates.skipBuffer = body.skipBuffer;
   if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
   if (body.color !== undefined) updates.color = body.color;
 
@@ -130,6 +132,7 @@ function toMeeting(row: typeof smartMeetings.$inferSelect): SmartMeeting {
     windowEnd: row.windowEnd ?? '',
     location: row.location ?? '',
     conferenceType: row.conferenceType ?? 'none',
+    skipBuffer: row.skipBuffer ?? false,
     calendarId: row.calendarId ?? undefined,
     color: row.color ?? undefined,
     createdAt: row.createdAt ?? '',

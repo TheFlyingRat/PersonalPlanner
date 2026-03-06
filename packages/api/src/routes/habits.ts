@@ -45,6 +45,7 @@ router.post('/', (req, res) => {
     autoDecline: body.autoDecline ?? false,
     dependsOn: body.dependsOn ?? null,
     enabled: true,
+    skipBuffer: body.skipBuffer ?? false,
     calendarId: body.calendarId ?? null,
     color: body.color ?? null,
     createdAt: now,
@@ -95,6 +96,7 @@ router.put('/:id', (req, res) => {
   if (body.autoDecline !== undefined) updates.autoDecline = body.autoDecline;
   if (body.dependsOn !== undefined) updates.dependsOn = body.dependsOn;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
+  if (body.skipBuffer !== undefined) updates.skipBuffer = body.skipBuffer;
   if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
   if (body.color !== undefined) updates.color = body.color;
 
@@ -261,6 +263,7 @@ function toHabit(row: typeof habits.$inferSelect): Habit {
     autoDecline: row.autoDecline ?? false,
     dependsOn: row.dependsOn ?? null,
     enabled: row.enabled ?? true,
+    skipBuffer: row.skipBuffer ?? false,
     calendarId: row.calendarId ?? undefined,
     color: row.color ?? undefined,
     createdAt: row.createdAt ?? '',

@@ -101,6 +101,7 @@
   let calendarList = $state<Calendar[]>([]);
   let formCalendarId = $state('');
   let formColor = $state('');
+  let formSkipBuffer = $state(false);
 
   // Subtask state
   let subtasks = $state<Subtask[]>([]);
@@ -155,6 +156,7 @@
     formChunkMax = 60;
     formCalendarId = '';
     formColor = '';
+    formSkipBuffer = false;
     editingId = null;
   }
 
@@ -256,6 +258,7 @@
     formChunkMax = task.chunkMax;
     formCalendarId = (task as any).calendarId ?? '';
     formColor = (task as any).color ?? '';
+    formSkipBuffer = (task as any).skipBuffer ?? false;
     newSubtaskName = '';
     showPanel = true;
     tick().then(() => focusFirstInPanel());
@@ -307,6 +310,7 @@
       chunkMax: formChunkMax,
       calendarId: formCalendarId || undefined,
       color: formColor || undefined,
+      skipBuffer: formSkipBuffer,
     };
 
     try {
@@ -622,6 +626,13 @@
             aria-label="No color"
           >&#x2715;</button>
         </div>
+      </div>
+
+      <div class="form-field" style="display: flex; gap: var(--space-4);">
+        <label class="toggle-label">
+          <input type="checkbox" bind:checked={formSkipBuffer} />
+          <span>No buffer time</span>
+        </label>
       </div>
 
       {#if editingId}

@@ -28,6 +28,7 @@ function makeItem(overrides: Partial<ScheduleItem> = {}): ScheduleItem {
     },
     idealTime: '10:00',
     duration: 30,
+    skipBuffer: false,
     locked: false,
     dependsOn: null,
     ...overrides,

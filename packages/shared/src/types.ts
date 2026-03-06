@@ -72,6 +72,7 @@ export interface Habit {
   autoDecline: boolean;
   dependsOn: string | null; // habit ID
   enabled: boolean;
+  skipBuffer: boolean;
   calendarId?: string;
   color?: string;
   createdAt: string;
@@ -99,6 +100,7 @@ export interface Task {
   schedulingHours: SchedulingHours;
   status: TaskStatus;
   isUpNext: boolean;
+  skipBuffer: boolean;
   calendarId?: string;
   color?: string;
   createdAt: string;
@@ -118,6 +120,7 @@ export interface SmartMeeting {
   windowEnd: string;         // HH:MM
   location: string;
   conferenceType: string;    // zoom | meet | teams | none
+  skipBuffer: boolean;
   calendarId?: string;
   color?: string;
   createdAt: string;
@@ -230,6 +233,7 @@ export interface ScheduleItem {
   idealTime: string;        // HH:MM preferred time
   duration: number;         // minutes (preferred / max duration)
   durationMin?: number;     // minimum acceptable duration (for flexible items)
+  skipBuffer: boolean;      // skip buffer/travel time for this item
   locked: boolean;
   dependsOn: string | null;
 }
@@ -300,6 +304,7 @@ export interface CreateHabitRequest {
   schedulingHours?: SchedulingHours;
   autoDecline?: boolean;
   dependsOn?: string | null;
+  skipBuffer?: boolean;
   calendarId?: string;
   color?: string;
 }
@@ -313,6 +318,7 @@ export interface CreateTaskRequest {
   chunkMin?: number;
   chunkMax?: number;
   schedulingHours?: SchedulingHours;
+  skipBuffer?: boolean;
   calendarId?: string;
   color?: string;
 }
@@ -328,6 +334,7 @@ export interface CreateMeetingRequest {
   windowEnd: string;
   location?: string;
   conferenceType?: string;
+  skipBuffer?: boolean;
   calendarId?: string;
   color?: string;
 }

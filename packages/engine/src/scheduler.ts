@@ -135,6 +135,7 @@ function habitsToScheduleItems(
           idealTime: habit.idealTime,
           duration,
           durationMin,
+          skipBuffer: habit.skipBuffer ?? false,
           locked: habit.locked,
           dependsOn: habit.dependsOn
             ? `${habit.dependsOn}__${toLocalDateStr(day, tz)}`
@@ -175,6 +176,7 @@ function habitsToScheduleItems(
           idealTime: habit.idealTime,
           duration,
           durationMin,
+          skipBuffer: habit.skipBuffer ?? false,
           locked: habit.locked,
           dependsOn: habit.dependsOn
             ? `${habit.dependsOn}__${dayStr}`
@@ -217,6 +219,7 @@ function habitsToScheduleItems(
           idealTime: habit.idealTime,
           duration,
           durationMin,
+          skipBuffer: habit.skipBuffer ?? false,
           locked: habit.locked,
           dependsOn: habit.dependsOn
             ? `${habit.dependsOn}__${dayStr}`
@@ -300,6 +303,7 @@ function tasksToScheduleItems(
         timeWindow,
         idealTime: hourStart, // prefer early in scheduling window
         duration: thisChunkSize,
+        skipBuffer: task.skipBuffer ?? false,
         locked: false,
         dependsOn: i > 0 ? `${task.id}__chunk${i - 1}` : null,
       });
@@ -338,6 +342,7 @@ function meetingsToScheduleItems(
           timeWindow,
           idealTime: meeting.idealTime,
           duration: meeting.duration,
+          skipBuffer: meeting.skipBuffer ?? false,
           locked: false,
           dependsOn: null,
         });
@@ -371,6 +376,7 @@ function meetingsToScheduleItems(
           timeWindow,
           idealTime: meeting.idealTime,
           duration: meeting.duration,
+          skipBuffer: meeting.skipBuffer ?? false,
           locked: false,
           dependsOn: null,
         });
@@ -408,6 +414,7 @@ function meetingsToScheduleItems(
           timeWindow,
           idealTime: meeting.idealTime,
           duration: meeting.duration,
+          skipBuffer: meeting.skipBuffer ?? false,
           locked: false,
           dependsOn: null,
         });
@@ -808,6 +815,7 @@ function placeFocusTime(
         timeWindow: buildDayWindow(day, hourStart, hourEnd, tz),
         idealTime: hourStart,
         duration: Math.min(blockSize, targetRemaining - placedTotal),
+        skipBuffer: false,
         locked: false,
         dependsOn: null,
       };

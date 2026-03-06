@@ -45,6 +45,7 @@ export const habits = sqliteTable('habits', {
   autoDecline: integer('autoDecline', { mode: 'boolean' }).default(false),
   dependsOn: text('dependsOn'), // FK to habits.id (self-reference)
   enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  skipBuffer: integer('skipBuffer', { mode: 'boolean' }).default(false),
   calendarId: text('calendarId'),
   color: text('color'),
   createdAt: text('createdAt'),
@@ -67,6 +68,7 @@ export const tasks = sqliteTable('tasks', {
   schedulingHours: text('schedulingHours'),
   status: text('status').default('open'),
   isUpNext: integer('isUpNext', { mode: 'boolean' }).default(false),
+  skipBuffer: integer('skipBuffer', { mode: 'boolean' }).default(false),
   calendarId: text('calendarId'),
   color: text('color'),
   createdAt: text('createdAt'),
@@ -88,6 +90,7 @@ export const smartMeetings = sqliteTable('smart_meetings', {
   windowEnd: text('windowEnd'),
   location: text('location'),
   conferenceType: text('conferenceType'),
+  skipBuffer: integer('skipBuffer', { mode: 'boolean' }).default(false),
   calendarId: text('calendarId'),
   color: text('color'),
   createdAt: text('createdAt'),

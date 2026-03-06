@@ -115,6 +115,7 @@ function toHabit(row: any): Habit {
     locked: !!row.locked,
     autoDecline: !!row.autoDecline,
     enabled: row.enabled !== false && row.enabled !== 0,
+    skipBuffer: !!row.skipBuffer,
   };
 }
 
@@ -125,6 +126,7 @@ function toTask(row: any): Task {
     schedulingHours: (row.schedulingHours || 'working') as SchedulingHours,
     status: (row.status || 'open') as TaskStatus,
     isUpNext: !!row.isUpNext,
+    skipBuffer: !!row.skipBuffer,
   };
 }
 
@@ -134,6 +136,7 @@ function toMeeting(row: any): SmartMeeting {
     priority: row.priority as Priority,
     frequency: row.frequency as Frequency,
     attendees: row.attendees ? JSON.parse(row.attendees) : [],
+    skipBuffer: !!row.skipBuffer,
   };
 }
 
@@ -392,7 +395,9 @@ router.get('/:itemId/alternatives', (req, res) => {
         priority: h.priority,
         timeWindow: { start: now, end: windowEnd },
         idealTime: h.idealTime,
-        duration: Math.round((h.durationMin + h.durationMax) / 2),
+        duration: h.durationMax,
+        durationMin: h.durationMin,
+        skipBuffer: h.skipBuffer,
         locked: h.locked,
         dependsOn: h.dependsOn,
       };
@@ -405,6 +410,7 @@ router.get('/:itemId/alternatives', (req, res) => {
         timeWindow: { start: now, end: t.dueDate ? new Date(t.dueDate) : windowEnd },
         idealTime: '10:00',
         duration: Math.min(t.remainingDuration, t.chunkMax),
+        skipBuffer: t.skipBuffer,
         locked: false,
         dependsOn: null,
       };
@@ -417,6 +423,7 @@ router.get('/:itemId/alternatives', (req, res) => {
         timeWindow: { start: now, end: windowEnd },
         idealTime: m.idealTime || '10:00',
         duration: m.duration,
+        skipBuffer: m.skipBuffer,
         locked: false,
         dependsOn: null,
       };
