@@ -200,7 +200,6 @@
             <span style="font-size: 14px; color: var(--color-text);">
               {googleConnected ? 'Connected' : 'Disconnected'}
             </span>
-            <span class="sr-only">{googleConnected ? 'Connected' : 'Disconnected'}</span>
           </div>
           <button
             onclick={connectGoogle}
