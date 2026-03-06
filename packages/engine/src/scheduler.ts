@@ -112,8 +112,9 @@ function habitsToScheduleItems(
   for (const habit of habits) {
     if (!habit.enabled) continue;
 
-    // Choose ideal duration (midpoint of min/max)
-    const duration = Math.round((habit.durationMin + habit.durationMax) / 2);
+    // Prefer max duration; compress to min only when slot is tight
+    const duration = habit.durationMax;
+    const durationMin = habit.durationMin;
 
     if (habit.frequency === Frequency.Daily) {
       const applicableDays = habit.frequencyConfig?.days ?? [
@@ -133,6 +134,7 @@ function habitsToScheduleItems(
           timeWindow,
           idealTime: habit.idealTime,
           duration,
+          durationMin,
           locked: habit.locked,
           dependsOn: habit.dependsOn
             ? `${habit.dependsOn}__${toLocalDateStr(day, tz)}`
@@ -172,6 +174,7 @@ function habitsToScheduleItems(
           timeWindow,
           idealTime: habit.idealTime,
           duration,
+          durationMin,
           locked: habit.locked,
           dependsOn: habit.dependsOn
             ? `${habit.dependsOn}__${dayStr}`
@@ -213,6 +216,7 @@ function habitsToScheduleItems(
           timeWindow,
           idealTime: habit.idealTime,
           duration,
+          durationMin,
           locked: habit.locked,
           dependsOn: habit.dependsOn
             ? `${habit.dependsOn}__${dayStr}`
@@ -599,9 +603,19 @@ export function reschedule(
 
   for (const item of flexibleItems) {
     // Generate candidates (pass placements and dependsOn for hard dependency constraint)
-    const candidates = generateCandidateSlots(
+    let candidates = generateCandidateSlots(
       item, timeline, occupiedSlots, bufferConfig, placements, item.dependsOn, tz,
     );
+
+    // If no candidates at preferred (max) duration, retry with min duration
+    let effectiveItem = item;
+    if (candidates.length === 0 && item.durationMin && item.durationMin < item.duration) {
+      effectiveItem = { ...item, duration: item.durationMin };
+      candidates = generateCandidateSlots(
+        effectiveItem, timeline, occupiedSlots, bufferConfig, placements, item.dependsOn, tz,
+      );
+    }
+
     candidateSlotsMap.set(item.id, candidates);
 
     if (candidates.length === 0) {
@@ -616,7 +630,7 @@ export function reschedule(
     // Score each candidate
     const scoredCandidates = candidates.map((candidate) => ({
       ...candidate,
-      score: scoreSlot(candidate, item, placements, bufferConfig, tz),
+      score: scoreSlot(candidate, effectiveItem, placements, bufferConfig, tz),
     }));
 
     // Sort by score descending

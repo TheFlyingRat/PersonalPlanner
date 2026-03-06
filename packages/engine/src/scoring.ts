@@ -36,11 +36,16 @@ function dateToMinutesSinceMidnight(d: Date, tz?: string): number {
 /**
  * Score a candidate slot for a given schedule item.
  *
+ * When idealTime is explicitly set by the user, ideal-time proximity
+ * dominates (55 pts) and the generic time-of-day bias is suppressed.
+ * Otherwise the original balanced weights apply.
+ *
  * Scoring factors (total 0-100):
- *  - Proximity to ideal time: 40% (40 points max)
- *  - Buffer compliance: 25% (25 points max)
- *  - Continuity with related items: 20% (20 points max)
- *  - Time-of-day preference: 15% (15 points max)
+ *  With idealTime:       Without idealTime:
+ *  - Ideal time: 55      - Ideal time: 40
+ *  - Buffer:     20      - Buffer:     25
+ *  - Continuity: 20      - Continuity: 20
+ *  - Time-of-day: 5      - Time-of-day: 15
  */
 export function scoreSlot(
   slot: CandidateSlot,
@@ -51,17 +56,23 @@ export function scoreSlot(
 ): number {
   let score = 0;
 
-  // 1. Proximity to ideal time (40 points)
-  score += scoreIdealTimeProximity(slot, item, tz) * 40;
+  const hasIdealTime = !!item.idealTime && /^\d{1,2}:\d{2}$/.test(item.idealTime);
+  const wIdeal = hasIdealTime ? 55 : 40;
+  const wBuffer = hasIdealTime ? 20 : 25;
+  const wContinuity = 20;
+  const wTimeOfDay = hasIdealTime ? 5 : 15;
 
-  // 2. Buffer compliance (25 points)
-  score += scoreBufferCompliance(slot, existingPlacements, bufferConfig, tz) * 25;
+  // 1. Proximity to ideal time
+  score += scoreIdealTimeProximity(slot, item, tz) * wIdeal;
 
-  // 3. Continuity with related/dependent items (20 points)
-  score += scoreContinuity(slot, item, existingPlacements, tz) * 20;
+  // 2. Buffer compliance
+  score += scoreBufferCompliance(slot, existingPlacements, bufferConfig, tz) * wBuffer;
 
-  // 4. Time-of-day preference (15 points)
-  score += scoreTimeOfDay(slot, item) * 15;
+  // 3. Continuity with related/dependent items
+  score += scoreContinuity(slot, item, existingPlacements, tz) * wContinuity;
+
+  // 4. Time-of-day preference
+  score += scoreTimeOfDay(slot, item) * wTimeOfDay;
 
   return Math.round(score * 100) / 100;
 }
@@ -69,17 +80,21 @@ export function scoreSlot(
 /**
  * Score proximity to ideal time (0-1 scale).
  * Ideal time is an HH:MM preference. The closer the slot start is, the better.
- * We measure distance in minutes and normalize by half a day (720 minutes).
+ *
+ * Uses a Gaussian decay so that being right on the ideal time scores ~1.0,
+ * 30 min away scores ~0.70, 60 min away scores ~0.24, and 2h+ away is near 0.
+ * This makes the ideal time a strong attractor when explicitly set.
  */
 function scoreIdealTimeProximity(slot: CandidateSlot, item: ScheduleItem, tz?: string): number {
   const idealMinutes = parseTimeToMinutes(item.idealTime);
   const slotMinutes = dateToMinutesSinceMidnight(slot.start, tz);
 
   const diff = Math.abs(slotMinutes - idealMinutes);
-  const maxDiff = 720; // half day
-  const normalized = Math.min(diff, maxDiff) / maxDiff;
 
-  return 1 - normalized;
+  // Gaussian decay: sigma = 75 min
+  // On-target: 1.0, 30min off: 0.92, 60min off: 0.73, 2h off: 0.28
+  const sigma = 75;
+  return Math.exp(-(diff * diff) / (2 * sigma * sigma));
 }
 
 /**

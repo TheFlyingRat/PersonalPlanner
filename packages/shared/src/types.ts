@@ -228,7 +228,8 @@ export interface ScheduleItem {
   priority: Priority;
   timeWindow: TimeSlot;     // allowed scheduling window
   idealTime: string;        // HH:MM preferred time
-  duration: number;         // minutes (chosen from min/max)
+  duration: number;         // minutes (preferred / max duration)
+  durationMin?: number;     // minimum acceptable duration (for flexible items)
   locked: boolean;
   dependsOn: string | null;
 }
