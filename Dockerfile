@@ -23,6 +23,7 @@ COPY packages/api/ packages/api/
 COPY packages/web/ packages/web/
 
 # Build all packages in dependency order
+ENV NODE_OPTIONS="--max-old-space-size=1024"
 RUN pnpm -r build
 
 # --- Production image ---
