@@ -2,7 +2,7 @@
 // A single shared connection is opened on first subscribe() and closed when
 // the last listener unsubscribes. Reconnects automatically with exponential backoff.
 import { browser } from '$app/environment';
-import { env } from '$env/dynamic/public';
+import { PUBLIC_API_URL } from '$env/static/public';
 
 type MessageHandler = (data: { type: string; reason: string; timestamp: string }) => void;
 export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
@@ -23,7 +23,7 @@ function setConnectionState(state: ConnectionState): void {
 }
 
 function getWsUrl(): string {
-  const apiUrl = env.PUBLIC_API_URL || '';
+  const apiUrl = PUBLIC_API_URL || '';
   if (apiUrl) {
     // Derive WS URL from API URL: https://api.example.com/api → wss://api.example.com/ws
     const url = new URL(apiUrl);

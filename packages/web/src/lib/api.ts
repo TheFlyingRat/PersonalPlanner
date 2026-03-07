@@ -1,6 +1,6 @@
 // API Client - Typed fetch wrapper for all endpoints
 
-import { env } from '$env/dynamic/public';
+import { PUBLIC_API_URL } from '$env/static/public';
 import type {
   Habit,
   CreateHabitRequest,
@@ -25,7 +25,7 @@ import type {
 } from '@cadence/shared';
 import { CalendarMode } from '@cadence/shared';
 
-const API_BASE = env.PUBLIC_API_URL || '/api';
+const API_BASE = PUBLIC_API_URL || '/api';
 
 export interface RescheduleResult {
   message: string;

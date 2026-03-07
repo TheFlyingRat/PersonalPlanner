@@ -11,8 +11,6 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/engine/package.json packages/engine/
 COPY packages/api/package.json packages/api/
-COPY packages/web/package.json packages/web/
-
 # Install dependencies
 RUN pnpm install --frozen-lockfile
 
@@ -20,11 +18,10 @@ RUN pnpm install --frozen-lockfile
 COPY packages/shared/ packages/shared/
 COPY packages/engine/ packages/engine/
 COPY packages/api/ packages/api/
-COPY packages/web/ packages/web/
 
-# Build all packages in dependency order
+# Build shared, engine, api only
 ENV NODE_OPTIONS="--max-old-space-size=2048"
-RUN pnpm -r build
+RUN pnpm --filter @cadence/shared --filter @cadence/engine --filter @cadence/api build
 
 # --- Production image ---
 FROM node:22-alpine
@@ -45,7 +42,6 @@ RUN pnpm install --frozen-lockfile --prod
 COPY --from=builder /app/packages/shared/dist packages/shared/dist
 COPY --from=builder /app/packages/engine/dist packages/engine/dist
 COPY --from=builder /app/packages/api/dist packages/api/dist
-COPY --from=builder /app/packages/web/build packages/web/build
 
 RUN chown -R appuser:appgroup /app
 

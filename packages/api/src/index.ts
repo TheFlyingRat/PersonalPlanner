@@ -1,12 +1,12 @@
 import dotenv from 'dotenv';
-import { resolve, join } from 'path';
+import { resolve } from 'path';
 dotenv.config({ path: resolve(import.meta.dirname, '../../../.env') });
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { existsSync } from 'fs';
+
 
 // Startup validation
 if (process.env.NODE_ENV === 'production') {
@@ -170,16 +170,6 @@ app.use('/api/activity', activityRouter);
 app.use('/api/book', bookingRouter);
 app.use('/api/quick-add', quickAddRouter);
 
-// Serve static SvelteKit build in production
-const webBuildPath = resolve(import.meta.dirname, '../../web/build');
-if (existsSync(webBuildPath)) {
-  app.use(express.static(webBuildPath));
-}
-
-// SPA fallback: serve index.html for any non-API route (client-side routing)
-app.get('/{*path}', (_req, res) => {
-  res.sendFile(join(import.meta.dirname, '../../web/build/index.html'));
-});
 
 // Global error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
