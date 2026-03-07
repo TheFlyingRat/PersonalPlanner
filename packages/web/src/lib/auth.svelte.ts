@@ -107,9 +107,11 @@ export async function refreshToken(): Promise<boolean> {
   }
 }
 
-export function googleAuth(): void {
+export async function googleAuth(): Promise<void> {
   if (browser) {
-    window.location.href = `${API_BASE}/auth/google`;
+    const res = await fetch(`${API_BASE}/auth/google`, { credentials: 'include' });
+    const { redirectUrl } = await res.json();
+    window.location.href = redirectUrl;
   }
 }
 

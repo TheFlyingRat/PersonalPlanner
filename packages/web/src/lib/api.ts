@@ -347,8 +347,10 @@ export const auth = {
     request<{ user: { id: string; name: string; email: string; emailVerified: boolean; onboardingCompleted: boolean } }>('/auth/refresh', { method: 'POST' }),
   me: () =>
     request<{ user: { id: string; name: string; email: string; avatarUrl: string | null; emailVerified: boolean; hasPassword: boolean; plan: string; onboardingCompleted: boolean } }>('/auth/me'),
-  google: () => {
-    window.location.href = `${API_BASE}/auth/google`;
+  google: async () => {
+    const res = await fetch(`${API_BASE}/auth/google`, { credentials: 'include' });
+    const { redirectUrl } = await res.json();
+    window.location.href = redirectUrl;
   },
   verifyEmail: (token: string) =>
     request<void>('/auth/verify-email', {
