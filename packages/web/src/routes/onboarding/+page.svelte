@@ -33,6 +33,11 @@
     try {
       const status = await settingsApi.getGoogleStatus();
       calendarConnected = status.connected;
+      // Skip welcome + calendar steps if already connected via Google sign-in
+      if (calendarConnected && currentStep < 2) {
+        currentStep = 2;
+        stepKey += 1;
+      }
     } catch {
       // ignore
     }
@@ -151,7 +156,8 @@
   }
 
   function prevStep() {
-    if (currentStep > 0) {
+    const minStep = calendarConnected ? 2 : 0;
+    if (currentStep > minStep) {
       currentStep -= 1;
       stepKey += 1;
     }
