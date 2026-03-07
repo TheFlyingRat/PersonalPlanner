@@ -298,11 +298,11 @@ export class UserScheduler {
     }
 
     // Determine default calendars
-    const defaultHabitCalId = (userSettings as any).defaultHabitCalendarId || 'primary';
-    const defaultTaskCalId = (userSettings as any).defaultTaskCalendarId || 'primary';
+    const defaultHabitCalId = (userSettings as any).defaultHabitCalendarId || null;
+    const defaultTaskCalId = (userSettings as any).defaultTaskCalendarId || null;
 
-    const habitCal = await db.select().from(calendars).where(eq(calendars.id, defaultHabitCalId));
-    const taskCal = await db.select().from(calendars).where(eq(calendars.id, defaultTaskCalId));
+    const habitCal = defaultHabitCalId ? await db.select().from(calendars).where(eq(calendars.id, defaultHabitCalId)) : [];
+    const taskCal = defaultTaskCalId ? await db.select().from(calendars).where(eq(calendars.id, defaultTaskCalId)) : [];
 
     const habitCalRow = habitCal[0];
     const habitGoogleCalId = (habitCalRow?.enabled && habitCalRow?.mode === 'writable')
@@ -371,7 +371,8 @@ export class UserScheduler {
     // Group and apply operations by Google Calendar
     const opsByGoogleCal = new Map<string, typeof result.operations>();
     for (const op of result.operations) {
-      const cal = await db.select().from(calendars).where(eq(calendars.id, op.calendarId!));
+      const isUuid = op.calendarId && op.calendarId !== 'primary';
+      const cal = isUuid ? await db.select().from(calendars).where(eq(calendars.id, op.calendarId!)) : [];
       const googleCalId = cal[0]?.googleCalendarId || 'primary';
       const existingOps = opsByGoogleCal.get(googleCalId) || [];
       existingOps.push(op);
@@ -458,7 +459,8 @@ export class UserScheduler {
         }).where(eq(scheduledEvents.id, local.id));
 
         if (local.googleEventId) {
-          const calRows = local.calendarId
+          const calIsUuid = local.calendarId && local.calendarId !== 'primary';
+          const calRows = calIsUuid
             ? await db.select().from(calendars).where(eq(calendars.id, local.calendarId))
             : [];
           const googleCalId = calRows[0]?.googleCalendarId || 'primary';
