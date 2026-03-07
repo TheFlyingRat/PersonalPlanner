@@ -54,7 +54,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       'Content-Type': 'application/json',
       ...options?.headers,
     },
-    credentials: 'same-origin',
+    credentials: 'include',
   });
   if (!res.ok) {
     // 401 interceptor: try refresh, then redirect to login
@@ -62,7 +62,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       try {
         const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
           method: 'POST',
-          credentials: 'same-origin',
+          credentials: 'include',
         });
         if (refreshRes.ok) {
           // Retry the original request
@@ -203,7 +203,7 @@ export const schedule = {
     if (end) params.set('end', end);
     const qs = params.toString();
     const res = await fetch(`${API_BASE}/schedule/export${qs ? '?' + qs : ''}`, {
-      credentials: 'same-origin',
+      credentials: 'include',
     });
     if (!res.ok) {
       throw new ApiError(`Export failed: ${res.status}`, res.status);
@@ -379,7 +379,7 @@ export const auth = {
     }),
   exportData: async () => {
     const res = await fetch(`${API_BASE}/auth/export`, {
-      credentials: 'same-origin',
+      credentials: 'include',
     });
     if (!res.ok) {
       throw new ApiError(`Export failed: ${res.status}`, res.status);

@@ -461,7 +461,7 @@ export class UserScheduler {
         if (local.googleEventId) {
           const calIsUuid = local.calendarId && local.calendarId !== 'primary';
           const calRows = calIsUuid
-            ? await db.select().from(calendars).where(eq(calendars.id, local.calendarId))
+            ? await db.select().from(calendars).where(eq(calendars.id, local.calendarId!))
             : [];
           const googleCalId = calRows[0]?.googleCalendarId || 'primary';
           const op: import('@cadence/shared').CalendarOperation = {

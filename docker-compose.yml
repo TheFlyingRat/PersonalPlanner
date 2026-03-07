@@ -34,6 +34,7 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN:-http://localhost:3000}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
       - TRUST_PROXY=${TRUST_PROXY:-}
+      - COOKIE_SAMESITE=${COOKIE_SAMESITE:-lax}
       - SMTP_HOST=${SMTP_HOST:-}
       - SMTP_PORT=${SMTP_PORT:-587}
       - SMTP_USER=${SMTP_USER:-}

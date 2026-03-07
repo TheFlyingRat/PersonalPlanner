@@ -41,10 +41,13 @@ export function getRefreshTokenExpiry(): string {
 export function setAuthCookies(res: Response, accessToken: string, refreshToken: string): void {
   const isProduction = process.env.NODE_ENV === 'production';
 
+  // Cross-domain deployment (API and frontend on different domains) requires SameSite=None
+  const sameSite = process.env.COOKIE_SAMESITE === 'none' ? 'none' as const : 'lax' as const;
+
   res.cookie('access_token', accessToken, {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: 'lax',
+    secure: isProduction || sameSite === 'none',
+    sameSite,
     path: '/',
     maxAge: 15 * 60 * 1000, // 15 minutes
   });
@@ -52,7 +55,7 @@ export function setAuthCookies(res: Response, accessToken: string, refreshToken:
   res.cookie('refresh_token', refreshToken, {
     httpOnly: true,
     secure: isProduction,
-    sameSite: 'lax',
+    sameSite,
     path: '/api/auth',
     maxAge: REFRESH_TOKEN_EXPIRY_MS,
   });

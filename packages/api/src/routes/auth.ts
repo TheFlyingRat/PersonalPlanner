@@ -517,7 +517,7 @@ router.get('/google/callback', async (req, res) => {
 
     // Redirect based on onboarding status
     if (!user.onboardingCompleted) {
-      res.redirect(`${frontendOrigin}/onboarding`);
+      res.redirect(`${frontendOrigin}/onboarding?step=2`);
     } else {
       res.redirect(`${frontendOrigin}/?google=connected`);
     }

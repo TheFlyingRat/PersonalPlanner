@@ -1,6 +1,8 @@
 <script lang="ts">
   import { pageTitle } from '$lib/brand';
   import { goto } from '$app/navigation';
+  import { page } from '$app/state';
+  import { onMount } from 'svelte';
   import { getAuthState, googleAuth } from '$lib/auth.svelte';
   import { settings as settingsApi, habits as habitsApi } from '$lib/api';
   import { Frequency } from '@cadence/shared';
@@ -19,11 +21,22 @@
 
   const TOTAL_STEPS = 5;
 
-  let currentStep = $state(0);
+  // Resume at step 2 if returning from Google OAuth
+  const resumeStep = page.url.searchParams.get('step');
+  let currentStep = $state(resumeStep ? parseInt(resumeStep, 10) : 0);
   let stepKey = $state(0);
 
   // Step 2: Calendar
   let calendarConnected = $state(false);
+
+  onMount(async () => {
+    try {
+      const status = await settingsApi.getGoogleStatus();
+      calendarConnected = status.connected;
+    } catch {
+      // ignore
+    }
+  });
 
   // Step 3: Working hours
   let workStart = $state('09:00');

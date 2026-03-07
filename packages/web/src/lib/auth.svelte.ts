@@ -28,7 +28,7 @@ async function authRequest<T>(path: string, options?: RequestInit): Promise<T> {
       'Content-Type': 'application/json',
       ...options?.headers,
     },
-    credentials: 'same-origin',
+    credentials: 'include',
   });
   if (!res.ok) {
     let message = `Auth error: ${res.status}`;
