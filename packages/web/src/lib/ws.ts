@@ -2,7 +2,7 @@
 // A single shared connection is opened on first subscribe() and closed when
 // the last listener unsubscribes. Reconnects automatically with exponential backoff.
 import { browser } from '$app/environment';
-const PUBLIC_API_URL = import.meta.env.PUBLIC_API_URL ?? '';
+import { PUBLIC_API_URL } from '$env/static/public';
 
 type MessageHandler = (data: { type: string; reason: string; timestamp: string }) => void;
 export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
