@@ -11,8 +11,9 @@
   import ChevronLeft from 'lucide-svelte/icons/chevron-left';
   import Loader from 'lucide-svelte/icons/loader';
   import AlertCircle from 'lucide-svelte/icons/alert-circle';
+  import { PUBLIC_API_URL } from '$env/static/public';
 
-  const API_BASE = '/api';
+  const API_BASE = PUBLIC_API_URL || '/api';
   const slug = $derived(page.params.slug);
 
   // State machine: 'loading' | 'select' | 'form' | 'submitting' | 'confirmed' | 'error'

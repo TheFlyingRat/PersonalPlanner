@@ -1,6 +1,7 @@
 // Client-side auth state management using Svelte 5 runes
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
+import { PUBLIC_API_URL } from '$env/static/public';
 import { ApiError } from '$lib/api';
 
 export interface User {
@@ -18,7 +19,7 @@ interface AuthState {
   isLoading: boolean;
 }
 
-const API_BASE = '/api';
+const API_BASE = PUBLIC_API_URL || '/api';
 
 async function authRequest<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
