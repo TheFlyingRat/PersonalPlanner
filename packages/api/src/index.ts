@@ -128,7 +128,6 @@ const authLimiter = rateLimit({
   message: { error: 'Too many auth requests, please try again later.' },
 });
 app.use('/api/auth/google', authLimiter);
-app.use('/api/auth/google/callback', authLimiter);
 
 // JWT authentication middleware
 import { requireAuth } from './middleware/auth.js';

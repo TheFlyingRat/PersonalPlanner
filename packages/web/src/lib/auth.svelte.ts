@@ -110,6 +110,9 @@ export async function refreshToken(): Promise<boolean> {
 export async function googleAuth(): Promise<void> {
   if (browser) {
     const res = await fetch(`${API_BASE}/auth/google`, { credentials: 'include' });
+    if (!res.ok) {
+      throw new Error('Too many requests. Please try again in a few minutes.');
+    }
     const { redirectUrl } = await res.json();
     window.location.href = redirectUrl;
   }
