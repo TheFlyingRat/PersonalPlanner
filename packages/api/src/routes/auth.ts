@@ -423,7 +423,7 @@ router.get('/google', (_req, res) => {
 router.get('/google/callback', async (req, res) => {
   const code = req.query.code as string;
   const state = req.query.state as string | undefined;
-  const frontendOrigin = process.env.CORS_ORIGIN || 'http://localhost:5173';
+  const frontendOrigin = process.env.FRONTEND_URL || process.env.CORS_ORIGIN?.split(',')[0] || 'http://localhost:5173';
 
   if (!code) {
     res.redirect(`${frontendOrigin}/login?error=missing_code`);
