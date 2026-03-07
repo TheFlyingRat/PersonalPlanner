@@ -368,6 +368,10 @@ export class GoogleCalendarClient {
       start: { dateTime: op.start },
       end: { dateTime: op.end },
       transparency: op.status === EventStatus.Free ? 'transparent' : 'opaque',
+      reminders: {
+        useDefault: op.useDefaultReminders ?? false,
+        overrides: [],
+      },
       extendedProperties: {
         private: privateProperties,
       },

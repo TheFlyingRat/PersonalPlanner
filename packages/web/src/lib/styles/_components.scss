@@ -59,6 +59,57 @@
   color: var(--color-text-secondary);
   cursor: pointer;
   @include hover-surface;
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+.btn-danger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-danger);
+  background: transparent;
+  color: var(--color-danger);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+
+  &:hover:not(:disabled) {
+    background: var(--color-danger);
+    color: var(--color-accent-text);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.btn-danger-outline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-danger);
+  background: none;
+  color: var(--color-danger);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+
+  &:hover:not(:disabled) {
+    background: var(--color-danger-muted);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 
 // ============================================
@@ -113,7 +164,6 @@
   align-items: center;
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-border);
-  cursor: pointer;
   transition: background var(--transition-fast);
   &:hover { background: var(--color-surface-hover); }
 }
@@ -126,7 +176,8 @@
   display: none;
   align-items: center;
   gap: var(--space-1);
-  .table-row:hover & { display: flex; }
+  .table-row:hover &,
+  .table-row:focus-within & { display: flex; }
 }
 
 .row-action-btn {
@@ -163,7 +214,7 @@
 
 .panel-backdrop {
   @include backdrop;
-  z-index: 40;
+  z-index: $z-panel - 1;
 }
 
 .panel-slideover {
@@ -207,7 +258,7 @@
     font-weight: 500;
     color: var(--color-text-secondary);
   }
-  input, select {
+  input, select, textarea {
     padding: var(--space-2) var(--space-3);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
@@ -228,6 +279,7 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-4);
+  @include small { grid-template-columns: 1fr; }
 }
 
 // ============================================
@@ -244,7 +296,8 @@
   color: var(--color-text-tertiary);
   opacity: 0;
   transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
-  .table-row:hover & { opacity: 1; }
+  .table-row:hover &,
+  .table-row:focus-within & { opacity: 1; }
   &:hover { background: var(--color-surface); color: var(--color-text); }
 }
 
@@ -258,6 +311,36 @@
 .kebab-menu-item {
   @include menu-item;
   &--danger { @include menu-item-danger; }
+}
+
+// ============================================
+//   Inline Confirm (shared delete confirmation)
+// ============================================
+
+.confirm-menu {
+  @include flex-col(var(--space-1));
+  padding: var(--space-1);
+}
+
+.confirm-text {
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.confirm-actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.btn-confirm-yes {
+  @include menu-item;
+  @include menu-item-danger;
+}
+
+.btn-confirm-no {
+  @include menu-item;
 }
 
 // ============================================
@@ -284,6 +367,7 @@
     border-color: var(--color-text);
     box-shadow: 0 0 0 2px var(--color-border-strong);
   }
+  // !important is intentional here to override the inline `style="background: ..."` attribute
   &--none {
     background: var(--color-surface-hover) !important;
     @include flex-center;
@@ -294,7 +378,7 @@
 }
 
 // ============================================
-//   Toggle Button (shared)
+//   Toggle Button (icon toggle, e.g. lock/enable)
 // ============================================
 
 .toggle-btn {
@@ -304,6 +388,57 @@
   cursor: pointer;
   padding: 0;
   @include touch-target;
+}
+
+// ============================================
+//   Toggle Switch (on/off slider)
+// ============================================
+
+.toggle-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  border: none;
+  background: var(--color-border-strong);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+
+  &--on {
+    background: var(--color-accent);
+  }
+}
+
+.toggle-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: white;
+  transition: left var(--transition-fast);
+
+  &--on {
+    left: 18px;
+  }
+}
+
+// ============================================
+//   Page Layout (shared header / title)
+// ============================================
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-6);
+}
+
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--color-text);
 }
 
 // ============================================
@@ -319,6 +454,10 @@
   cursor: pointer;
 }
 
+.hide-mobile {
+  @include mobile { display: none !important; }
+}
+
 .skip-link {
   position: fixed;
   top: -100%;
@@ -326,7 +465,7 @@
   z-index: 9999;
   padding: var(--space-2) var(--space-4);
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-accent-text);
   font-size: 0.875rem;
   font-weight: 500;
   border-radius: var(--radius-md);
@@ -336,6 +475,13 @@
   transition: top var(--transition-fast), opacity var(--transition-fast);
   &:focus { top: var(--space-4); opacity: 1; pointer-events: auto; }
 }
+
+// ============================================
+//   Status Badges
+// ============================================
+
+// Alias for underscore variant used in dynamic class names (e.g. `status-${status}`)
+.status-done_scheduling { @extend .status-done_scheduling !optional; }
 
 // ============================================
 //   Animations

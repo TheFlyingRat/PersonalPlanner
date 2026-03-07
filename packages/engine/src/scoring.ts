@@ -65,8 +65,8 @@ export function scoreSlot(
   // 1. Proximity to ideal time
   score += scoreIdealTimeProximity(slot, item, tz) * wIdeal;
 
-  // 2. Buffer compliance (perfect score if item skips buffers)
-  score += (item.skipBuffer ? 1 : scoreBufferCompliance(slot, existingPlacements, bufferConfig, tz)) * wBuffer;
+  // 2. Buffer compliance (neutral score if item skips buffers)
+  score += (item.skipBuffer ? 0.5 : scoreBufferCompliance(slot, existingPlacements, bufferConfig, tz)) * wBuffer;
 
   // 3. Continuity with related/dependent items
   score += scoreContinuity(slot, item, existingPlacements, tz) * wContinuity;

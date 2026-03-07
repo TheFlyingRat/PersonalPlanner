@@ -73,9 +73,10 @@ function buildDayWindow(
   const end = parseTime(windowEnd);
   const s = setTimeInTimezone(day, start.hours, start.minutes, tz);
   const e = setTimeInTimezone(day, end.hours, end.minutes, tz);
-  // Handle midnight crossover
+  // Handle midnight crossover (DST-safe: advance by calendar day, not 24h)
   if (e <= s) {
-    return { start: s, end: new Date(e.getTime() + 86400000) };
+    const nextDay = nextDayInTimezone(e, tz);
+    return { start: s, end: nextDay };
   }
   return { start: s, end: e };
 }
@@ -458,10 +459,16 @@ function sortScheduleItems(items: ScheduleItem[]): ScheduleItem[] {
 // Circular dependency detection
 // ============================================================
 
-function detectCircularDependencies(habits: Habit[]): string[] {
-  const errors: string[] = [];
+interface CircularDependencyError {
+  habitId: string;
+  message: string;
+}
+
+function detectCircularDependencies(habits: Habit[]): CircularDependencyError[] {
+  const errors: CircularDependencyError[] = [];
   const visited = new Set<string>();
   const inStack = new Set<string>();
+  const reported = new Set<string>();
 
   function dfs(id: string): boolean {
     if (inStack.has(id)) return true; // cycle found
@@ -471,7 +478,13 @@ function detectCircularDependencies(habits: Habit[]): string[] {
     const habit = habits.find(h => h.id === id);
     if (habit?.dependsOn) {
       if (dfs(habit.dependsOn)) {
-        errors.push(`Circular dependency detected involving habit "${habit.name}" (${id})`);
+        if (!reported.has(id)) {
+          reported.add(id);
+          errors.push({
+            habitId: id,
+            message: `Circular dependency detected involving habit "${habit.name}"`,
+          });
+        }
         return true;
       }
     }
@@ -527,15 +540,19 @@ export function reschedule(
   }
 
   // 1. Define the scheduling window
+  const safeDays = Math.min(userSettings.schedulingWindowDays || 14, 90);
   const scheduleStart = new Date(currentTime);
   const scheduleEnd = new Date(currentTime);
-  scheduleEnd.setDate(scheduleEnd.getDate() + userSettings.schedulingWindowDays);
+  scheduleEnd.setDate(scheduleEnd.getDate() + safeDays);
 
   // 2. Build timeline
   const timeline = buildTimeline(scheduleStart, scheduleEnd, userSettings);
 
   // 3. Separate fixed events from flexible items
-  const fixedEvents: TimeSlot[] = [];
+  //    hardFixedEvents: locked-calendar externals + locked managed events (always immovable)
+  //    softExternalEvents: writable-calendar externals (status=Busy) — immovable except for P1
+  const hardFixedEvents: TimeSlot[] = [];
+  const softExternalEvents: TimeSlot[] = [];
   const existingManagedEvents = new Map<string, CalendarEvent>();
   const lockedPlacements = new Map<string, TimeSlot>();
   const lockedExistingIds = new Set<string>();
@@ -544,9 +561,16 @@ export function reschedule(
     const eventStart = new Date(event.start);
     const eventEnd = new Date(event.end);
 
-    if (!event.isManaged || event.status === EventStatus.Locked) {
-      // Fixed: external events or locked managed events
-      fixedEvents.push({ start: eventStart, end: eventEnd });
+    if (!event.isManaged) {
+      if (event.status === EventStatus.Locked) {
+        hardFixedEvents.push({ start: eventStart, end: eventEnd });
+      } else {
+        // Writable-calendar external (Busy) — soft constraint, P1 can override
+        softExternalEvents.push({ start: eventStart, end: eventEnd });
+      }
+    } else if (event.status === EventStatus.Locked) {
+      // Locked managed event — always immovable
+      hardFixedEvents.push({ start: eventStart, end: eventEnd });
     }
 
     if (event.isManaged && event.itemId) {
@@ -561,6 +585,9 @@ export function reschedule(
     }
   }
 
+  // Combined fixed events = hard + soft (used by default for all items)
+  const fixedEvents: TimeSlot[] = [...hardFixedEvents, ...softExternalEvents];
+
   // 4. Convert domain objects to ScheduleItems
   const habitItems = habitsToScheduleItems(habits, scheduleStart, scheduleEnd, scheduleStart, tz);
   const taskItems = tasksToScheduleItems(tasks, scheduleStart, scheduleEnd, userSettings);
@@ -570,13 +597,10 @@ export function reschedule(
   const unschedulable: Array<{ itemId: string; itemType: ItemType; reason: string }> = [];
 
   for (const error of circularErrors) {
-    // Extract habit ID from the error message
-    const match = error.match(/\(([^)]+)\)$/);
-    const habitId = match ? match[1] : 'unknown';
     unschedulable.push({
-      itemId: habitId,
+      itemId: error.habitId,
       itemType: ItemType.Habit,
-      reason: error,
+      reason: error.message,
     });
   }
 
@@ -590,11 +614,19 @@ export function reschedule(
     }
   }
 
-  // 5. Sort flexible items by priority
-  const flexibleItems = sortScheduleItems([...habitItems, ...taskItems, ...meetingItems]);
+  // 5. Sort flexible items by priority (exclude locked placements — they're already placed)
+  const lockedItemIds = new Set(lockedPlacements.keys());
+  const flexibleItems = sortScheduleItems(
+    [...habitItems, ...taskItems, ...meetingItems]
+      .filter(item => !lockedItemIds.has(item.id)),
+  );
 
   // 6. Greedy placement
   const occupiedSlots: TimeSlot[] = [...fixedEvents];
+  // Add locked placements so greedy placement won't overlap locked items
+  for (const [, slot] of lockedPlacements) {
+    occupiedSlots.push(slot);
+  }
   const placements = new Map<string, TimeSlot>();
   const candidateSlotsMap = new Map<string, CandidateSlot[]>();
   const itemMap = new Map<string, ScheduleItem>();
@@ -624,6 +656,16 @@ export function reschedule(
     }
 
     candidateSlotsMap.set(item.id, candidates);
+
+    // P1 override: if no candidates and item is Critical, retry ignoring soft externals
+    if (candidates.length === 0 && effectiveItem.priority === Priority.Critical && softExternalEvents.length > 0) {
+      const hardOnlyOccupied = occupiedSlots.filter(slot =>
+        !softExternalEvents.some(ext => ext.start.getTime() === slot.start.getTime() && ext.end.getTime() === slot.end.getTime()),
+      );
+      candidates = generateCandidateSlots(
+        effectiveItem, timeline, hardOnlyOccupied, bufferConfig, placements, item.dependsOn, tz,
+      );
+    }
 
     if (candidates.length === 0) {
       unschedulable.push({

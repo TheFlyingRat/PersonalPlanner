@@ -1,39 +1,37 @@
 import { Router } from 'express';
-import { eq } from 'drizzle-orm';
-import { db } from '../db/index.js';
-import { smartMeetings } from '../db/schema.js';
+import { eq, and } from 'drizzle-orm';
+import { db } from '../db/pg-index.js';
+import { smartMeetings } from '../db/pg-schema.js';
 import type { CreateMeetingRequest, SmartMeeting } from '@cadence/shared';
 import { createMeetingSchema, updateMeetingSchema } from '../validation.js';
 import { logActivity } from './activity.js';
-import { broadcast } from '../ws.js';
+import { broadcastToUser } from '../ws.js';
 import { triggerReschedule } from '../polling-ref.js';
+import { sendValidationError, sendNotFound } from './helpers.js';
 
 const router = Router();
 
-// GET /api/meetings — list all meetings
-router.get('/', (_req, res) => {
-  const rows = db.select().from(smartMeetings).all();
+// GET /api/meetings — list all meetings for the current user
+router.get('/', async (req, res) => {
+  const rows = await db.select().from(smartMeetings).where(eq(smartMeetings.userId, req.userId));
   const result: SmartMeeting[] = rows.map(toMeeting);
   res.json(result);
 });
 
 // POST /api/meetings — create a meeting
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const parsed = createMeetingSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    sendValidationError(res, parsed.error);
     return;
   }
   const body = parsed.data as CreateMeetingRequest;
 
-  const now = new Date().toISOString();
-  const id = crypto.randomUUID();
-
   const row = {
-    id,
+    userId: req.userId,
     name: body.name,
     priority: body.priority ?? 2,
-    attendees: body.attendees ? JSON.stringify(body.attendees) : JSON.stringify([]),
+    attendees: body.attendees ?? [],
     duration: body.duration,
     frequency: body.frequency,
     idealTime: body.idealTime,
@@ -44,43 +42,38 @@ router.post('/', (req, res) => {
     skipBuffer: body.skipBuffer ?? false,
     calendarId: body.calendarId ?? null,
     color: body.color ?? null,
-    createdAt: now,
-    updatedAt: now,
   };
 
-  db.insert(smartMeetings).values(row).run();
-
-  const created = db.select().from(smartMeetings).where(eq(smartMeetings.id, id)).get();
-  logActivity('create', 'meeting', id, { name: body.name });
-  broadcast('schedule_updated', 'Meeting created');
-  triggerReschedule('Meeting created');
-  res.status(201).json(toMeeting(created!));
+  const inserted = await db.insert(smartMeetings).values(row).returning();
+  const created = inserted[0];
+  await logActivity(req.userId, 'create', 'meeting', created.id, { name: body.name });
+  broadcastToUser(req.userId, 'schedule_updated', 'Meeting created');
+  triggerReschedule('Meeting created', req.userId);
+  res.status(201).json(toMeeting(created));
 });
 
 // PUT /api/meetings/:id — update a meeting
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(smartMeetings).where(eq(smartMeetings.id, id)).get();
+  const existing = await db.select().from(smartMeetings).where(and(eq(smartMeetings.id, id), eq(smartMeetings.userId, req.userId)));
 
-  if (!existing) {
-    res.status(404).json({ error: 'Meeting not found' });
+  if (existing.length === 0) {
+    sendNotFound(res, 'Meeting');
     return;
   }
 
   const parsed = updateMeetingSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    sendValidationError(res, parsed.error);
     return;
   }
 
   const body = parsed.data;
-  const now = new Date().toISOString();
-
-  const updates: Record<string, unknown> = { updatedAt: now };
+  const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
 
   if (body.name !== undefined) updates.name = body.name;
   if (body.priority !== undefined) updates.priority = body.priority;
-  if (body.attendees !== undefined) updates.attendees = JSON.stringify(body.attendees);
+  if (body.attendees !== undefined) updates.attendees = body.attendees;
   if (body.duration !== undefined) updates.duration = body.duration;
   if (body.frequency !== undefined) updates.frequency = body.frequency;
   if (body.idealTime !== undefined) updates.idealTime = body.idealTime;
@@ -92,29 +85,27 @@ router.put('/:id', (req, res) => {
   if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
   if (body.color !== undefined) updates.color = body.color;
 
-  db.update(smartMeetings).set(updates).where(eq(smartMeetings.id, id)).run();
-
-  const updated = db.select().from(smartMeetings).where(eq(smartMeetings.id, id)).get();
-  logActivity('update', 'meeting', id, { fields: Object.keys(updates) });
-  broadcast('schedule_updated', 'Meeting updated');
-  triggerReschedule('Meeting updated');
-  res.json(toMeeting(updated!));
+  const updated = await db.update(smartMeetings).set(updates).where(and(eq(smartMeetings.id, id), eq(smartMeetings.userId, req.userId))).returning();
+  await logActivity(req.userId, 'update', 'meeting', id, { fields: Object.keys(updates) });
+  broadcastToUser(req.userId, 'schedule_updated', 'Meeting updated');
+  triggerReschedule('Meeting updated', req.userId);
+  res.json(toMeeting(updated[0]));
 });
 
 // DELETE /api/meetings/:id — delete a meeting
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(smartMeetings).where(eq(smartMeetings.id, id)).get();
+  const existing = await db.select().from(smartMeetings).where(and(eq(smartMeetings.id, id), eq(smartMeetings.userId, req.userId)));
 
-  if (!existing) {
-    res.status(404).json({ error: 'Meeting not found' });
+  if (existing.length === 0) {
+    sendNotFound(res, 'Meeting');
     return;
   }
 
-  db.delete(smartMeetings).where(eq(smartMeetings.id, id)).run();
-  logActivity('delete', 'meeting', id, { name: existing.name });
-  broadcast('schedule_updated', 'Meeting deleted');
-  triggerReschedule('Meeting deleted');
+  await db.delete(smartMeetings).where(and(eq(smartMeetings.id, id), eq(smartMeetings.userId, req.userId)));
+  await logActivity(req.userId, 'delete', 'meeting', id, { name: existing[0].name });
+  broadcastToUser(req.userId, 'schedule_updated', 'Meeting deleted');
+  triggerReschedule('Meeting deleted', req.userId);
 
   res.status(204).send();
 });
@@ -124,7 +115,7 @@ function toMeeting(row: typeof smartMeetings.$inferSelect): SmartMeeting {
     id: row.id,
     name: row.name,
     priority: row.priority ?? 2,
-    attendees: row.attendees ? JSON.parse(row.attendees) as string[] : [],
+    attendees: (row.attendees ?? []) as string[],
     duration: row.duration,
     frequency: row.frequency as SmartMeeting['frequency'],
     idealTime: row.idealTime ?? '',

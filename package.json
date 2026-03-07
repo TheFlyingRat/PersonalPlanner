@@ -1,6 +1,9 @@
 {
   "name": "cadence",
   "private": true,
+  "version": "0.9.4",
+  "author": "Joey Manani",
+  "license": "MIT",
   "packageManager": "pnpm@9.15.4",
   "scripts": {
     "dev": "pnpm -r --parallel dev",
@@ -9,10 +12,13 @@
     "lint": "pnpm -r lint"
   },
   "devDependencies": {
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "open": "^11.0.0"
+    "dotenv": "^17.3.1",
+    "open": "^11.0.0",
+    "pg": "^8.13.0"
   }
 }

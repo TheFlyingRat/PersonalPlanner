@@ -1,26 +1,12 @@
 import { Router } from 'express';
 import { eq } from 'drizzle-orm';
-import { z } from 'zod/v4';
-import { db } from '../db/index.js';
-import { users } from '../db/schema.js';
-import type { UserConfig, UserSettings } from '@cadence/shared';
+import { db } from '../db/pg-index.js';
+import { users } from '../db/pg-schema.js';
+import type { UserSettings } from '@cadence/shared';
+import { userSettingsSchema } from '../validation.js';
+import { sendValidationError, sendNotFound } from './helpers.js';
 
 const router = Router();
-
-const userSettingsSchema = z.object({
-  workingHours: z.object({
-    start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Must be HH:MM format'),
-    end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Must be HH:MM format'),
-  }).optional(),
-  personalHours: z.object({
-    start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Must be HH:MM format'),
-    end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Must be HH:MM format'),
-  }).optional(),
-  timezone: z.string().optional(),
-  schedulingWindowDays: z.number().int().positive().optional(),
-  defaultHabitCalendarId: z.string().min(1).max(200).optional(),
-  defaultTaskCalendarId: z.string().min(1).max(200).optional(),
-});
 
 const defaultSettings: UserSettings = {
   workingHours: { start: '09:00', end: '17:00' },
@@ -30,45 +16,42 @@ const defaultSettings: UserSettings = {
 };
 
 // GET /api/settings — return user settings
-router.get('/', (_req, res) => {
-  const userRows = db.select().from(users).all();
+router.get('/', async (req, res) => {
+  const userRows = await db.select().from(users).where(eq(users.id, req.userId));
   if (userRows.length === 0) {
-    res.status(404).json({ error: 'No user found' });
+    sendNotFound(res, 'User');
     return;
   }
 
   const user = userRows[0];
-  const settings: UserSettings = user.settings
-    ? JSON.parse(user.settings)
+  const settings: UserSettings = user.settings && typeof user.settings === 'object'
+    ? user.settings as UserSettings
     : defaultSettings;
 
-  const config: UserConfig = {
+  res.json({
     id: user.id,
     settings,
-    googleSyncToken: user.googleSyncToken ?? null,
     createdAt: user.createdAt ?? '',
-  };
-
-  res.json(config);
+  });
 });
 
 // PUT /api/settings — update user settings
-router.put('/', (req, res) => {
+router.put('/', async (req, res) => {
   const parsed = userSettingsSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    sendValidationError(res, parsed.error);
     return;
   }
 
-  const userRows = db.select().from(users).all();
+  const userRows = await db.select().from(users).where(eq(users.id, req.userId));
   if (userRows.length === 0) {
-    res.status(404).json({ error: 'No user found' });
+    sendNotFound(res, 'User');
     return;
   }
 
   const user = userRows[0];
-  const currentSettings: UserSettings = user.settings
-    ? JSON.parse(user.settings)
+  const currentSettings: UserSettings = user.settings && typeof user.settings === 'object'
+    ? user.settings as UserSettings
     : defaultSettings;
 
   const updatedSettings: UserSettings = {
@@ -76,41 +59,35 @@ router.put('/', (req, res) => {
     ...parsed.data,
   };
 
-  db.update(users)
-    .set({ settings: JSON.stringify(updatedSettings) })
-    .where(eq(users.id, user.id))
-    .run();
+  await db.update(users)
+    .set({ settings: updatedSettings, updatedAt: new Date().toISOString() })
+    .where(eq(users.id, req.userId));
 
-  const updatedUser = db.select().from(users).where(eq(users.id, user.id)).get();
-  const config: UserConfig = {
-    id: updatedUser!.id,
+  res.json({
+    id: user.id,
     settings: updatedSettings,
-    googleSyncToken: updatedUser!.googleSyncToken ?? null,
-    createdAt: updatedUser!.createdAt ?? '',
-  };
-
-  res.json(config);
+    createdAt: user.createdAt ?? '',
+  });
 });
 
 // GET /api/settings/google/status — check if Google is connected
-router.get('/google/status', (_req, res) => {
-  const userRows = db.select().from(users).all();
+router.get('/google/status', async (req, res) => {
+  const userRows = await db.select().from(users).where(eq(users.id, req.userId));
   const connected = userRows.length > 0 && !!userRows[0].googleRefreshToken;
   res.json({ connected });
 });
 
 // POST /api/settings/google/disconnect — disconnect Google
-router.post('/google/disconnect', (_req, res) => {
-  const userRows = db.select().from(users).all();
+router.post('/google/disconnect', async (req, res) => {
+  const userRows = await db.select().from(users).where(eq(users.id, req.userId));
   if (userRows.length === 0) {
-    res.status(404).json({ error: 'No user found' });
+    sendNotFound(res, 'User');
     return;
   }
 
-  db.update(users)
-    .set({ googleRefreshToken: null, googleSyncToken: null })
-    .where(eq(users.id, userRows[0].id))
-    .run();
+  await db.update(users)
+    .set({ googleRefreshToken: null, googleSyncToken: null, updatedAt: new Date().toISOString() })
+    .where(eq(users.id, req.userId));
 
   res.json({ message: 'Google disconnected' });
 });

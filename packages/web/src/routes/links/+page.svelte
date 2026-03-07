@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
+  import { pageTitle } from '$lib/brand';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { links as linksApi } from '$lib/api';
+  import type { SchedulingLink } from '@cadence/shared';
   import Plus from 'lucide-svelte/icons/plus';
   import Pencil from 'lucide-svelte/icons/pencil';
   import Trash2 from 'lucide-svelte/icons/trash-2';
@@ -8,47 +10,25 @@
   import Link from 'lucide-svelte/icons/link';
   import Copy from 'lucide-svelte/icons/copy';
   import Check from 'lucide-svelte/icons/check';
+  import AlertCircle from 'lucide-svelte/icons/alert-circle';
   import ToggleLeft from 'lucide-svelte/icons/toggle-left';
   import ToggleRight from 'lucide-svelte/icons/toggle-right';
   import EllipsisVertical from 'lucide-svelte/icons/ellipsis-vertical';
 
-  interface LinkItem {
-    id: string;
-    slug: string;
-    name: string;
-    durations: number[];
-    priority: number;
-    enabled: boolean;
-  }
-
-  const mockLinks: LinkItem[] = [
-    {
-      id: '1',
-      slug: 'intro-call',
-      name: 'Intro Call',
-      durations: [15, 30],
-      priority: 2,
-      enabled: true,
-    },
-    {
-      id: '2',
-      slug: 'deep-dive',
-      name: 'Deep Dive Session',
-      durations: [30, 60],
-      priority: 3,
-      enabled: false,
-    },
-  ];
-
-  let linkList = $state<LinkItem[]>(mockLinks);
+  let linkList = $state<SchedulingLink[]>([]);
   let showPanel = $state(false);
   let editingId = $state<string | null>(null);
   let copyFeedback = $state<string | null>(null);
+  let copyError = $state<string | null>(null);
   let loading = $state(true);
   let error = $state('');
   let success = $state('');
   let submitting = $state(false);
   let menuOpenId = $state<string | null>(null);
+  let confirmingDeleteId = $state<string | null>(null);
+  let menuFocusIndex = $state(-1);
+  let slugError = $state('');
+  let menuItemEls = $state<(HTMLButtonElement | null)[]>([null, null]);
 
   // Form fields
   let formName = $state('');
@@ -57,15 +37,20 @@
   let formDuration15 = $state(false);
   let formDuration30 = $state(true);
   let formDuration60 = $state(false);
+  let manualSlugEdit = $state(false);
 
   let panelEl = $state<HTMLDivElement | null>(null);
+  let successTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const priorityLabels: Record<number, string> = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4' };
-
-  function showSuccess(msg: string) {
+  function showSuccessMsg(msg: string) {
     success = msg;
-    setTimeout(() => { success = ''; }, 3000);
+    if (successTimer) clearTimeout(successTimer);
+    successTimer = setTimeout(() => { success = ''; }, 3000);
   }
+
+  onDestroy(() => {
+    if (successTimer) clearTimeout(successTimer);
+  });
 
   function resetForm() {
     formName = '';
@@ -74,6 +59,7 @@
     formDuration15 = false;
     formDuration30 = true;
     formDuration60 = false;
+    manualSlugEdit = false;
     editingId = null;
   }
 
@@ -89,10 +75,12 @@
     try {
       await navigator.clipboard.writeText(url);
       copyFeedback = slug;
+      copyError = null;
       setTimeout(() => { copyFeedback = null; }, 2000);
     } catch {
-      copyFeedback = slug;
-      setTimeout(() => { copyFeedback = null; }, 2000);
+      copyError = slug;
+      copyFeedback = null;
+      setTimeout(() => { copyError = null; }, 2000);
     }
   }
 
@@ -102,7 +90,7 @@
     tick().then(() => focusFirstInPanel());
   }
 
-  function openEditForm(link: LinkItem) {
+  function openEditForm(link: SchedulingLink) {
     editingId = link.id;
     formName = link.name;
     formSlug = link.slug;
@@ -110,6 +98,7 @@
     formDuration15 = link.durations.includes(15);
     formDuration30 = link.durations.includes(30);
     formDuration60 = link.durations.includes(60);
+    manualSlugEdit = true;
     showPanel = true;
     tick().then(() => focusFirstInPanel());
   }
@@ -138,21 +127,58 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      if (menuOpenId) { menuOpenId = null; return; }
+      if (menuOpenId) { menuOpenId = null; menuFocusIndex = -1; return; }
+      if (confirmingDeleteId) { confirmingDeleteId = null; return; }
       if (showPanel) closePanel();
     }
   }
 
   function handleWindowClick() {
-    if (menuOpenId) menuOpenId = null;
+    if (menuOpenId) { menuOpenId = null; menuFocusIndex = -1; }
+    if (confirmingDeleteId) confirmingDeleteId = null;
+  }
+
+  $effect(() => {
+    if (menuFocusIndex >= 0 && menuItemEls[menuFocusIndex]) {
+      menuItemEls[menuFocusIndex]!.focus();
+    }
+  });
+
+  function handleMenuKeydown(e: KeyboardEvent, link: SchedulingLink) {
+    const menuItems = 2; // Edit, Delete
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      menuFocusIndex = (menuFocusIndex + 1) % menuItems;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      menuFocusIndex = (menuFocusIndex - 1 + menuItems) % menuItems;
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      menuFocusIndex = 0;
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      menuFocusIndex = menuItems - 1;
+    }
   }
 
   async function handleSubmit() {
-    submitting = true;
     const durations: number[] = [];
     if (formDuration15) durations.push(15);
     if (formDuration30) durations.push(30);
     if (formDuration60) durations.push(60);
+
+    if (durations.length === 0) {
+      error = 'Select at least one duration.';
+      return;
+    }
+
+    if (!/^[a-z0-9-]+$/.test(formSlug)) {
+      slugError = 'Slug must contain only lowercase letters, numbers, and hyphens.';
+      return;
+    }
+    slugError = '';
+
+    submitting = true;
 
     const linkData = {
       name: formName,
@@ -163,38 +189,38 @@
 
     try {
       if (editingId) {
-        await linksApi.update(editingId, linkData as any);
+        await linksApi.update(editingId, linkData);
       } else {
-        await linksApi.create(linkData as any);
+        await linksApi.create(linkData);
       }
       const list = await linksApi.list();
-      linkList = list as any;
-      showSuccess(editingId ? 'Link updated successfully.' : 'Link created successfully.');
-    } catch {
+      linkList = list as SchedulingLink[];
+      showSuccessMsg(editingId ? 'Link updated successfully.' : 'Link created successfully.');
+      closePanel();
+    } catch (err) {
+      console.error(err);
       if (editingId) {
         linkList = linkList.map((l) =>
           l.id === editingId ? { ...l, ...linkData } : l
         );
-        showSuccess('Link updated (offline).');
+        showSuccessMsg('Link updated (offline).');
       } else {
         linkList = [
           ...linkList,
-          { id: crypto.randomUUID(), ...linkData, enabled: true },
+          { id: crypto.randomUUID(), ...linkData, enabled: true, schedulingHours: 'working', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } as SchedulingLink,
         ];
-        showSuccess('Link created (offline).');
+        showSuccessMsg('Link created (offline).');
       }
     } finally {
       submitting = false;
     }
-
-    closePanel();
   }
 
-  async function toggleEnabled(link: LinkItem) {
+  async function toggleEnabled(link: SchedulingLink) {
     try {
-      await linksApi.update(link.id, { ...link, enabled: !link.enabled } as any);
+      await linksApi.update(link.id, { ...link, enabled: !link.enabled });
       const list = await linksApi.list();
-      linkList = list as any;
+      linkList = list as SchedulingLink[];
     } catch {
       linkList = linkList.map((l) =>
         l.id === link.id ? { ...l, enabled: !l.enabled } : l
@@ -203,19 +229,20 @@
   }
 
   async function deleteLink(id: string) {
-    if (!confirm('Are you sure you want to delete this link?')) return;
     try {
       await linksApi.delete(id);
       const list = await linksApi.list();
-      linkList = list as any;
-      showSuccess('Link deleted successfully.');
+      linkList = list as SchedulingLink[];
+      showSuccessMsg('Link deleted successfully.');
     } catch {
       linkList = linkList.filter((l) => l.id !== id);
-      showSuccess('Link deleted (offline).');
+      showSuccessMsg('Link deleted (offline).');
     }
+    confirmingDeleteId = null;
   }
 
   function autoSlug() {
+    if (manualSlugEdit) return;
     formSlug = formName
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
@@ -227,9 +254,10 @@
     error = '';
     try {
       const list = await linksApi.list();
-      linkList = list as any;
-    } catch {
-      error = 'Failed to load data from API. Showing cached data.';
+      linkList = list as SchedulingLink[];
+    } catch (err) {
+      console.error(err);
+      error = 'Could not load scheduling links.';
     } finally {
       loading = false;
     }
@@ -237,16 +265,16 @@
 </script>
 
 <svelte:head>
-  <title>Links - Cadence</title>
+  <title>{pageTitle('Links')}</title>
 </svelte:head>
 
 <svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
 
-<div style="padding: var(--space-6);">
+<div class="links-page">
   <!-- Header -->
-  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6);">
-    <h1 style="font-size: 1.5rem; font-weight: 600; color: var(--color-text);">Scheduling Links</h1>
-    <button onclick={openAddForm} class="btn-accent-pill" aria-expanded={showPanel}>
+  <div class="page-header">
+    <h1 class="page-title">Scheduling Links</h1>
+    <button onclick={openAddForm} class="btn-accent-pill" aria-haspopup="dialog">
       <Plus size={16} strokeWidth={1.5} />
       Add Link
     </button>
@@ -258,101 +286,128 @@
   {#if success}
     <div class="alert-success" role="alert">{success}</div>
   {/if}
+  <div class="sr-only" aria-live="polite">
+    {#if copyFeedback}URL copied to clipboard{:else if copyError}Failed to copy URL{/if}
+  </div>
 
   {#if loading}
-    <div style="display: flex; align-items: center; justify-content: center; padding: var(--space-12) 0;" role="status" aria-live="polite">
-      <p style="color: var(--color-text-secondary);">Loading...</p>
+    <div class="links-loading" role="status" aria-live="polite">
+      <p class="text-secondary">Loading...</p>
     </div>
   {:else if linkList.length === 0}
     <!-- Empty State -->
     <div class="empty-state">
       <Link size={48} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
-      <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--color-text); margin-top: var(--space-4);">No links yet</h2>
-      <p style="color: var(--color-text-secondary); margin-top: var(--space-2);">Create your first scheduling link to share with others</p>
-      <button onclick={openAddForm} class="btn-accent-pill" style="margin-top: var(--space-5);">
+      <h2 class="empty-title">No links yet</h2>
+      <p class="empty-desc">Create your first scheduling link to share with others</p>
+      <button onclick={openAddForm} class="btn-accent-pill empty-cta">
         <Plus size={16} strokeWidth={1.5} />
         Add Link
       </button>
     </div>
   {:else}
-    <!-- Table Header -->
-    <div class="table-header" style="grid-template-columns: 1fr 140px 160px 60px 40px 40px;">
-      <span>Name</span>
-      <span>Slug</span>
-      <span>Durations</span>
-      <span>Status</span>
-      <span></span>
-      <span></span>
-    </div>
-
-    <!-- Table Rows -->
-    {#each linkList as link}
-      <div
-        class="table-row"
-        style="grid-template-columns: 1fr 140px 160px 60px 40px 40px;"
-        onclick={() => openEditForm(link)}
-        role="button"
-        tabindex="0"
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditForm(link); } }}
-      >
-        <span style="font-weight: 500; color: var(--color-text);">{link.name}</span>
-        <span class="font-mono" style="color: var(--color-text-secondary); font-size: 0.8125rem;">/{link.slug}</span>
-        <span style="display: flex; gap: var(--space-1); flex-wrap: wrap;">
-          {#each link.durations as dur}
-            <span class="duration-pill">{dur}m</span>
-          {/each}
-        </span>
-        <span>
-          <button
-            class="toggle-btn"
-            onclick={(e) => { e.stopPropagation(); toggleEnabled(link); }}
-            aria-label={link.enabled ? 'Disable link' : 'Enable link'}
-          >
-            {#if link.enabled}
-              <ToggleRight size={20} strokeWidth={1.5} style="color: var(--color-accent);" />
-            {:else}
-              <ToggleLeft size={20} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
-            {/if}
-          </button>
-        </span>
-        <span>
-          <button
-            class="copy-btn"
-            onclick={(e) => { e.stopPropagation(); copyUrl(link.slug); }}
-            aria-label="Copy URL"
-          >
-            {#if copyFeedback === link.slug}
-              <Check size={16} strokeWidth={1.5} style="color: var(--color-success);" />
-            {:else}
-              <Copy size={16} strokeWidth={1.5} />
-            {/if}
-          </button>
-        </span>
-        <span class="kebab-cell">
-          <button
-            class="kebab-btn"
-            onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === link.id ? null : link.id; }}
-            aria-label="Actions"
-            aria-haspopup="true"
-            aria-expanded={menuOpenId === link.id}
-          >
-            <EllipsisVertical size={16} strokeWidth={1.5} />
-          </button>
-          {#if menuOpenId === link.id}
-            <div class="kebab-menu" onclick={(e) => e.stopPropagation()}>
-              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; openEditForm(link); }}>
-                <Pencil size={15} strokeWidth={1.5} />
-                Edit
-              </button>
-              <button class="kebab-menu-item kebab-menu-item--danger" onclick={() => { menuOpenId = null; deleteLink(link.id); }}>
-                <Trash2 size={15} strokeWidth={1.5} />
-                Delete
-              </button>
-            </div>
-          {/if}
-        </span>
+    <!-- Table -->
+    <div role="table" aria-label="Scheduling links">
+      <div class="table-header table-grid" role="row">
+        <span role="columnheader">Name</span>
+        <span role="columnheader">Slug</span>
+        <span role="columnheader">Durations</span>
+        <span role="columnheader">Status</span>
+        <span role="columnheader"><span class="sr-only">Copy</span></span>
+        <span role="columnheader"><span class="sr-only">Actions</span></span>
       </div>
-    {/each}
+
+      {#each linkList as link}
+        <div
+          class="table-row table-grid"
+          onclick={() => openEditForm(link)}
+          role="row"
+          tabindex="0"
+          aria-label="Edit {link.name}"
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditForm(link); } }}
+        >
+          <span role="cell" class="link-name">{link.name}</span>
+          <span role="cell" class="link-slug font-mono">/{link.slug}</span>
+          <span role="cell" class="link-durations">
+            {#each link.durations as dur}
+              <span class="duration-pill">{dur}m</span>
+            {/each}
+          </span>
+          <span role="cell">
+            <button
+              class="toggle-btn"
+              onclick={(e) => { e.stopPropagation(); toggleEnabled(link); }}
+              aria-label={link.enabled ? 'Disable link' : 'Enable link'}
+            >
+              {#if link.enabled}
+                <ToggleRight size={20} strokeWidth={1.5} style="color: var(--color-accent);" />
+              {:else}
+                <ToggleLeft size={20} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+              {/if}
+            </button>
+          </span>
+          <span role="cell">
+            <button
+              class="row-action-btn"
+              onclick={(e) => { e.stopPropagation(); copyUrl(link.slug); }}
+              aria-label="Copy URL"
+            >
+              {#if copyError === link.slug}
+                <AlertCircle size={16} strokeWidth={1.5} style="color: var(--color-danger);" />
+              {:else if copyFeedback === link.slug}
+                <Check size={16} strokeWidth={1.5} style="color: var(--color-success);" />
+              {:else}
+                <Copy size={16} strokeWidth={1.5} />
+              {/if}
+            </button>
+          </span>
+          <span role="cell" class="kebab-cell">
+            <button
+              class="kebab-btn"
+              onclick={(e) => { e.stopPropagation(); menuFocusIndex = -1; menuOpenId = menuOpenId === link.id ? null : link.id; }}
+              aria-label="Actions"
+              aria-haspopup="menu"
+              aria-expanded={menuOpenId === link.id}
+            >
+              <EllipsisVertical size={16} strokeWidth={1.5} />
+            </button>
+            {#if menuOpenId === link.id}
+              <div class="kebab-menu" role="menu" onclick={(e) => e.stopPropagation()} onkeydown={(e) => handleMenuKeydown(e, link)}>
+                <button
+                  class="kebab-menu-item"
+                  class:kebab-menu-item--focused={menuFocusIndex === 0}
+                  role="menuitem"
+                  tabindex={menuFocusIndex === 0 ? 0 : -1}
+                  bind:this={menuItemEls[0]}
+                  onclick={() => { menuOpenId = null; menuFocusIndex = -1; openEditForm(link); }}
+                >
+                  <Pencil size={15} strokeWidth={1.5} />
+                  Edit
+                </button>
+                <button
+                  class="kebab-menu-item kebab-menu-item--danger"
+                  class:kebab-menu-item--focused={menuFocusIndex === 1}
+                  role="menuitem"
+                  tabindex={menuFocusIndex === 1 ? 0 : -1}
+                  bind:this={menuItemEls[1]}
+                  onclick={() => { menuOpenId = null; menuFocusIndex = -1; confirmingDeleteId = link.id; tick().then(() => document.getElementById('confirm-delete-yes')?.focus()); }}
+                >
+                  <Trash2 size={15} strokeWidth={1.5} />
+                  Delete
+                </button>
+              </div>
+            {/if}
+            {#if confirmingDeleteId === link.id}
+              <div class="confirm-delete" role="alertdialog" aria-label="Confirm deletion" aria-describedby="confirm-delete-label" onclick={(e) => e.stopPropagation()}>
+                <span class="confirm-delete-text" id="confirm-delete-label">Delete this link?</span>
+                <button class="confirm-delete-yes" id="confirm-delete-yes" onclick={() => deleteLink(link.id)}>Yes</button>
+                <button class="confirm-delete-no" onclick={() => { confirmingDeleteId = null; }}>No</button>
+              </div>
+            {/if}
+          </span>
+        </div>
+      {/each}
+    </div>
   {/if}
 </div>
 
@@ -369,7 +424,7 @@
     onkeydown={trapFocus}
   >
     <div class="panel-header">
-      <h2 id="panel-title" style="font-size: 1.125rem; font-weight: 600; color: var(--color-text);">
+      <h2 id="panel-title" class="panel-title">
         {editingId ? 'Edit Link' : 'Add Link'}
       </h2>
       <button onclick={closePanel} class="panel-close-btn" aria-label="Close panel">
@@ -388,7 +443,10 @@
 
       <div class="form-field">
         <label for="link-slug">Slug</label>
-        <input id="link-slug" type="text" bind:value={formSlug} required placeholder="e.g., quick-chat" />
+        <input id="link-slug" type="text" bind:value={formSlug} oninput={() => { manualSlugEdit = true; slugError = ''; }} required placeholder="e.g., quick-chat" pattern="[a-z0-9\-]+" />
+        {#if slugError}
+          <span class="field-error" role="alert">{slugError}</span>
+        {/if}
       </div>
 
       <div class="form-field">
@@ -401,9 +459,9 @@
         </select>
       </div>
 
-      <fieldset class="form-field" style="border: none; padding: 0; margin: 0;">
-        <legend style="font-size: 13px; font-weight: 500; color: var(--color-text); padding: 0; margin-bottom: var(--space-1);">Durations</legend>
-        <div style="display: flex; gap: var(--space-4); padding-top: var(--space-1);">
+      <fieldset class="form-field durations-fieldset">
+        <legend class="durations-legend">Durations</legend>
+        <div class="durations-row">
           <label class="toggle-label">
             <input type="checkbox" bind:checked={formDuration15} />
             <span>15 min</span>
@@ -434,21 +492,160 @@
 <style lang="scss">
   @use '$lib/styles/mixins' as *;
 
+  .links-page {
+    padding: var(--space-6);
+  }
+
+  .links-loading {
+    @include flex-center;
+    padding: var(--space-12) 0;
+  }
+
+  .text-secondary {
+    color: var(--color-text-secondary);
+  }
+
+  .empty-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-top: var(--space-4);
+  }
+
+  .empty-desc {
+    color: var(--color-text-secondary);
+    margin-top: var(--space-2);
+  }
+
+  .empty-cta {
+    margin-top: var(--space-5);
+  }
+
+  .table-grid {
+    grid-template-columns: 1fr 140px 160px 60px 40px 40px;
+  }
+
+  .link-name {
+    font-weight: 500;
+    color: var(--color-text);
+  }
+
+  .link-slug {
+    color: var(--color-text-secondary);
+    font-size: 0.8125rem;
+  }
+
+  .link-durations {
+    display: flex;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+
   .duration-pill {
     @include badge(var(--color-surface-hover), var(--color-text-secondary));
     font-weight: 500;
-    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-family: $font-mono;
   }
 
-  .copy-btn {
-    @include flex-center;
-    @include touch-target;
-    @include hover-surface;
-    background: none;
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .field-error {
+    font-size: 0.75rem;
+    color: var(--color-danger);
+  }
+
+  .panel-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .durations-fieldset {
     border: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .durations-legend {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text);
+    padding: 0;
+    margin-bottom: var(--space-1);
+  }
+
+  .durations-row {
+    display: flex;
+    gap: var(--space-4);
+    padding-top: var(--space-1);
+  }
+
+  .confirm-delete {
+    @include dropdown-menu;
+    top: 100%;
+    right: 0;
+    min-width: 160px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .confirm-delete-text {
+    font-size: 0.8125rem;
+    color: var(--color-text);
+    white-space: nowrap;
+  }
+
+  .confirm-delete-yes {
+    padding: var(--space-1) var(--space-3);
+    background: var(--color-danger);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 500;
     cursor: pointer;
-    padding: var(--space-1);
-    border-radius: var(--radius-md);
+  }
+
+  .confirm-delete-no {
+    padding: var(--space-1) var(--space-3);
+    background: none;
     color: var(--color-text-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    @include hover-surface;
+  }
+
+  .kebab-menu-item--focused {
+    background: var(--color-surface-hover);
+  }
+
+  @include mobile {
+    .table-grid {
+      grid-template-columns: 1fr 100px 120px 50px 36px 36px;
+    }
+  }
+
+  @include small {
+    .table-grid {
+      grid-template-columns: 1fr 80px 40px 36px 36px;
+    }
+    .link-slug {
+      display: none;
+    }
   }
 </style>

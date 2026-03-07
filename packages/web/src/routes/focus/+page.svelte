@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { pageTitle } from '$lib/brand';
+  import { onMount, onDestroy } from 'svelte';
   import Loader2 from 'lucide-svelte/icons/loader-2';
   import Check from 'lucide-svelte/icons/check';
+  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import { focusTime as focusApi } from '$lib/api';
+  import { SchedulingHours } from '@cadence/shared';
 
   // Config state
   let weeklyTarget = $state(10);
@@ -10,19 +13,12 @@
   let schedulingHours = $state('working');
   let enabled = $state(true);
   let loading = $state(true);
+  let loadFailed = $state(false);
   let error = $state('');
   let saveStatus = $state<'idle' | 'saving' | 'saved'>('idle');
 
-  // Progress data
-  let dailyBreakdown = $state([
-    { day: 'Mon', hours: 1.5 },
-    { day: 'Tue', hours: 2.0 },
-    { day: 'Wed', hours: 1.0 },
-    { day: 'Thu', hours: 2.0 },
-    { day: 'Fri', hours: 1.5 },
-    { day: 'Sat', hours: 0 },
-    { day: 'Sun', hours: 0 },
-  ]);
+  // Progress data — no API endpoint provides daily breakdown yet
+  let dailyBreakdown = $state<{ day: string; hours: number }[]>([]);
 
   let weeklyActual = $derived(dailyBreakdown.reduce((sum, d) => sum + d.hours, 0));
 
@@ -37,25 +33,35 @@
 
   let maxBarHours = $derived(Math.max(...dailyBreakdown.map(d => d.hours), dailyTarget, 0.1));
 
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  onDestroy(() => {
+    if (saveTimer) clearTimeout(saveTimer);
+  });
+
   async function saveConfig() {
     saveStatus = 'saving';
+    error = '';
     try {
       await focusApi.update({
         weeklyTargetMinutes: weeklyTarget * 60,
         dailyTargetMinutes: dailyTarget * 60,
-        schedulingHours: schedulingHours as any,
+        schedulingHours: schedulingHours as SchedulingHours,
         enabled,
       });
       saveStatus = 'saved';
-    } catch {
-      saveStatus = 'saved';
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => { saveStatus = 'idle'; }, 2000);
+    } catch (err) {
+      error = err instanceof Error ? err.message : 'Failed to save configuration.';
+      saveStatus = 'idle';
     }
-    setTimeout(() => { saveStatus = 'idle'; }, 2000);
   }
 
-  onMount(async () => {
+  async function loadConfig() {
     loading = true;
     error = '';
+    loadFailed = false;
     try {
       const config = await focusApi.get();
       weeklyTarget = (config.weeklyTargetMinutes ?? 600) / 60;
@@ -63,65 +69,68 @@
       schedulingHours = config.schedulingHours ?? 'working';
       enabled = config.enabled ?? true;
     } catch {
-      error = 'Failed to load data from API. Showing cached data.';
+      error = 'Failed to load data from API.';
+      loadFailed = true;
     } finally {
       loading = false;
     }
-  });
+  }
+
+  onMount(() => { loadConfig(); });
 </script>
 
 <svelte:head>
-  <title>Focus Time - Cadence</title>
+  <title>{pageTitle('Focus Time')}</title>
 </svelte:head>
 
-<div style="padding: 24px; max-width: 960px;">
-  <h1 style="font-size: 20px; font-weight: 600; color: var(--color-text); margin: 0 0 24px 0;">Focus Time</h1>
+<div class="page-wrapper">
+  <h1 class="page-title">Focus Time</h1>
 
   {#if error}
-    <div role="alert" style="margin-bottom: 16px; padding: 10px 14px; background: var(--color-danger-muted); color: var(--color-danger); border-radius: var(--radius-md); font-size: 13px;">
+    <div class="alert-error" role="alert">
       {error}
+      {#if loadFailed}
+        <button class="retry-btn" onclick={() => { loadConfig(); }}>
+          <RefreshCw size={14} strokeWidth={1.5} />
+          Retry
+        </button>
+      {/if}
     </div>
   {/if}
 
   {#if loading}
-    <div style="display: flex; align-items: center; justify-content: center; padding: 48px 0;" role="status" aria-live="polite">
-      <p style="color: var(--color-text-secondary); font-size: 14px;">Loading...</p>
+    <div class="loading-state" role="status" aria-live="polite">
+      <p>Loading...</p>
     </div>
   {:else}
-    <div class="focus-layout" style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+    <div class="focus-layout">
 
       <!-- Configuration -->
-      <div style="display: flex; flex-direction: column; gap: 24px;">
-        <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px;">
-          <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0;">Configuration</h2>
+      <div class="config-column">
+        <div class="card">
+          <h2 class="card-heading">Configuration</h2>
 
-          <div style="display: flex; flex-direction: column; gap: 16px;">
+          <div class="config-fields">
             <!-- Enable toggle -->
-            <div style="display: flex; align-items: center; justify-content: space-between;">
-              <span id="focus-enable-label" style="font-size: 13px; font-weight: 500; color: var(--color-text);">Enable Focus Time</span>
+            <div class="toggle-row">
+              <span id="focus-enable-label" class="toggle-row-label">Enable Focus Time</span>
               <button
                 id="focus-enable-toggle"
                 onclick={() => { enabled = !enabled; }}
                 role="switch"
                 aria-checked={enabled}
                 aria-labelledby="focus-enable-label"
-                style="position: relative; width: 36px; height: 20px; border-radius: var(--radius-full); border: none;
-                  background: {enabled ? 'var(--color-accent)' : 'var(--color-border-strong)'}; cursor: pointer;
-                  transition: background var(--transition-fast);"
+                class="toggle-switch"
+                class:toggle-switch--on={enabled}
               >
-                <span
-                  style="position: absolute; top: 2px; left: {enabled ? '18px' : '2px'}; width: 16px; height: 16px;
-                    border-radius: var(--radius-full); background: white; transition: left var(--transition-fast);"
-                ></span>
+                <span class="toggle-switch-knob" class:toggle-switch-knob--on={enabled}></span>
               </button>
             </div>
 
             <!-- Weekly Target -->
-            <div>
-              <label for="focus-weekly-target" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">
-                Weekly Target
-              </label>
-              <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="form-field">
+              <label for="focus-weekly-target">Weekly Target</label>
+              <div class="input-with-unit">
                 <input
                   id="focus-weekly-target"
                   type="number"
@@ -130,19 +139,15 @@
                   max="60"
                   step="0.5"
                   class="font-mono"
-                  style="flex: 1; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
-                    border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
                 />
-                <span style="font-size: 13px; color: var(--color-text-secondary);">hours</span>
+                <span class="input-unit">hours</span>
               </div>
             </div>
 
             <!-- Daily Target -->
-            <div>
-              <label for="focus-daily-target" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">
-                Daily Target
-              </label>
-              <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="form-field">
+              <label for="focus-daily-target">Daily Target</label>
+              <div class="input-with-unit">
                 <input
                   id="focus-daily-target"
                   type="number"
@@ -151,24 +156,15 @@
                   max="12"
                   step="0.5"
                   class="font-mono"
-                  style="flex: 1; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
-                    border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
                 />
-                <span style="font-size: 13px; color: var(--color-text-secondary);">hours</span>
+                <span class="input-unit">hours</span>
               </div>
             </div>
 
             <!-- Scheduling Hours -->
-            <div>
-              <label for="focus-sched-hours" style="display: block; font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px;">
-                Scheduling Hours
-              </label>
-              <select
-                id="focus-sched-hours"
-                bind:value={schedulingHours}
-                style="width: 100%; padding: 8px 10px; font-size: 13px; border: 1px solid var(--color-border);
-                  border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); cursor: pointer;"
-              >
+            <div class="form-field">
+              <label for="focus-sched-hours">Scheduling Hours</label>
+              <select id="focus-sched-hours" bind:value={schedulingHours}>
                 <option value="working">Working Hours</option>
                 <option value="personal">Personal Hours</option>
                 <option value="custom">Custom</option>
@@ -178,21 +174,19 @@
         </div>
 
         <!-- Save Button -->
+        {#if loadFailed}
+          <p id="save-disabled-reason" class="sr-only">Save is disabled because configuration failed to load.</p>
+        {/if}
         <button
           onclick={saveConfig}
-          disabled={saveStatus === 'saving'}
-          style="width: 100%; padding: 10px 0; font-size: 14px; font-weight: 500; border: none;
-            border-radius: var(--radius-md); cursor: pointer;
-            background: {saveStatus === 'saved' ? 'var(--color-success)' : 'var(--color-accent)'};
-            color: var(--color-accent-text);
-            opacity: {saveStatus === 'saving' ? '0.7' : '1'};
-            transition: background var(--transition-fast), opacity var(--transition-fast);"
-          onmouseenter={(e) => { if (saveStatus === 'idle') e.currentTarget.style.background = 'var(--color-accent-hover)'; }}
-          onmouseleave={(e) => { if (saveStatus === 'idle') e.currentTarget.style.background = 'var(--color-accent)'; }}
+          disabled={saveStatus === 'saving' || loadFailed}
+          class="btn-save save-btn"
+          class:save-btn--saved={saveStatus === 'saved'}
+          aria-describedby={loadFailed ? 'save-disabled-reason' : undefined}
         >
-          <span style="display: inline-flex; align-items: center; gap: 6px;">
+          <span class="save-btn-inner">
             {#if saveStatus === 'saving'}
-              <Loader2 size={16} style="animation: spin 1s linear infinite;" />
+              <Loader2 size={16} class="spin-icon" />
               Saving...
             {:else if saveStatus === 'saved'}
               <Check size={16} />
@@ -205,11 +199,11 @@
       </div>
 
       <!-- Progress -->
-      <div style="display: flex; flex-direction: column; gap: 24px;">
+      <div class="progress-column">
         <!-- Progress Ring -->
-        <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px; display: flex; flex-direction: column; align-items: center;">
-          <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0; align-self: flex-start;">This Week</h2>
-          <svg width="148" height="148" viewBox="0 0 148 148" aria-label="Weekly focus progress: {progressPercent}%">
+        <div class="card ring-card">
+          <h2 class="card-heading">This Week</h2>
+          <svg width="148" height="148" viewBox="0 0 148 148" role="img" aria-label="Weekly focus progress: {progressPercent}%">
             <circle
               cx="74" cy="74" r={ringRadius}
               fill="none"
@@ -230,16 +224,16 @@
             <text
               x="74" y="70"
               text-anchor="middle"
-              class="font-mono"
-              style="font-size: 28px; font-weight: 700; fill: var(--color-text);"
+              class="ring-pct"
+              aria-hidden="true"
             >
               {progressPercent}%
             </text>
             <text
               x="74" y="90"
               text-anchor="middle"
-              class="font-mono"
-              style="font-size: 12px; fill: var(--color-text-secondary);"
+              class="ring-detail"
+              aria-hidden="true"
             >
               {weeklyActual}h / {weeklyTarget}h
             </text>
@@ -247,42 +241,42 @@
         </div>
 
         <!-- Daily Breakdown -->
-        <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px;">
-          <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0;">Daily Breakdown</h2>
+        <div class="card">
+          <h2 class="card-heading">Daily Breakdown</h2>
 
-          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 20px;">
-            {#each dailyBreakdown as day}
-              {@const barWidth = maxBarHours > 0 ? (day.hours / maxBarHours) * 100 : 0}
-              <div style="display: grid; grid-template-columns: 36px 1fr 40px; gap: 12px; align-items: center;">
-                <span class="font-mono" style="font-size: 12px; color: var(--color-text-secondary); text-align: right;">
-                  {day.day}
-                </span>
-                <div style="height: 20px; border-radius: var(--radius-sm); overflow: hidden; background: var(--color-surface-hover);">
-                  {#if day.hours > 0}
-                    <div
-                      style="height: 100%; width: {barWidth}%; border-radius: var(--radius-sm);
-                        background: {day.hours >= dailyTarget ? 'var(--color-accent)' : 'var(--color-focus-border)'};
-                        transition: width var(--transition-base);"
-                    ></div>
-                  {/if}
+          {#if dailyBreakdown.length === 0}
+            <p class="breakdown-empty">No breakdown data available yet.</p>
+          {:else}
+            <div class="breakdown-list">
+              {#each dailyBreakdown as day}
+                {@const barWidth = maxBarHours > 0 ? (day.hours / maxBarHours) * 100 : 0}
+                <div class="breakdown-row" aria-label="{day.day}: {day.hours} hours">
+                  <span class="font-mono breakdown-day">{day.day}</span>
+                  <div class="breakdown-track" aria-hidden="true">
+                    {#if day.hours > 0}
+                      <div
+                        class="breakdown-bar"
+                        class:breakdown-bar--met={day.hours >= dailyTarget}
+                        style="width: {barWidth}%;"
+                      ></div>
+                    {/if}
+                  </div>
+                  <span class="font-mono breakdown-hours">{day.hours}h</span>
                 </div>
-                <span class="font-mono" style="font-size: 12px; color: var(--color-text-tertiary); text-align: right;">
-                  {day.hours}h
-                </span>
-              </div>
-            {/each}
-          </div>
+              {/each}
+            </div>
 
-          <div style="display: flex; gap: 16px; margin-top: 16px;">
-            <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-tertiary);">
-              <span style="width: 8px; height: 8px; border-radius: 2px; background: var(--color-accent);"></span>
-              Met target
-            </span>
-            <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-tertiary);">
-              <span style="width: 8px; height: 8px; border-radius: 2px; background: var(--color-focus-border);"></span>
-              Below target
-            </span>
-          </div>
+            <div class="legend">
+              <span class="legend-item">
+                <span class="legend-swatch legend-swatch--met" aria-hidden="true"></span>
+                Met target
+              </span>
+              <span class="legend-item">
+                <span class="legend-swatch legend-swatch--below" aria-hidden="true"></span>
+                Below target
+              </span>
+            </div>
+          {/if}
         </div>
       </div>
     </div>
@@ -292,19 +286,237 @@
 <style lang="scss">
   @use '$lib/styles/mixins' as *;
 
-  input:focus, select:focus {
-    outline: none;
-    border-color: var(--color-accent);
-    box-shadow: 0 0 0 2px var(--color-accent-muted);
+  .page-wrapper {
+    padding: var(--space-6);
+    max-width: 960px;
+  }
+
+  .page-title {
+    margin-bottom: var(--space-6);
+  }
+
+  .loading-state {
+    @include flex-center;
+    padding: var(--space-12) 0;
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+  }
+
+  .focus-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-6);
+  }
+
+  .config-column,
+  .progress-column {
+    @include flex-col(var(--space-6));
+  }
+
+  .card {
+    @include card;
+    padding: var(--space-6);
+  }
+
+  .card-heading {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 0 0 var(--space-5) 0;
+  }
+
+  .config-fields {
+    @include flex-col(var(--space-4));
+  }
+
+  .toggle-row {
+    @include flex-between;
+  }
+
+  .toggle-row-label {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--color-text);
+  }
+
+  // Input with unit suffix
+  .input-with-unit {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+
+    input {
+      flex: 1;
+    }
+  }
+
+  .input-unit {
+    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+  }
+
+  // Save button
+  .save-btn {
+    width: 100%;
+    padding: var(--space-3) 0;
+
+    &--saved {
+      background: var(--color-success);
+
+      &:hover {
+        background: var(--color-success);
+      }
+    }
+  }
+
+  .save-btn-inner {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  :global(.spin-icon) {
+    animation: spin 1s linear infinite;
+  }
+
+  // Ring card
+  .ring-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+
+    .card-heading {
+      align-self: flex-start;
+    }
   }
 
   .ring-progress {
     @include ring-progress;
   }
 
+  .ring-pct {
+    font-family: $font-mono;
+    font-size: 28px;
+    font-weight: 700;
+    fill: var(--color-text);
+  }
+
+  .ring-detail {
+    font-family: $font-mono;
+    font-size: 12px;
+    fill: var(--color-text-secondary);
+  }
+
+  .breakdown-empty {
+    color: var(--color-text-tertiary);
+    font-size: 0.875rem;
+    text-align: center;
+    padding: var(--space-6) 0;
+  }
+
+  .retry-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: var(--space-3);
+    padding: var(--space-1) var(--space-2);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border: 1px solid var(--color-danger);
+    border-radius: var(--radius-md);
+    background: none;
+    color: var(--color-danger);
+    cursor: pointer;
+    @include hover-surface;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  // Daily breakdown
+  .breakdown-list {
+    @include flex-col(var(--space-2));
+    margin-top: var(--space-5);
+  }
+
+  .breakdown-row {
+    display: grid;
+    grid-template-columns: 36px 1fr 40px;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  .breakdown-day {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    text-align: right;
+  }
+
+  .breakdown-track {
+    height: 20px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--color-surface-hover);
+  }
+
+  .breakdown-bar {
+    height: 100%;
+    border-radius: var(--radius-sm);
+    background: var(--color-focus-border);
+    transition: width var(--transition-base);
+
+    &--met {
+      background: var(--color-accent);
+    }
+  }
+
+  .breakdown-hours {
+    font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+    text-align: right;
+  }
+
+  // Legend
+  .legend {
+    display: flex;
+    gap: var(--space-4);
+    margin-top: var(--space-4);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .legend-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+
+    &--met {
+      background: var(--color-accent);
+    }
+
+    &--below {
+      background: var(--color-focus-border);
+    }
+  }
+
   @include mobile {
     .focus-layout {
-      grid-template-columns: 1fr !important;
+      grid-template-columns: 1fr;
     }
   }
 </style>

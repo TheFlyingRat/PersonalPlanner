@@ -1,7 +1,7 @@
 import express from 'express';
-import { timingSafeEqual } from 'crypto';
 
 const TEST_API_KEY = 'test-api-key-12345';
+const TEST_USER_ID = 'test-user-id';
 
 /**
  * Creates a minimal Express app with JSON parsing and auth middleware,
@@ -11,25 +11,11 @@ export function createTestApp(prefix: string, router: express.Router): express.E
   const app = express();
   app.use(express.json());
 
-  // Auth middleware matching production behavior
-  app.use('/api', (req, res, next) => {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-      next();
-      return;
-    }
-
-    const authHeader = req.headers.authorization;
-    const expected = `Bearer ${apiKey}`;
-    if (
-      !authHeader ||
-      authHeader.length !== expected.length ||
-      !timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected))
-    ) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
+  // Auth middleware — sets req.userId for all requests (simulates JWT auth)
+  app.use('/api', (req, _res, next) => {
+    req.userId = TEST_USER_ID;
+    req.userEmail = 'test@example.com';
+    req.userPlan = 'free';
     next();
   });
 
@@ -41,4 +27,4 @@ export function authHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${TEST_API_KEY}` };
 }
 
-export { TEST_API_KEY };
+export { TEST_API_KEY, TEST_USER_ID };

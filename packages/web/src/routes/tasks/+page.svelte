@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
-  import { tasks as tasksApi, calendars as calendarsApi } from '$lib/api';
-  import type { Subtask, Calendar } from '../../../../shared/src/types';
+  import { pageTitle } from '$lib/brand';
+  import { tick } from 'svelte';
+  import { tasks as tasksApi, calendars as calendarsApi, ApiError } from '$lib/api';
+  import { SchedulingHours } from '@cadence/shared';
+  import type { Task, Subtask, Calendar, CreateTaskRequest } from '@cadence/shared';
   import Plus from 'lucide-svelte/icons/plus';
   import Pencil from 'lucide-svelte/icons/pencil';
   import Trash2 from 'lucide-svelte/icons/trash-2';
@@ -11,76 +13,13 @@
   import ListChecks from 'lucide-svelte/icons/list-checks';
   import EllipsisVertical from 'lucide-svelte/icons/ellipsis-vertical';
 
-  interface TaskItem {
-    id: string;
-    name: string;
-    priority: number;
-    totalDuration: number;
-    remainingDuration: number;
-    dueDate: string;
-    earliestStart: string;
-    chunkMin: number;
-    chunkMax: number;
-    status: string;
-    isUpNext: boolean;
-  }
+  const colorNames: Record<string, string> = {
+    '#4285f4': 'Blue', '#ea4335': 'Red', '#34a853': 'Green', '#fbbc04': 'Yellow',
+    '#ff6d01': 'Orange', '#e91e63': 'Pink', '#9c27b0': 'Purple', '#795548': 'Brown',
+    '#46bdc6': 'Teal', '#7b61ff': 'Violet',
+  };
 
-  const mockTasks: TaskItem[] = [
-    {
-      id: '1',
-      name: 'Write API Documentation',
-      priority: 2,
-      totalDuration: 180,
-      remainingDuration: 120,
-      dueDate: '2026-03-10T17:00:00Z',
-      earliestStart: '2026-03-04T09:00:00Z',
-      chunkMin: 30,
-      chunkMax: 90,
-      status: 'open',
-      isUpNext: true,
-    },
-    {
-      id: '2',
-      name: 'Fix Login Bug',
-      priority: 1,
-      totalDuration: 60,
-      remainingDuration: 60,
-      dueDate: '2026-03-06T17:00:00Z',
-      earliestStart: '2026-03-04T09:00:00Z',
-      chunkMin: 15,
-      chunkMax: 60,
-      status: 'open',
-      isUpNext: false,
-    },
-    {
-      id: '3',
-      name: 'Design Review Feedback',
-      priority: 3,
-      totalDuration: 90,
-      remainingDuration: 0,
-      dueDate: '2026-03-05T17:00:00Z',
-      earliestStart: '2026-03-01T09:00:00Z',
-      chunkMin: 30,
-      chunkMax: 60,
-      status: 'completed',
-      isUpNext: false,
-    },
-    {
-      id: '4',
-      name: 'Prepare Sprint Demo',
-      priority: 2,
-      totalDuration: 120,
-      remainingDuration: 45,
-      dueDate: '2026-03-07T17:00:00Z',
-      earliestStart: '2026-03-03T09:00:00Z',
-      chunkMin: 30,
-      chunkMax: 60,
-      status: 'done_scheduling',
-      isUpNext: false,
-    },
-  ];
-
-  let taskList = $state<TaskItem[]>(mockTasks);
+  let taskList = $state<Task[]>([]);
   let showPanel = $state(false);
   let editingId = $state<string | null>(null);
   let loading = $state(true);
@@ -88,6 +27,9 @@
   let success = $state('');
   let submitting = $state(false);
   let menuOpenId = $state<string | null>(null);
+  let confirmingDeleteId = $state<string | null>(null);
+  let panelTrigger: HTMLElement | null = null;
+  let successTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Form fields
   let formName = $state('');
@@ -97,6 +39,7 @@
   let formEarliestStart = $state('');
   let formChunkMin = $state(15);
   let formChunkMax = $state(60);
+  let formSchedulingHours: SchedulingHours = $state(SchedulingHours.Working);
 
   let calendarList = $state<Calendar[]>([]);
   let formCalendarId = $state('');
@@ -109,7 +52,7 @@
   let subtasksLoading = $state(false);
   let subtaskCounts = $state<Record<string, { done: number; total: number }>>({});
 
-  let panelEl = $state<HTMLDivElement | null>(null);
+  let panelEl: HTMLDivElement | null = null;
 
   const priorityLabels: Record<number, string> = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4' };
   const statusLabels: Record<string, string> = {
@@ -118,9 +61,14 @@
     completed: 'Completed',
   };
 
-  function showSuccess(msg: string) {
+  $effect(() => {
+    return () => clearTimeout(successTimer);
+  });
+
+  function showSuccessMsg(msg: string) {
     success = msg;
-    setTimeout(() => { success = ''; }, 3000);
+    clearTimeout(successTimer);
+    successTimer = setTimeout(() => { success = ''; }, 3000);
   }
 
   function formatDuration(minutes: number): string {
@@ -142,7 +90,7 @@
     return d.toISOString().split('T')[0];
   }
 
-  function progress(task: TaskItem): number {
+  function progress(task: Task): number {
     return task.totalDuration > 0 ? Math.round(((task.totalDuration - task.remainingDuration) / task.totalDuration) * 100) : 0;
   }
 
@@ -154,6 +102,7 @@
     formEarliestStart = '';
     formChunkMin = 15;
     formChunkMax = 60;
+    formSchedulingHours = SchedulingHours.Working;
     formCalendarId = '';
     formColor = '';
     formSkipBuffer = false;
@@ -161,15 +110,24 @@
   }
 
   async function loadAllSubtaskCounts() {
-    for (const task of taskList) {
-      try {
-        const subs = await tasksApi.getSubtasks(task.id);
-        const done = subs.filter((s) => s.completed).length;
-        subtaskCounts = { ...subtaskCounts, [task.id]: { done, total: subs.length } };
-      } catch {
-        // API not available
+    const results = await Promise.all(
+      taskList.map(async (task) => {
+        try {
+          const subs = await tasksApi.getSubtasks(task.id);
+          const done = subs.filter((s) => s.completed).length;
+          return { id: task.id, done, total: subs.length };
+        } catch {
+          return null;
+        }
+      })
+    );
+    let newCounts = { ...subtaskCounts };
+    for (const result of results) {
+      if (result) {
+        newCounts = { ...newCounts, [result.id]: { done: result.done, total: result.total } };
       }
     }
+    subtaskCounts = newCounts;
   }
 
   async function loadSubtasks(taskId: string) {
@@ -240,6 +198,7 @@
   }
 
   function openAddForm() {
+    panelTrigger = document.activeElement as HTMLElement;
     resetForm();
     subtasks = [];
     newSubtaskName = '';
@@ -247,7 +206,8 @@
     tick().then(() => focusFirstInPanel());
   }
 
-  function openEditForm(task: TaskItem) {
+  function openEditForm(task: Task) {
+    panelTrigger = document.activeElement as HTMLElement;
     editingId = task.id;
     formName = task.name;
     formPriority = task.priority;
@@ -256,9 +216,10 @@
     formEarliestStart = toDateInputValue(task.earliestStart);
     formChunkMin = task.chunkMin;
     formChunkMax = task.chunkMax;
-    formCalendarId = (task as any).calendarId ?? '';
-    formColor = (task as any).color ?? '';
-    formSkipBuffer = (task as any).skipBuffer ?? false;
+    formSchedulingHours = task.schedulingHours ?? 'working';
+    formCalendarId = task.calendarId ?? '';
+    formColor = task.color ?? '';
+    formSkipBuffer = task.skipBuffer ?? false;
     newSubtaskName = '';
     showPanel = true;
     tick().then(() => focusFirstInPanel());
@@ -268,6 +229,8 @@
   function closePanel() {
     showPanel = false;
     resetForm();
+    panelTrigger?.focus();
+    panelTrigger = null;
   }
 
   function focusFirstInPanel() {
@@ -289,25 +252,28 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      if (menuOpenId) { menuOpenId = null; return; }
+      if (menuOpenId) { menuOpenId = null; confirmingDeleteId = null; return; }
       if (showPanel) closePanel();
     }
   }
 
   function handleWindowClick() {
-    if (menuOpenId) menuOpenId = null;
+    if (menuOpenId) { menuOpenId = null; confirmingDeleteId = null; }
   }
 
   async function handleSubmit() {
     submitting = true;
+    error = '';
+    const dueDate = formDueDate ? new Date(formDueDate + 'T23:59:59').toISOString() : undefined;
     const taskData = {
       name: formName,
       priority: formPriority,
       totalDuration: formTotalDuration,
-      dueDate: new Date(formDueDate).toISOString(),
-      earliestStart: formEarliestStart ? new Date(formEarliestStart).toISOString() : new Date().toISOString(),
+      dueDate,
+      earliestStart: formEarliestStart ? new Date(formEarliestStart + 'T00:00:00').toISOString() : undefined,
       chunkMin: formChunkMin,
       chunkMax: formChunkMax,
+      schedulingHours: formSchedulingHours,
       calendarId: formCalendarId || undefined,
       color: formColor || undefined,
       skipBuffer: formSkipBuffer,
@@ -315,105 +281,124 @@
 
     try {
       if (editingId) {
-        await tasksApi.update(editingId, taskData as any);
+        await tasksApi.update(editingId, taskData);
       } else {
-        await tasksApi.create(taskData as any);
+        await tasksApi.create({ ...taskData, dueDate: dueDate ?? '' } as CreateTaskRequest);
       }
-      const list = await tasksApi.list();
-      taskList = list as any;
-      showSuccess(editingId ? 'Task updated successfully.' : 'Task created successfully.');
-    } catch {
-      if (editingId) {
-        taskList = taskList.map((t) =>
-          t.id === editingId ? { ...t, ...taskData } : t
-        );
-        showSuccess('Task updated (offline).');
+      taskList = await tasksApi.list();
+      showSuccessMsg(editingId ? 'Task updated successfully.' : 'Task created successfully.');
+      closePanel();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        // Network error - use optimistic offline update
+        if (editingId) {
+          taskList = taskList.map((t) =>
+            t.id === editingId ? { ...t, ...taskData } : t
+          ) as Task[];
+          showSuccessMsg('Task updated (offline).');
+        } else {
+          taskList = [
+            ...taskList,
+            {
+              id: crypto.randomUUID(),
+              ...taskData,
+              remainingDuration: taskData.totalDuration,
+              status: 'open',
+              isUpNext: false,
+            } as unknown as Task,
+          ];
+          showSuccessMsg('Task created (offline).');
+        }
+        closePanel();
       } else {
-        taskList = [
-          ...taskList,
-          {
-            id: crypto.randomUUID(),
-            ...taskData,
-            remainingDuration: taskData.totalDuration,
-            status: 'open',
-            isUpNext: false,
-          },
-        ];
-        showSuccess('Task created (offline).');
+        error = err instanceof ApiError ? err.message : 'Operation failed';
       }
     } finally {
       submitting = false;
     }
-
-    closePanel();
   }
 
-  async function toggleComplete(task: TaskItem) {
+  async function toggleComplete(task: Task) {
     try {
       await tasksApi.complete(task.id);
-      const list = await tasksApi.list();
-      taskList = list as any;
-    } catch {
-      taskList = taskList.map((t) =>
-        t.id === task.id
-          ? { ...t, status: t.status === 'completed' ? 'open' : 'completed', remainingDuration: t.status === 'completed' ? t.totalDuration : 0 }
-          : t
-      );
+      taskList = await tasksApi.list();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        taskList = taskList.map((t) =>
+          t.id === task.id
+            ? { ...t, status: t.status === 'completed' ? 'open' : 'completed', remainingDuration: t.status === 'completed' ? t.totalDuration : 0 } as unknown as Task
+            : t
+        );
+      } else {
+        error = err instanceof ApiError ? err.message : 'Operation failed';
+      }
     }
   }
 
-  async function toggleUpNext(task: TaskItem) {
+  async function toggleUpNext(task: Task) {
     try {
       await tasksApi.setUpNext(task.id, !task.isUpNext);
-      const list = await tasksApi.list();
-      taskList = list as any;
-    } catch {
-      taskList = taskList.map((t) =>
-        t.id === task.id ? { ...t, isUpNext: !t.isUpNext } : t
-      );
+      taskList = await tasksApi.list();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        taskList = taskList.map((t) =>
+          t.id === task.id ? { ...t, isUpNext: !t.isUpNext } : t
+        );
+      } else {
+        error = err instanceof ApiError ? err.message : 'Operation failed';
+      }
     }
   }
 
   async function deleteTask(id: string) {
-    if (!confirm('Are you sure you want to delete this task?')) return;
     try {
       await tasksApi.delete(id);
-      const list = await tasksApi.list();
-      taskList = list as any;
-      showSuccess('Task deleted successfully.');
-    } catch {
-      taskList = taskList.filter((t) => t.id !== id);
-      showSuccess('Task deleted (offline).');
+      taskList = await tasksApi.list();
+      showSuccessMsg('Task deleted successfully.');
+    } catch (err) {
+      if (err instanceof TypeError) {
+        taskList = taskList.filter((t) => t.id !== id);
+        showSuccessMsg('Task deleted (offline).');
+      } else {
+        error = err instanceof ApiError ? err.message : 'Operation failed';
+      }
     }
+    confirmingDeleteId = null;
+    menuOpenId = null;
   }
 
-  onMount(async () => {
-    loading = true;
-    error = '';
-    try {
-      const list = await tasksApi.list();
-      taskList = list as any;
-    } catch {
-      error = 'Failed to load data from API. Showing cached data.';
-    } finally {
-      loading = false;
-    }
-    loadAllSubtaskCounts();
-    calendarsApi.list().then((c) => { calendarList = c; }).catch(() => {});
+  $effect(() => {
+    (async () => {
+      loading = true;
+      error = '';
+      try {
+        taskList = await tasksApi.list();
+      } catch (err) {
+        if (err instanceof TypeError) {
+          error = 'Unable to connect. Please check your network.';
+        } else {
+          error = err instanceof ApiError ? err.message : 'Failed to load data.';
+        }
+      } finally {
+        loading = false;
+      }
+      loadAllSubtaskCounts();
+      calendarsApi.list().then((c) => { calendarList = c; }).catch(() => {});
+    })();
   });
 </script>
 
 <svelte:head>
-  <title>Tasks - Cadence</title>
+  <title>{pageTitle('Tasks')}</title>
 </svelte:head>
 
 <svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
 
-<div style="padding: var(--space-6);">
+<div class="page-wrapper">
   <!-- Header -->
-  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6);">
-    <h1 style="font-size: 1.5rem; font-weight: 600; color: var(--color-text);">Tasks</h1>
-    <button onclick={openAddForm} class="btn-accent-pill" aria-expanded={showPanel}>
+  <div class="page-header">
+    <h1 class="page-title">Tasks</h1>
+    <button onclick={openAddForm} class="btn-accent-pill" aria-haspopup="dialog">
       <Plus size={16} strokeWidth={1.5} />
       Add Task
     </button>
@@ -423,110 +408,121 @@
     <div class="alert-error" role="alert">{error}</div>
   {/if}
   {#if success}
-    <div class="alert-success" role="alert">{success}</div>
+    <div class="alert-success" role="status">{success}</div>
   {/if}
 
   {#if loading}
-    <div style="display: flex; align-items: center; justify-content: center; padding: var(--space-12) 0;" role="status" aria-live="polite">
-      <p style="color: var(--color-text-secondary);">Loading...</p>
+    <div class="loading-container" role="status" aria-live="polite">
+      <p class="loading-text">Loading...</p>
     </div>
   {:else if taskList.length === 0}
     <!-- Empty State -->
     <div class="empty-state">
       <CheckSquare size={48} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
-      <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--color-text); margin-top: var(--space-4);">No tasks yet</h2>
-      <p style="color: var(--color-text-secondary); margin-top: var(--space-2);">Create your first task to start scheduling</p>
-      <button onclick={openAddForm} class="btn-accent-pill" style="margin-top: var(--space-5);">
+      <h2 class="empty-state-title">No tasks yet</h2>
+      <p class="empty-state-desc">Create your first task to start scheduling</p>
+      <button onclick={openAddForm} class="btn-accent-pill empty-state-btn" aria-haspopup="dialog">
         <Plus size={16} strokeWidth={1.5} />
         Add Task
       </button>
     </div>
   {:else}
-    <!-- Table Header -->
-    <div class="table-header" style="grid-template-columns: 1fr 70px 90px 90px 80px 120px 40px;">
-      <span>Name</span>
-      <span>Priority</span>
-      <span>Duration</span>
-      <span>Due Date</span>
-      <span>Status</span>
-      <span>Progress</span>
-      <span></span>
-    </div>
-
-    <!-- Table Rows -->
-    {#each taskList as task}
-      <div
-        class="table-row"
-        style="grid-template-columns: 1fr 70px 90px 90px 80px 120px 40px;"
-        onclick={() => openEditForm(task)}
-        role="button"
-        tabindex="0"
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditForm(task); } }}
-      >
-        <span style="display: flex; align-items: center; gap: var(--space-2); font-weight: 500; color: var(--color-text);">
-          {#if task.status === 'completed'}
-            <span style="text-decoration: line-through; color: var(--color-text-tertiary);">{task.name}</span>
-          {:else}
-            {task.name}
-          {/if}
-          {#if task.isUpNext}
-            <span class="upnext-badge">
-              <Zap size={12} strokeWidth={1.5} />
-              Up Next
-            </span>
-          {/if}
-          {#if subtaskCounts[task.id]?.total}
-            <span class="subtask-count-badge">
-              <ListChecks size={12} strokeWidth={1.5} />
-              {subtaskCounts[task.id].done}/{subtaskCounts[task.id].total}
-            </span>
-          {/if}
-        </span>
-        <span>
-          <span class="priority-badge priority-{task.priority}">{priorityLabels[task.priority]}</span>
-        </span>
-        <span class="font-mono" style="color: var(--color-text-secondary); font-size: 0.8125rem;">
-          {formatDuration(task.remainingDuration)}/{formatDuration(task.totalDuration)}
-        </span>
-        <span style="color: var(--color-text-secondary); font-size: 0.8125rem;">{formatDate(task.dueDate)}</span>
-        <span>
-          <span class="status-badge status-{task.status}">{statusLabels[task.status]}</span>
-        </span>
-        <span style="display: flex; align-items: center; gap: var(--space-2);">
-          <div class="progress-track">
-            <div class="progress-fill" style="width: {progress(task)}%;"></div>
-          </div>
-          <span class="font-mono" style="font-size: 0.75rem; color: var(--color-text-secondary);">{progress(task)}%</span>
-        </span>
-        <span class="kebab-cell">
-          <button
-            class="kebab-btn"
-            onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === task.id ? null : task.id; }}
-            aria-label="Actions"
-            aria-haspopup="true"
-            aria-expanded={menuOpenId === task.id}
-          >
-            <EllipsisVertical size={16} strokeWidth={1.5} />
-          </button>
-          {#if menuOpenId === task.id}
-            <div class="kebab-menu" onclick={(e) => e.stopPropagation()}>
-              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; openEditForm(task); }}>
-                <Pencil size={15} strokeWidth={1.5} />
-                Edit
-              </button>
-              <button class="kebab-menu-item kebab-menu-item--danger" onclick={() => { menuOpenId = null; deleteTask(task.id); }}>
-                <Trash2 size={15} strokeWidth={1.5} />
-                Delete
-              </button>
-            </div>
-          {/if}
-        </span>
+    <!-- Table -->
+    <div role="table" aria-label="Tasks list">
+      <!-- Table Header -->
+      <div class="table-header tasks-grid" role="row">
+        <span role="columnheader">Name</span>
+        <span role="columnheader">Priority</span>
+        <span role="columnheader" class="hide-mobile">Duration</span>
+        <span role="columnheader" class="hide-mobile">Due Date</span>
+        <span role="columnheader">Status</span>
+        <span role="columnheader">Progress</span>
+        <span role="columnheader" aria-label="Actions"></span>
       </div>
-    {/each}
+
+      <!-- Table Rows -->
+      {#each taskList as task}
+        <div
+          class="table-row tasks-grid"
+          role="row"
+        >
+          <span role="cell" class="name-cell">
+            {#if task.status === 'completed'}
+              <button class="name-btn name-btn--completed" onclick={() => openEditForm(task)}>{task.name}</button>
+            {:else}
+              <button class="name-btn" onclick={() => openEditForm(task)}>{task.name}</button>
+            {/if}
+            {#if task.isUpNext}
+              <span class="upnext-badge">
+                <Zap size={12} strokeWidth={1.5} />
+                Up Next
+              </span>
+            {/if}
+            {#if subtaskCounts[task.id]?.total}
+              <span class="subtask-count-badge">
+                <ListChecks size={12} strokeWidth={1.5} />
+                {subtaskCounts[task.id].done}/{subtaskCounts[task.id].total}
+              </span>
+            {/if}
+          </span>
+          <span role="cell">
+            <span class="priority-badge priority-{task.priority}">{priorityLabels[task.priority]}</span>
+          </span>
+          <span role="cell" class="font-mono hide-mobile" style="color: var(--color-text-secondary); font-size: 0.8125rem;">
+            {formatDuration(task.remainingDuration)}/{formatDuration(task.totalDuration)}
+          </span>
+          <span role="cell" class="hide-mobile" style="color: var(--color-text-secondary); font-size: 0.8125rem;">{formatDate(task.dueDate)}</span>
+          <span role="cell">
+            <span class="status-badge status-{task.status}">{statusLabels[task.status]}</span>
+          </span>
+          <span role="cell" style="display: flex; align-items: center; gap: var(--space-2);">
+            <div class="progress-track">
+              <div class="progress-fill" style="width: {progress(task)}%;"></div>
+            </div>
+            <span class="font-mono" style="font-size: 0.75rem; color: var(--color-text-secondary);">{progress(task)}%</span>
+          </span>
+          <span role="cell" class="kebab-cell">
+            <button
+              class="kebab-btn"
+              onclick={(e) => { e.stopPropagation(); confirmingDeleteId = null; menuOpenId = menuOpenId === task.id ? null : task.id; }}
+              aria-label="Actions"
+              aria-haspopup="menu"
+              aria-expanded={menuOpenId === task.id}
+            >
+              <EllipsisVertical size={16} strokeWidth={1.5} />
+            </button>
+            {#if menuOpenId === task.id}
+              <div class="kebab-menu" role="menu" onclick={(e) => e.stopPropagation()}>
+                {#if confirmingDeleteId === task.id}
+                  <span class="confirm-text" role="none">Delete this task?</span>
+                  <button class="kebab-menu-item kebab-menu-item--danger" role="menuitem" onclick={() => deleteTask(task.id)}>
+                    Confirm
+                  </button>
+                  <button class="kebab-menu-item" role="menuitem" onclick={() => { confirmingDeleteId = null; }}>
+                    Cancel
+                  </button>
+                {:else}
+                  <button class="kebab-menu-item" role="menuitem" onclick={() => { menuOpenId = null; openEditForm(task); }}>
+                    <Pencil size={15} strokeWidth={1.5} />
+                    Edit
+                  </button>
+                  <button class="kebab-menu-item kebab-menu-item--danger" role="menuitem" onclick={() => { confirmingDeleteId = task.id; }}>
+                    <Trash2 size={15} strokeWidth={1.5} />
+                    Delete
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </span>
+        </div>
+      {/each}
+    </div>
   {/if}
 </div>
 
 <!-- Slide-over Panel -->
+<!-- Note: aria-modal="true" on a div requires manual focus trapping (trapFocus handles this).
+     A native <dialog> would provide this automatically but doesn't support slide-over animation. -->
 {#if showPanel}
   <div class="panel-backdrop" onclick={closePanel} aria-hidden="true"></div>
   <div
@@ -539,7 +535,7 @@
     onkeydown={trapFocus}
   >
     <div class="panel-header">
-      <h2 id="panel-title" style="font-size: 1.125rem; font-weight: 600; color: var(--color-text);">
+      <h2 id="panel-title" class="panel-title">
         {editingId ? 'Edit Task' : 'Add Task'}
       </h2>
       <button onclick={closePanel} class="panel-close-btn" aria-label="Close panel">
@@ -593,6 +589,15 @@
         </div>
       </div>
 
+      <div class="form-field">
+        <label for="task-sched">Schedule during</label>
+        <select id="task-sched" bind:value={formSchedulingHours}>
+          <option value="working">Work hours</option>
+          <option value="personal">Personal hours</option>
+          <option value="custom">Anytime (custom)</option>
+        </select>
+      </div>
+
       {#if calendarList.length > 0}
         <div class="form-field">
           <label for="task-calendar">Calendar</label>
@@ -615,7 +620,7 @@
               class:color-swatch--active={formColor === c}
               style="background: {c};"
               onclick={() => { formColor = c; }}
-              aria-label="Select color {c}"
+              aria-label="Select {colorNames[c] ?? c}"
             ></button>
           {/each}
           <button
@@ -628,7 +633,7 @@
         </div>
       </div>
 
-      <div class="form-field" style="display: flex; gap: var(--space-4);">
+      <div class="form-toggles">
         <label class="toggle-label">
           <input type="checkbox" bind:checked={formSkipBuffer} />
           <span>No buffer time</span>
@@ -638,7 +643,7 @@
       {#if editingId}
         {@const task = taskList.find(t => t.id === editingId)}
         {#if task}
-          <div style="display: flex; gap: var(--space-3); padding-top: var(--space-2); border-top: 1px solid var(--color-border);">
+          <div class="task-actions">
             <button
               type="button"
               class="btn-action"
@@ -729,6 +734,97 @@
 
 <style lang="scss">
   @use '$lib/styles/mixins' as *;
+
+  .page-wrapper {
+    padding: var(--space-6);
+  }
+
+  .panel-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .loading-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-12) 0;
+  }
+
+  .loading-text {
+    color: var(--color-text-secondary);
+  }
+
+  .empty-state-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-top: var(--space-4);
+  }
+
+  .empty-state-desc {
+    color: var(--color-text-secondary);
+    margin-top: var(--space-2);
+  }
+
+  .empty-state-btn {
+    margin-top: var(--space-5);
+  }
+
+  .tasks-grid {
+    grid-template-columns: 1fr 70px 90px 90px 80px 120px 40px;
+  }
+
+  @include mobile {
+    .tasks-grid {
+      grid-template-columns: 1fr 70px 80px 120px 40px;
+    }
+  }
+
+  .name-cell {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: 500;
+    color: var(--color-text);
+    overflow: hidden;
+  }
+
+  .name-btn {
+    @include text-truncate;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-weight: 500;
+    color: var(--color-text);
+    cursor: pointer;
+    text-align: left;
+
+    &:hover {
+      color: var(--color-accent);
+    }
+
+    &--completed {
+      text-decoration: line-through;
+      color: var(--color-text-tertiary);
+    }
+  }
+
+  .task-actions {
+    display: flex;
+    gap: var(--space-3);
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--color-border);
+  }
+
+  .form-toggles {
+    display: flex;
+    gap: var(--space-6);
+    padding: var(--space-2) 0;
+    flex-wrap: wrap;
+  }
 
   /* Status badges */
   .status-badge {
@@ -826,6 +922,12 @@
     &:hover {
       background: var(--color-surface-hover);
 
+      .subtask-delete {
+        opacity: 1;
+      }
+    }
+
+    &:focus-within {
       .subtask-delete {
         opacity: 1;
       }

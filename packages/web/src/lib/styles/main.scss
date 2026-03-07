@@ -1,7 +1,9 @@
 @use 'variables' as *;
 @use 'components';
+@use 'auth';
 
-@import 'tailwindcss';
+@import '@fontsource/geist-sans';
+@import '@fontsource/geist-mono';
 
 // ============================================
 //   Design System — CSS Custom Properties
@@ -26,6 +28,7 @@
   --color-danger-muted: #FEF2F2;
   --color-success: #10B981;
   --color-success-muted: #ECFDF5;
+  --color-overlay: rgba(0, 0, 0, 0.4);
 
   // Event Type Colors — Light Mode
   --color-habit-bg: #ECFDF5;
@@ -40,6 +43,9 @@
   --color-external-border: #A1A1AA;
 
   // Priority & Status Colors — Light Mode
+  // --color-warning-bg and --color-warning-amber-bg share the same value (#FFF7ED) intentionally:
+  // --color-warning-bg is used for generic warnings (orange/red), --color-warning-amber-bg is for
+  // amber-specific warnings (e.g., priority-2 badges). They may diverge if the palette is tuned.
   --color-warning-bg: #FFF7ED;
   --color-warning: #EA580C;
   --color-warning-amber-bg: #FFF7ED;
@@ -78,6 +84,18 @@
   // Sidebar
   --sidebar-width: #{$sidebar-width};
   --sidebar-collapsed-width: #{$sidebar-collapsed-width};
+
+  // Auth pages
+  --auth-card-width: 420px;
+  --auth-page-max-width: 1200px;
+
+  // Easing
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  // Onboarding wizard
+  --wizard-step-size: 8px;
+  --wizard-track-height: 2px;
 }
 
 // ============================================
@@ -103,13 +121,19 @@
     --color-danger-muted: #450A0A;
     --color-success: #34D399;
     --color-success-muted: #052E16;
+    --color-overlay: rgba(0, 0, 0, 0.6);
 
     // Event Type Colors — Dark Mode
     --color-habit-bg: #052E16;
+    --color-habit-border: #0D9668;
     --color-task-bg: #172554;
+    --color-task-border: #3574E0;
     --color-meeting-bg: #1E1338;
+    --color-meeting-border: #7C4FDB;
     --color-focus-bg: #422006;
+    --color-focus-border: #DB8C0A;
     --color-external-bg: #27272A;
+    --color-external-border: #8A8A94;
 
     // Priority & Status Colors — Dark Mode
     --color-warning-bg: #431407;
@@ -166,14 +190,22 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 // ============================================
-//   Reduced Motion
+//   Reduced Motion — surgical targeting
 // ============================================
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+  html { scroll-behavior: auto !important; }
+
+  .panel-slideover { animation-duration: 0.01ms !important; }
+  .kebab-menu { animation-duration: 0.01ms !important; }
+
+  @keyframes fadeIn {
+    from { opacity: 1; transform: none; }
+    to { opacity: 1; transform: none; }
+  }
+
+  @keyframes slideIn {
+    from { transform: translateX(0); }
+    to { transform: translateX(0); }
   }
 }

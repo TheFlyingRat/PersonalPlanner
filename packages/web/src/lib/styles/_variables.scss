@@ -1,12 +1,16 @@
 // Breakpoints
-$bp-mobile: 768px;
 $bp-small: 480px;
+$bp-mobile: 768px;
+$bp-tablet: 1024px;
 
 // Z-index scale
+$z-sidebar: 40;
 $z-dropdown: 50;
-$z-sticky: 60;
+$z-panel: 60;
+$z-tooltip: 70;
 $z-overlay: 100;
-$z-modal: 101;
+$z-modal: 110;
+$z-progress: 200;
 $z-toast: 1000;
 
 // Font stacks

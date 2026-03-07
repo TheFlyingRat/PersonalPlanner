@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import { db } from '../db/index.js';
-import { calendars, calendarEvents } from '../db/schema.js';
+import { db } from '../db/pg-index.js';
+import { calendars, calendarEvents } from '../db/pg-schema.js';
 import { GoogleCalendarClient } from './calendar.js';
 import { CalendarPoller } from './polling.js';
 import type { CalendarEvent } from '@cadence/shared';
@@ -12,17 +12,20 @@ import type { CalendarEvent } from '@cadence/shared';
  */
 export class CalendarPollerManager {
   private pollers = new Map<string, CalendarPoller>();
+  private userId: string;
 
   constructor(
     private client: GoogleCalendarClient,
     private onChanges: (calendarId: string, events: CalendarEvent[]) => Promise<void>,
-  ) {}
+    userId?: string,
+  ) {
+    this.userId = userId || '';
+  }
 
-  /** Start pollers for all enabled calendars. */
+  /** Start pollers for all enabled calendars (scoped to user if userId set). */
   async startAll(): Promise<void> {
-    const enabledCalendars = db.select().from(calendars)
-      .where(eq(calendars.enabled, true))
-      .all();
+    const enabledCalendars = await db.select().from(calendars)
+      .where(eq(calendars.enabled, true));
 
     for (const cal of enabledCalendars) {
       await this.startPoller(cal.id, cal.googleCalendarId);
@@ -32,12 +35,13 @@ export class CalendarPollerManager {
   /** Start a poller for a specific calendar. Also does an initial event cache. */
   async startPoller(calId: string, googleCalendarId: string): Promise<void> {
     // Stop existing poller if any
-    this.stopPoller(calId);
+    await this.stopPoller(calId);
 
     // Initial sync: fetch all events and cache them immediately
     try {
-      const calRow = db.select().from(calendars)
-        .where(eq(calendars.id, calId)).all()[0];
+      const calRows = await db.select().from(calendars)
+        .where(eq(calendars.id, calId));
+      const calRow = calRows[0];
       const syncResult = await this.client.syncEvents(
         googleCalendarId,
         calRow?.syncToken || null,
@@ -45,22 +49,20 @@ export class CalendarPollerManager {
 
       // Store sync token
       if (syncResult.nextSyncToken) {
-        db.update(calendars)
+        await db.update(calendars)
           .set({ syncToken: syncResult.nextSyncToken })
-          .where(eq(calendars.id, calId))
-          .run();
+          .where(eq(calendars.id, calId));
       }
 
       // Cache external events only (skip Cadence-managed ones, they live in scheduledEvents)
       const now = new Date().toISOString();
-      db.delete(calendarEvents)
-        .where(eq(calendarEvents.calendarId, calId))
-        .run();
+      await db.delete(calendarEvents)
+        .where(eq(calendarEvents.calendarId, calId));
       for (const ev of syncResult.events) {
         if (ev.isManaged) continue;
         if (ev.start && ev.end && ev.title) {
-          db.insert(calendarEvents).values({
-            id: crypto.randomUUID(),
+          await db.insert(calendarEvents).values({
+            userId: this.userId,
             calendarId: calId,
             googleEventId: ev.googleEventId || '',
             title: ev.title,
@@ -70,7 +72,7 @@ export class CalendarPollerManager {
             location: ev.location || null,
             isAllDay: !ev.start.includes('T'),
             updatedAt: now,
-          }).run();
+          });
         }
       }
       console.log(`[poller] Cached ${syncResult.events.length} events for calendar ${calId}`);
@@ -85,16 +87,14 @@ export class CalendarPollerManager {
         await this.onChanges(calId, events);
       },
       async () => {
-        const rows = db.select().from(calendars)
-          .where(eq(calendars.id, calId))
-          .all();
+        const rows = await db.select().from(calendars)
+          .where(eq(calendars.id, calId));
         return rows[0]?.syncToken || null;
       },
       async (token) => {
-        db.update(calendars)
+        await db.update(calendars)
           .set({ syncToken: token })
-          .where(eq(calendars.id, calId))
-          .run();
+          .where(eq(calendars.id, calId));
       },
     );
 
@@ -103,23 +103,23 @@ export class CalendarPollerManager {
   }
 
   /** Stop a specific calendar's poller and clear cached events. */
-  stopPoller(calId: string): void {
+  async stopPoller(calId: string): Promise<void> {
     const poller = this.pollers.get(calId);
     if (poller) {
       poller.stop();
       this.pollers.delete(calId);
     }
     // Clear cached events for this calendar
-    db.delete(calendarEvents)
-      .where(eq(calendarEvents.calendarId, calId))
-      .run();
+    await db.delete(calendarEvents)
+      .where(eq(calendarEvents.calendarId, calId));
   }
 
   /** Stop all pollers. */
   stopAll(): void {
-    for (const [calId] of this.pollers) {
-      this.stopPoller(calId);
+    for (const [, poller] of this.pollers) {
+      poller.stop();
     }
+    this.pollers.clear();
   }
 
   /** Signal that we wrote to a specific calendar. */

@@ -1,14 +1,19 @@
 import { Router } from 'express';
-import { db } from '../db/index.js';
-import { scheduledEvents, habits } from '../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { db } from '../db/pg-index.js';
+import { scheduledEvents, habits } from '../db/pg-schema.js';
 import type { AnalyticsData } from '@cadence/shared';
 
 const router = Router();
 
 // GET /api/analytics — compute analytics from scheduled_events
-router.get('/', (_req, res) => {
-  const events = db.select().from(scheduledEvents).all();
-  const allHabits = db.select().from(habits).all();
+router.get('/', async (req, res) => {
+  const userId = req.userId;
+
+  const [events, allHabits] = await Promise.all([
+    db.select().from(scheduledEvents).where(eq(scheduledEvents.userId, userId)),
+    db.select().from(habits).where(eq(habits.userId, userId)),
+  ]);
 
   let habitMinutes = 0;
   let taskMinutes = 0;
@@ -51,8 +56,9 @@ router.get('/', (_req, res) => {
 });
 
 // GET /api/analytics/weekly — weekly breakdown
-router.get('/weekly', (_req, res) => {
-  const events = db.select().from(scheduledEvents).all();
+router.get('/weekly', async (req, res) => {
+  const userId = req.userId;
+  const events = await db.select().from(scheduledEvents).where(eq(scheduledEvents.userId, userId));
 
   // Group events by date (day)
   const dayMap = new Map<string, { habitMinutes: number; taskMinutes: number; meetingMinutes: number; focusMinutes: number }>();

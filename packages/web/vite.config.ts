@@ -1,14 +1,11 @@
 import { sveltekit } from '@sveltejs/kit/vite';
-import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 import { compression } from 'vite-plugin-compression2';
 
 export default defineConfig({
 	plugins: [
-		tailwindcss(),
 		sveltekit(),
-		compression({ algorithm: 'gzip', exclude: [/\.(br|gz)$/] }),
-		compression({ algorithm: 'brotliCompress', exclude: [/\.(br|gz)$/] }),
+		compression({ algorithms: ['gzip', 'brotliCompress'], exclude: [/\.(br|gz)$/] }),
 	],
 	server: {
 		proxy: {
@@ -41,7 +38,14 @@ export default defineConfig({
 			'lucide-svelte/icons/users',
 			'lucide-svelte/icons/x',
 			'lucide-svelte/icons/bar-chart-3',
+			'lucide-svelte/icons/download',
 			'lucide-svelte/icons/ellipsis-vertical',
+			'lucide-svelte/icons/history',
+			'lucide-svelte/icons/arrow-right',
+			'lucide-svelte/icons/plus',
+			'lucide-svelte/icons/chevrons-up-down',
+			'lucide-svelte/icons/wifi',
+			'lucide-svelte/icons/wifi-off',
 		],
 	},
 	build: {

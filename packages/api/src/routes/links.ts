@@ -1,138 +1,130 @@
 import { Router } from 'express';
 import { eq, and, gte, lte } from 'drizzle-orm';
-import { db } from '../db/index.js';
-import { schedulingLinks, scheduledEvents, users } from '../db/schema.js';
+import { db } from '../db/pg-index.js';
+import { schedulingLinks, scheduledEvents, users } from '../db/pg-schema.js';
 import type { CreateLinkRequest, SchedulingLink, UserSettings } from '@cadence/shared';
 import { SchedulingHours } from '@cadence/shared';
 import { createLinkSchema, updateLinkSchema } from '../validation.js';
+import { sendValidationError, sendNotFound, sendError } from './helpers.js';
 
 const router = Router();
 
-// GET /api/links — list scheduling links
-router.get('/', (_req, res) => {
-  const rows = db.select().from(schedulingLinks).all();
+// GET /api/links — list scheduling links for the current user
+router.get('/', async (req, res) => {
+  const rows = await db.select().from(schedulingLinks).where(eq(schedulingLinks.userId, req.userId));
   const result: SchedulingLink[] = rows.map(toLink);
   res.json(result);
 });
 
 // POST /api/links — create a scheduling link
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const parsed = createLinkSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    sendValidationError(res, parsed.error);
     return;
   }
   const body = parsed.data as CreateLinkRequest;
 
   // Check for slug uniqueness
-  const existingSlug = db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, body.slug)).get();
-  if (existingSlug) {
-    res.status(409).json({ error: 'Slug already exists' });
+  const existingSlug = await db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, body.slug));
+  if (existingSlug.length > 0) {
+    sendError(res, 409, 'Slug already exists');
     return;
   }
 
-  const now = new Date().toISOString();
-  const id = crypto.randomUUID();
-
   const row = {
-    id,
+    userId: req.userId,
     slug: body.slug,
     name: body.name,
-    durations: JSON.stringify(body.durations),
+    durations: body.durations,
     schedulingHours: body.schedulingHours ?? 'working',
     priority: body.priority ?? 3,
     enabled: true,
-    createdAt: now,
-    updatedAt: now,
   };
 
-  db.insert(schedulingLinks).values(row).run();
-
-  const created = db.select().from(schedulingLinks).where(eq(schedulingLinks.id, id)).get();
-  res.status(201).json(toLink(created!));
+  const inserted = await db.insert(schedulingLinks).values(row).returning();
+  res.status(201).json(toLink(inserted[0]));
 });
 
 // PUT /api/links/:id — update a scheduling link
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(schedulingLinks).where(eq(schedulingLinks.id, id)).get();
+  const existing = await db.select().from(schedulingLinks).where(and(eq(schedulingLinks.id, id), eq(schedulingLinks.userId, req.userId)));
 
-  if (!existing) {
-    res.status(404).json({ error: 'Scheduling link not found' });
+  if (existing.length === 0) {
+    sendNotFound(res, 'Scheduling link');
     return;
   }
 
   const parsed = updateLinkSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    sendValidationError(res, parsed.error);
     return;
   }
 
   const body = parsed.data;
-  const now = new Date().toISOString();
-
-  const updates: Record<string, unknown> = { updatedAt: now };
+  const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
 
   if (body.name !== undefined) updates.name = body.name;
   if (body.slug !== undefined) {
     // Check slug uniqueness if changing
-    if (body.slug !== existing.slug) {
-      const existingSlug = db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, body.slug)).get();
-      if (existingSlug) {
-        res.status(409).json({ error: 'Slug already exists' });
+    if (body.slug !== existing[0].slug) {
+      const existingSlug = await db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, body.slug));
+      if (existingSlug.length > 0) {
+        sendError(res, 409, 'Slug already exists');
         return;
       }
     }
     updates.slug = body.slug;
   }
-  if (body.durations !== undefined) updates.durations = JSON.stringify(body.durations);
+  if (body.durations !== undefined) updates.durations = body.durations;
   if (body.schedulingHours !== undefined) updates.schedulingHours = body.schedulingHours;
   if (body.priority !== undefined) updates.priority = body.priority;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
 
-  db.update(schedulingLinks).set(updates).where(eq(schedulingLinks.id, id)).run();
-
-  const updated = db.select().from(schedulingLinks).where(eq(schedulingLinks.id, id)).get();
-  res.json(toLink(updated!));
+  const updated = await db.update(schedulingLinks).set(updates).where(and(eq(schedulingLinks.id, id), eq(schedulingLinks.userId, req.userId))).returning();
+  res.json(toLink(updated[0]));
 });
 
 // DELETE /api/links/:id — delete a scheduling link
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(schedulingLinks).where(eq(schedulingLinks.id, id)).get();
+  const existing = await db.select().from(schedulingLinks).where(and(eq(schedulingLinks.id, id), eq(schedulingLinks.userId, req.userId)));
 
-  if (!existing) {
-    res.status(404).json({ error: 'Scheduling link not found' });
+  if (existing.length === 0) {
+    sendNotFound(res, 'Scheduling link');
     return;
   }
 
-  db.delete(schedulingLinks).where(eq(schedulingLinks.id, id)).run();
+  await db.delete(schedulingLinks).where(and(eq(schedulingLinks.id, id), eq(schedulingLinks.userId, req.userId)));
 
   res.status(204).send();
 });
 
 // GET /api/links/:slug/slots — return available time slots
-router.get('/:slug/slots', (req, res) => {
+router.get('/:slug/slots', async (req, res) => {
   const { slug } = req.params;
-  const link = db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, slug)).get();
+  const linkRows = await db.select().from(schedulingLinks).where(and(eq(schedulingLinks.slug, slug), eq(schedulingLinks.userId, req.userId)));
 
-  if (!link) {
-    res.status(404).json({ error: 'Scheduling link not found' });
+  if (linkRows.length === 0) {
+    sendNotFound(res, 'Scheduling link');
     return;
   }
+
+  const link = linkRows[0];
 
   if (!link.enabled) {
-    res.status(410).json({ error: 'Scheduling link is disabled' });
+    sendError(res, 410, 'Scheduling link is disabled');
     return;
   }
 
-  const durations: number[] = link.durations ? JSON.parse(link.durations) : [30];
+  const durations: number[] = (link.durations as number[]) ?? [30];
   const schedulingHours = (link.schedulingHours ?? 'working') as SchedulingHours;
 
   // Load user settings for working/personal hours
-  const userRows = db.select().from(users).all();
-  const userSettings: UserSettings = userRows.length > 0 && userRows[0].settings
-    ? JSON.parse(userRows[0].settings)
+  const userRows = await db.select().from(users).where(eq(users.id, req.userId));
+  const userSettings: UserSettings = userRows.length > 0 && userRows[0].settings && typeof userRows[0].settings === 'object'
+    ? userRows[0].settings as UserSettings
     : {
         workingHours: { start: '09:00', end: '17:00' },
         personalHours: { start: '07:00', end: '22:00' },
@@ -148,15 +140,15 @@ router.get('/:slug/slots', (req, res) => {
   const windowEnd = new Date(now);
   windowEnd.setDate(windowEnd.getDate() + 7);
 
-  // Load all existing scheduled events within the window
-  const existingEvents = db.select().from(scheduledEvents)
+  // Load all existing scheduled events within the window for this user
+  const existingEvents = await db.select().from(scheduledEvents)
     .where(
       and(
+        eq(scheduledEvents.userId, req.userId),
         gte(scheduledEvents.end, now.toISOString()),
         lte(scheduledEvents.start, windowEnd.toISOString()),
       ),
-    )
-    .all();
+    );
 
   // Build occupied intervals from existing events
   const occupied: Array<{ start: number; end: number }> = existingEvents.map((ev) => ({
@@ -217,17 +209,19 @@ router.get('/:slug/slots', (req, res) => {
 });
 
 // POST /api/links/:slug/book — book a slot
-router.post('/:slug/book', (req, res) => {
+router.post('/:slug/book', async (req, res) => {
   const { slug } = req.params;
-  const link = db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, slug)).get();
+  const linkRows = await db.select().from(schedulingLinks).where(and(eq(schedulingLinks.slug, slug), eq(schedulingLinks.userId, req.userId)));
 
-  if (!link) {
-    res.status(404).json({ error: 'Scheduling link not found' });
+  if (linkRows.length === 0) {
+    sendNotFound(res, 'Scheduling link');
     return;
   }
 
+  const link = linkRows[0];
+
   if (!link.enabled) {
-    res.status(410).json({ error: 'Scheduling link is disabled' });
+    sendError(res, 410, 'Scheduling link is disabled');
     return;
   }
 
@@ -239,7 +233,7 @@ router.post('/:slug/book', (req, res) => {
   };
 
   if (!start || !end) {
-    res.status(400).json({ error: 'Missing required fields: start, end' });
+    sendError(res, 400, 'Missing required fields: start, end');
     return;
   }
 
@@ -247,51 +241,59 @@ router.post('/:slug/book', (req, res) => {
   const endDate = new Date(end);
 
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-    res.status(400).json({ error: 'Invalid date format for start or end' });
+    sendError(res, 400, 'Invalid date format for start or end');
     return;
   }
 
   if (endDate <= startDate) {
-    res.status(400).json({ error: 'End must be after start' });
+    sendError(res, 400, 'End must be after start');
     return;
   }
 
   // Validate that start is in the future
   if (startDate.getTime() <= Date.now()) {
-    res.status(400).json({ error: 'Start time must be in the future' });
+    sendError(res, 400, 'Start time must be in the future');
     return;
   }
 
   // Validate that the booking duration matches one of the link's configured durations
   const bookingDurationMin = Math.round((endDate.getTime() - startDate.getTime()) / 60000);
-  const configuredDurations: number[] = link.durations ? JSON.parse(link.durations) : [];
+  const configuredDurations: number[] = (link.durations as number[]) ?? [];
   if (!configuredDurations.includes(bookingDurationMin)) {
-    res.status(400).json({ error: `Duration ${bookingDurationMin} minutes is not one of the allowed durations: ${configuredDurations.join(', ')}` });
+    sendError(res, 400, 'Invalid duration');
     return;
   }
 
-  // Validate name (max 200 chars)
+  // Validate name
+  if (name !== undefined && typeof name !== 'string') {
+    sendError(res, 400, 'Name must be a string');
+    return;
+  }
   if (name !== undefined && name.length > 200) {
-    res.status(400).json({ error: 'Name must be 200 characters or fewer' });
+    sendError(res, 400, 'Name must be 200 characters or fewer');
     return;
   }
 
   // Validate email format if provided
+  if (email !== undefined && email !== '' && email.length > 254) {
+    sendError(res, 400, 'Email too long');
+    return;
+  }
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (email !== undefined && email !== '' && !emailRegex.test(email)) {
-    res.status(400).json({ error: 'Invalid email format' });
+    sendError(res, 400, 'Invalid email format');
     return;
   }
 
   // Verify the slot is still available (not taken since slots were listed)
-  const conflicting = db.select().from(scheduledEvents)
+  const conflicting = (await db.select().from(scheduledEvents)
     .where(
       and(
+        eq(scheduledEvents.userId, req.userId),
         gte(scheduledEvents.end, start),
         lte(scheduledEvents.start, end),
       ),
-    )
-    .all()
+    ))
     .filter((ev) => {
       // Check for actual overlap (not just touching boundaries)
       const evStart = new Date(ev.start!).getTime();
@@ -300,31 +302,29 @@ router.post('/:slug/book', (req, res) => {
     });
 
   if (conflicting.length > 0) {
-    res.status(409).json({ error: 'Slot is no longer available' });
+    sendError(res, 409, 'Slot is no longer available');
     return;
   }
 
   // Create a scheduled_event in the DB for this booking
   const now = new Date().toISOString();
-  const eventId = crypto.randomUUID();
   const durationMin = Math.round((endDate.getTime() - startDate.getTime()) / 60000);
   const bookingTitle = name ? `Booking: ${name}` : `Booking via ${slug}`;
 
-  db.insert(scheduledEvents).values({
-    id: eventId,
+  const inserted = await db.insert(scheduledEvents).values({
+    userId: req.userId,
     itemType: 'meeting',
     itemId: link.id,
+    title: bookingTitle,
     googleEventId: null,
     start,
     end,
     status: 'busy',
     alternativeSlotsCount: null,
-    createdAt: now,
-    updatedAt: now,
-  }).run();
+  }).returning();
 
   res.status(201).json({
-    id: eventId,
+    id: inserted[0].id,
     slug,
     title: bookingTitle,
     start,
@@ -341,7 +341,7 @@ function toLink(row: typeof schedulingLinks.$inferSelect): SchedulingLink {
     id: row.id,
     slug: row.slug,
     name: row.name,
-    durations: row.durations ? JSON.parse(row.durations) as number[] : [],
+    durations: (row.durations ?? []) as number[],
     schedulingHours: (row.schedulingHours ?? 'working') as SchedulingLink['schedulingHours'],
     priority: row.priority ?? 3,
     enabled: row.enabled ?? true,

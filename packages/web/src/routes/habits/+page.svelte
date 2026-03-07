@@ -1,13 +1,16 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
-  import { habits as habitsApi, calendars as calendarsApi } from '$lib/api';
-  import type { HabitCompletion, Calendar } from '../../../../shared/src/types';
+  import { pageTitle } from '$lib/brand';
+  import { tick } from 'svelte';
+  import { habits as habitsApi, calendars as calendarsApi, ApiError } from '$lib/api';
+  import { Frequency, SchedulingHours } from '@cadence/shared';
+  import type { Habit, HabitCompletion, Calendar } from '@cadence/shared';
   import Plus from 'lucide-svelte/icons/plus';
   import Pencil from 'lucide-svelte/icons/pencil';
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import X from 'lucide-svelte/icons/x';
   import Lock from 'lucide-svelte/icons/lock';
-  import Unlock from 'lucide-svelte/icons/unlock';
+  import Bell from 'lucide-svelte/icons/bell';
+  import BellOff from 'lucide-svelte/icons/bell-off';
   import Repeat from 'lucide-svelte/icons/repeat';
   import ToggleLeft from 'lucide-svelte/icons/toggle-left';
   import ToggleRight from 'lucide-svelte/icons/toggle-right';
@@ -16,33 +19,21 @@
   import CircleCheck from 'lucide-svelte/icons/circle-check';
   import EllipsisVertical from 'lucide-svelte/icons/ellipsis-vertical';
 
-  interface HabitItem {
-    id: string;
-    name: string;
-    priority: number;
-    windowStart: string;
-    windowEnd: string;
-    idealTime: string;
-    durationMin: number;
-    durationMax: number;
-    frequency: string;
-    frequencyConfig?: { days?: string[] };
-    schedulingHours: string;
-    locked: boolean;
-    autoDecline: boolean;
-    enabled: boolean;
-    dependsOn?: string | null;
-  }
-
   const ALL_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
   const DAY_LABELS: Record<string, string> = {
-    mon: 'M', tue: 'T', wed: 'W', thu: 'T', fri: 'F', sat: 'S', sun: 'S',
+    mon: 'M', tue: 'Tu', wed: 'W', thu: 'Th', fri: 'F', sat: 'Sa', sun: 'Su',
   };
   const DAY_FULL_LABELS: Record<string, string> = {
     mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun',
   };
   const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri'];
   const WEEKENDS = ['sat', 'sun'];
+
+  const colorNames: Record<string, string> = {
+    '#4285f4': 'Blue', '#ea4335': 'Red', '#34a853': 'Green', '#fbbc04': 'Yellow',
+    '#ff6d01': 'Orange', '#e91e63': 'Pink', '#9c27b0': 'Purple', '#795548': 'Brown',
+    '#46bdc6': 'Teal', '#7b61ff': 'Violet',
+  };
 
   function arraysEqual(a: string[], b: string[]): boolean {
     if (a.length !== b.length) return false;
@@ -58,63 +49,18 @@
     return 'custom';
   }
 
-  function daysFromHabit(habit: HabitItem): string[] {
+  function daysFromHabit(habit: Habit): string[] {
     if (habit.frequencyConfig?.days?.length) return [...habit.frequencyConfig.days];
     if (habit.frequency === 'daily') return [...ALL_DAYS];
     if (habit.frequency === 'weekly') return ['mon'];
     return [...WEEKDAYS];
   }
 
-  // Mock data
-  const mockHabits: HabitItem[] = [
-    {
-      id: '1',
-      name: 'Lunch Break',
-      priority: 1,
-      windowStart: '11:30',
-      windowEnd: '13:30',
-      idealTime: '12:00',
-      durationMin: 30,
-      durationMax: 60,
-      frequency: 'daily',
-      schedulingHours: 'working',
-      locked: true,
-      autoDecline: true,
-      enabled: true,
-    },
-    {
-      id: '2',
-      name: 'Morning Exercise',
-      priority: 2,
-      windowStart: '06:00',
-      windowEnd: '09:00',
-      idealTime: '07:00',
-      durationMin: 30,
-      durationMax: 60,
-      frequency: 'daily',
-      schedulingHours: 'personal',
-      locked: false,
-      autoDecline: false,
-      enabled: true,
-    },
-    {
-      id: '3',
-      name: 'Weekly Review',
-      priority: 3,
-      windowStart: '14:00',
-      windowEnd: '17:00',
-      idealTime: '15:00',
-      durationMin: 45,
-      durationMax: 60,
-      frequency: 'weekly',
-      schedulingHours: 'working',
-      locked: false,
-      autoDecline: false,
-      enabled: true,
-    },
-  ];
+  function getTodayDateString(): string {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }).format(new Date());
+  }
 
-  let habitList = $state<HabitItem[]>(mockHabits);
+  let habitList = $state<Habit[]>([]);
   let showPanel = $state(false);
   let editingId = $state<string | null>(null);
   let loading = $state(true);
@@ -122,6 +68,9 @@
   let success = $state('');
   let submitting = $state(false);
   let menuOpenId = $state<string | null>(null);
+  let confirmingDeleteId = $state<string | null>(null);
+  let panelTrigger: HTMLElement | null = null;
+  let successTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Calendar list
   let calendarList = $state<Calendar[]>([]);
@@ -130,13 +79,17 @@
   let streaks = $state<Record<string, number>>({});
   let completions = $state<Record<string, HabitCompletion[]>>({});
 
+  $effect(() => {
+    return () => clearTimeout(successTimer);
+  });
+
   function getLast7Days(): string[] {
     const days: string[] = [];
     const now = new Date();
     for (let i = 6; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
-      days.push(d.toISOString().split('T')[0]);
+      days.push(new Intl.DateTimeFormat('en-CA').format(d));
     }
     return days;
   }
@@ -158,41 +111,56 @@
   }
 
   async function loadStreaksAndCompletions() {
-    for (const habit of habitList) {
-      try {
-        const [streakData, completionData] = await Promise.all([
-          habitsApi.getStreak(habit.id),
-          habitsApi.getCompletions(habit.id),
-        ]);
-        streaks = { ...streaks, [habit.id]: streakData.streak };
-        completions = { ...completions, [habit.id]: completionData };
-      } catch {
-        // API not available yet, keep defaults
+    const results = await Promise.all(
+      habitList.map(async (habit) => {
+        try {
+          const [streakData, completionData] = await Promise.all([
+            habitsApi.getStreak(habit.id),
+            habitsApi.getCompletions(habit.id),
+          ]);
+          return { id: habit.id, streak: streakData.currentStreak, completions: completionData };
+        } catch {
+          return null;
+        }
+      })
+    );
+    let newStreaks = { ...streaks };
+    let newCompletions = { ...completions };
+    for (const result of results) {
+      if (result) {
+        newStreaks = { ...newStreaks, [result.id]: result.streak };
+        newCompletions = { ...newCompletions, [result.id]: result.completions };
       }
     }
+    streaks = newStreaks;
+    completions = newCompletions;
   }
 
   async function markComplete(habitId: string) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayDateString();
     try {
       await habitsApi.markComplete(habitId, today);
       const [streakData, completionData] = await Promise.all([
         habitsApi.getStreak(habitId),
         habitsApi.getCompletions(habitId),
       ]);
-      streaks = { ...streaks, [habitId]: streakData.streak };
+      streaks = { ...streaks, [habitId]: streakData.currentStreak };
       completions = { ...completions, [habitId]: completionData };
-      showSuccess('Habit marked complete.');
-    } catch {
-      // Optimistic update for offline
-      const now = new Date().toISOString();
-      const existing = completions[habitId] || [];
-      completions = {
-        ...completions,
-        [habitId]: [...existing, { id: crypto.randomUUID(), habitId, scheduledDate: today, completedAt: now }],
-      };
-      streaks = { ...streaks, [habitId]: (streaks[habitId] || 0) + 1 };
-      showSuccess('Habit marked complete (offline).');
+      showSuccessMsg('Habit marked complete.');
+    } catch (err) {
+      if (err instanceof TypeError) {
+        // Network error — optimistic update for offline
+        const now = new Date().toISOString();
+        const existing = completions[habitId] || [];
+        completions = {
+          ...completions,
+          [habitId]: [...existing, { id: crypto.randomUUID(), habitId, scheduledDate: today, completedAt: now }],
+        };
+        streaks = { ...streaks, [habitId]: (streaks[habitId] || 0) + 1 };
+        showSuccessMsg('Habit marked complete (offline).');
+      } else {
+        error = err instanceof Error ? err.message : 'Failed to mark complete.';
+      }
     }
   }
 
@@ -204,22 +172,23 @@
   let formIdealTime = $state('10:00');
   let formDurationMin = $state(30);
   let formDurationMax = $state(60);
-  let formFrequency = $state('daily');
   let formDays = $state<string[]>([...WEEKDAYS]);
-  let formSchedulingHours = $state('working');
+  let formSchedulingHours: SchedulingHours = $state(SchedulingHours.Working);
   let formLocked = $state(false);
   let formAutoDecline = $state(false);
+  let formNotifications = $state(false);
   let formSkipBuffer = $state(false);
   let formCalendarId = $state('');
   let formColor = $state('');
 
-  let panelEl = $state<HTMLDivElement | null>(null);
+  let panelEl: HTMLDivElement | null = null;
 
   const priorityLabels: Record<number, string> = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4' };
 
-  function showSuccess(msg: string) {
+  function showSuccessMsg(msg: string) {
     success = msg;
-    setTimeout(() => { success = ''; }, 3000);
+    clearTimeout(successTimer);
+    successTimer = setTimeout(() => { success = ''; }, 3000);
   }
 
   function resetForm() {
@@ -230,11 +199,11 @@
     formIdealTime = '10:00';
     formDurationMin = 30;
     formDurationMax = 60;
-    formFrequency = 'daily';
     formDays = [...WEEKDAYS];
-    formSchedulingHours = 'working';
+    formSchedulingHours = SchedulingHours.Working;
     formLocked = false;
     formAutoDecline = false;
+    formNotifications = false;
     formSkipBuffer = false;
     formCalendarId = '';
     formColor = '';
@@ -242,12 +211,14 @@
   }
 
   function openAddForm() {
+    panelTrigger = document.activeElement as HTMLElement;
     resetForm();
     showPanel = true;
     tick().then(() => focusFirstInPanel());
   }
 
-  function openEditForm(habit: HabitItem) {
+  function openEditForm(habit: Habit) {
+    panelTrigger = document.activeElement as HTMLElement;
     editingId = habit.id;
     formName = habit.name;
     formPriority = habit.priority;
@@ -256,14 +227,14 @@
     formIdealTime = habit.idealTime;
     formDurationMin = habit.durationMin;
     formDurationMax = habit.durationMax;
-    formFrequency = habit.frequency;
     formDays = daysFromHabit(habit);
     formSchedulingHours = habit.schedulingHours;
     formLocked = habit.locked;
     formAutoDecline = habit.autoDecline;
-    formSkipBuffer = (habit as any).skipBuffer ?? false;
-    formCalendarId = (habit as any).calendarId ?? '';
-    formColor = (habit as any).color ?? '';
+    formNotifications = habit.notifications ?? false;
+    formSkipBuffer = habit.skipBuffer ?? false;
+    formCalendarId = habit.calendarId ?? '';
+    formColor = habit.color ?? '';
     showPanel = true;
     tick().then(() => focusFirstInPanel());
   }
@@ -271,6 +242,8 @@
   function closePanel() {
     showPanel = false;
     resetForm();
+    panelTrigger?.focus();
+    panelTrigger = null;
   }
 
   function focusFirstInPanel() {
@@ -292,20 +265,30 @@
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
-      if (menuOpenId) { menuOpenId = null; return; }
+      if (menuOpenId) { menuOpenId = null; confirmingDeleteId = null; return; }
       if (showPanel) closePanel();
     }
   }
 
   function handleWindowClick() {
-    if (menuOpenId) menuOpenId = null;
+    if (menuOpenId) { menuOpenId = null; confirmingDeleteId = null; }
   }
 
   async function handleSubmit() {
+    error = '';
+    if (formDurationMin > formDurationMax) {
+      error = 'Min duration cannot exceed max';
+      return;
+    }
+    if (formWindowStart >= formWindowEnd) {
+      error = 'Window start must be before end';
+      return;
+    }
+
     submitting = true;
     const allSelected = arraysEqual(formDays, [...ALL_DAYS]);
     const weekdaysSelected = arraysEqual(formDays, WEEKDAYS);
-    const mappedFrequency = (allSelected || weekdaysSelected) ? 'daily' : 'custom';
+    const mappedFrequency = (allSelected || weekdaysSelected) ? Frequency.Daily : Frequency.Custom;
     const habitData = {
       name: formName,
       priority: formPriority,
@@ -319,6 +302,7 @@
       schedulingHours: formSchedulingHours,
       locked: formLocked,
       autoDecline: formAutoDecline,
+      notifications: formNotifications,
       skipBuffer: formSkipBuffer,
       calendarId: formCalendarId || undefined,
       color: formColor || undefined,
@@ -326,99 +310,131 @@
 
     try {
       if (editingId) {
-        await habitsApi.update(editingId, habitData as any);
+        await habitsApi.update(editingId, habitData);
       } else {
-        await habitsApi.create(habitData as any);
+        await habitsApi.create(habitData);
       }
-      const list = await habitsApi.list();
-      habitList = list as any;
-      showSuccess(editingId ? 'Habit updated successfully.' : 'Habit created successfully.');
-    } catch {
-      // API unavailable - use mock data
-      if (editingId) {
-        habitList = habitList.map((h) =>
-          h.id === editingId ? { ...h, ...habitData } : h
-        );
-        showSuccess('Habit updated (offline).');
+      habitList = await habitsApi.list();
+      showSuccessMsg(editingId ? 'Habit updated successfully.' : 'Habit created successfully.');
+      closePanel();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        // Network error - use optimistic offline update
+        if (editingId) {
+          habitList = habitList.map((h) =>
+            h.id === editingId ? { ...h, ...habitData } : h
+          ) as Habit[];
+          showSuccessMsg('Habit updated (offline).');
+        } else {
+          habitList = [
+            ...habitList,
+            { id: crypto.randomUUID(), ...habitData, enabled: true } as unknown as Habit,
+          ];
+          showSuccessMsg('Habit created (offline).');
+        }
+        closePanel();
       } else {
-        habitList = [
-          ...habitList,
-          { id: crypto.randomUUID(), ...habitData, enabled: true },
-        ];
-        showSuccess('Habit created (offline).');
+        error = err instanceof ApiError ? err.message : 'Operation failed';
       }
     } finally {
       submitting = false;
     }
-
-    closePanel();
   }
 
-  async function toggleLock(habit: HabitItem) {
+  async function toggleLock(habit: Habit) {
     try {
       await habitsApi.lock(habit.id, !habit.locked);
-      const list = await habitsApi.list();
-      habitList = list as any;
-    } catch {
-      habitList = habitList.map((h) =>
-        h.id === habit.id ? { ...h, locked: !h.locked } : h
-      );
+      habitList = await habitsApi.list();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        habitList = habitList.map((h) =>
+          h.id === habit.id ? { ...h, locked: !h.locked } : h
+        );
+      } else {
+        error = err instanceof ApiError ? err.message : 'Operation failed';
+      }
     }
   }
 
-  async function toggleEnabled(habit: HabitItem) {
-    const updated = { ...habit, enabled: !habit.enabled };
+  async function toggleNotifications(habit: Habit) {
     try {
-      await habitsApi.update(habit.id, updated as any);
-      const list = await habitsApi.list();
-      habitList = list as any;
-    } catch {
-      habitList = habitList.map((h) =>
-        h.id === habit.id ? { ...h, enabled: !h.enabled } : h
-      );
+      await habitsApi.update(habit.id, { notifications: !habit.notifications });
+      habitList = await habitsApi.list();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        habitList = habitList.map((h) =>
+          h.id === habit.id ? { ...h, notifications: !h.notifications } : h
+        );
+      } else {
+        error = err instanceof ApiError ? err.message : 'Operation failed';
+      }
+    }
+  }
+
+  async function toggleEnabled(habit: Habit) {
+    try {
+      await habitsApi.update(habit.id, { enabled: !habit.enabled });
+      habitList = await habitsApi.list();
+    } catch (err) {
+      if (err instanceof TypeError) {
+        habitList = habitList.map((h) =>
+          h.id === habit.id ? { ...h, enabled: !h.enabled } : h
+        );
+      } else {
+        error = err instanceof ApiError ? err.message : 'Operation failed';
+      }
     }
   }
 
   async function deleteHabit(id: string) {
-    if (!confirm('Are you sure you want to delete this habit?')) return;
     try {
       await habitsApi.delete(id);
-      const list = await habitsApi.list();
-      habitList = list as any;
-      showSuccess('Habit deleted successfully.');
-    } catch {
-      habitList = habitList.filter((h) => h.id !== id);
-      showSuccess('Habit deleted (offline).');
+      habitList = await habitsApi.list();
+      showSuccessMsg('Habit deleted successfully.');
+    } catch (err) {
+      if (err instanceof TypeError) {
+        habitList = habitList.filter((h) => h.id !== id);
+        showSuccessMsg('Habit deleted (offline).');
+      } else {
+        error = err instanceof ApiError ? err.message : 'Operation failed';
+      }
     }
+    confirmingDeleteId = null;
+    menuOpenId = null;
   }
 
-  onMount(async () => {
-    loading = true;
-    error = '';
-    try {
-      const list = await habitsApi.list();
-      habitList = list as any;
-    } catch {
-      error = 'Failed to load data from API. Showing cached data.';
-    } finally {
-      loading = false;
-    }
-    loadStreaksAndCompletions();
-    calendarsApi.list().then((c) => { calendarList = c; }).catch(() => {});
+  $effect(() => {
+    (async () => {
+      loading = true;
+      error = '';
+      try {
+        habitList = await habitsApi.list();
+      } catch (err) {
+        if (err instanceof TypeError) {
+          error = 'Unable to connect. Please check your network.';
+        } else {
+          error = err instanceof ApiError ? err.message : 'Failed to load data.';
+        }
+      } finally {
+        loading = false;
+      }
+      loadStreaksAndCompletions();
+      calendarsApi.list().then((c) => { calendarList = c; }).catch(() => {});
+    })();
   });
 </script>
 
 <svelte:head>
-  <title>Habits - Cadence</title>
+  <title>{pageTitle('Habits')}</title>
 </svelte:head>
 
 <svelte:window onkeydown={handleKeydown} onclick={handleWindowClick} />
 
-<div style="padding: var(--space-6);">
+<div class="page-wrapper">
   <!-- Header -->
-  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-6);">
-    <h1 style="font-size: 1.5rem; font-weight: 600; color: var(--color-text);">Habits</h1>
-    <button onclick={openAddForm} class="btn-accent-pill" aria-expanded={showPanel}>
+  <div class="page-header">
+    <h1 class="page-title">Habits</h1>
+    <button onclick={openAddForm} class="btn-accent-pill" aria-haspopup="dialog">
       <Plus size={16} strokeWidth={1.5} />
       Add Habit
     </button>
@@ -432,113 +448,134 @@
   {/if}
 
   {#if loading}
-    <div style="display: flex; align-items: center; justify-content: center; padding: var(--space-12) 0;" role="status" aria-live="polite">
-      <p style="color: var(--color-text-secondary);">Loading...</p>
+    <div class="loading-container" role="status" aria-live="polite">
+      <p class="loading-text">Loading...</p>
     </div>
   {:else if habitList.length === 0}
     <!-- Empty State -->
     <div class="empty-state">
       <Repeat size={48} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
-      <h2 style="font-size: 1.125rem; font-weight: 600; color: var(--color-text); margin-top: var(--space-4);">No habits yet</h2>
-      <p style="color: var(--color-text-secondary); margin-top: var(--space-2);">Create your first habit to start scheduling</p>
-      <button onclick={openAddForm} class="btn-accent-pill" style="margin-top: var(--space-5);">
+      <h2 class="empty-state-title">No habits yet</h2>
+      <p class="empty-state-desc">Create your first habit to start scheduling</p>
+      <button onclick={openAddForm} class="btn-accent-pill empty-state-btn" aria-haspopup="dialog">
         <Plus size={16} strokeWidth={1.5} />
         Add Habit
       </button>
     </div>
   {:else}
-    <!-- Table Header -->
-    <div class="table-header" style="grid-template-columns: 1fr 60px 80px 100px 120px 140px 60px 40px;">
-      <span>Name</span>
-      <span>Streak</span>
-      <span>Priority</span>
-      <span>Frequency</span>
-      <span>Duration</span>
-      <span>Window</span>
-      <span>Status</span>
-      <span></span>
-    </div>
-
-    <!-- Table Rows -->
-    {#each habitList as habit}
-      <div
-        class="table-row"
-        style="grid-template-columns: 1fr 60px 80px 100px 120px 140px 60px 40px;"
-        onclick={() => openEditForm(habit)}
-        role="button"
-        tabindex="0"
-        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openEditForm(habit); } }}
-      >
-        <span style="display: flex; align-items: center; gap: var(--space-2); font-weight: 500; color: var(--color-text); overflow: hidden;">
-          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{habit.name}</span>
-          {#if habit.locked}
-            <Lock size={14} strokeWidth={1.5} style="color: var(--color-text-tertiary); flex-shrink: 0;" />
-          {/if}
-          {#if habit.dependsOn}
-            <span class="dependency-badge" title="Depends on: {getParentName(habit.dependsOn)}">
-              <Link2 size={12} strokeWidth={1.5} />
-              {getParentName(habit.dependsOn)}
-            </span>
-          {/if}
-        </span>
-        <span>
-          {#if (streaks[habit.id] || 0) > 0}
-            <span class="streak-badge">
-              <Flame size={14} strokeWidth={1.5} />
-              {streaks[habit.id]}
-            </span>
-          {:else}
-            <span style="color: var(--color-text-tertiary); font-size: 0.8125rem;">--</span>
-          {/if}
-        </span>
-        <span>
-          <span class="priority-badge priority-{habit.priority}">{priorityLabels[habit.priority]}</span>
-        </span>
-        <span style="color: var(--color-text-secondary); text-transform: capitalize;">{habit.frequency}</span>
-        <span class="font-mono" style="color: var(--color-text-secondary);">{habit.durationMin}-{habit.durationMax}m</span>
-        <span class="font-mono" style="color: var(--color-text-secondary);">{habit.windowStart}-{habit.windowEnd}</span>
-        <span>
-          <button
-            class="toggle-btn"
-            onclick={(e) => { e.stopPropagation(); toggleEnabled(habit); }}
-            aria-label={habit.enabled ? 'Disable habit' : 'Enable habit'}
-          >
-            {#if habit.enabled}
-              <ToggleRight size={20} strokeWidth={1.5} style="color: var(--color-accent);" />
-            {:else}
-              <ToggleLeft size={20} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
-            {/if}
-          </button>
-        </span>
-        <span class="kebab-cell">
-          <button
-            class="kebab-btn"
-            onclick={(e) => { e.stopPropagation(); menuOpenId = menuOpenId === habit.id ? null : habit.id; }}
-            aria-label="Actions"
-            aria-haspopup="true"
-            aria-expanded={menuOpenId === habit.id}
-          >
-            <EllipsisVertical size={16} strokeWidth={1.5} />
-          </button>
-          {#if menuOpenId === habit.id}
-            <div class="kebab-menu" onclick={(e) => e.stopPropagation()}>
-              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; markComplete(habit.id); }}>
-                <CircleCheck size={15} strokeWidth={1.5} />
-                Mark complete
-              </button>
-              <button class="kebab-menu-item" onclick={() => { menuOpenId = null; openEditForm(habit); }}>
-                <Pencil size={15} strokeWidth={1.5} />
-                Edit
-              </button>
-              <button class="kebab-menu-item kebab-menu-item--danger" onclick={() => { menuOpenId = null; deleteHabit(habit.id); }}>
-                <Trash2 size={15} strokeWidth={1.5} />
-                Delete
-              </button>
-            </div>
-          {/if}
-        </span>
+    <!-- Table -->
+    <div role="table" aria-label="Habits list">
+      <!-- Table Header -->
+      <div class="table-header habits-grid" role="row">
+        <span role="columnheader">Name</span>
+        <span role="columnheader">Streak</span>
+        <span role="columnheader">Priority</span>
+        <span role="columnheader" class="hide-mobile">Frequency</span>
+        <span role="columnheader" class="hide-mobile">Duration</span>
+        <span role="columnheader" class="hide-mobile">Window</span>
+        <span role="columnheader">Status</span>
+        <span role="columnheader" aria-label="Actions"></span>
       </div>
-    {/each}
+
+      <!-- Table Rows -->
+      {#each habitList as habit}
+        <div
+          class="table-row habits-grid"
+          role="row"
+        >
+          <span role="cell" class="name-cell">
+            <button class="name-btn" onclick={() => openEditForm(habit)}>{habit.name}</button>
+            {#if habit.locked}
+              <Lock size={14} strokeWidth={1.5} style="color: var(--color-text-tertiary); flex-shrink: 0;" />
+            {/if}
+            <button
+              class="toggle-btn notification-toggle"
+              onclick={(e) => { e.stopPropagation(); toggleNotifications(habit); }}
+              aria-label={habit.notifications ? 'Disable notifications' : 'Enable notifications'}
+              title={habit.notifications ? 'Notifications on' : 'Notifications off'}
+            >
+              {#if habit.notifications}
+                <Bell size={14} strokeWidth={1.5} style="color: var(--color-accent); flex-shrink: 0;" />
+              {:else}
+                <BellOff size={14} strokeWidth={1.5} style="color: var(--color-text-tertiary); flex-shrink: 0;" />
+              {/if}
+            </button>
+            {#if habit.dependsOn}
+              <span class="dependency-badge" title="Depends on: {getParentName(habit.dependsOn)}">
+                <Link2 size={12} strokeWidth={1.5} />
+                {getParentName(habit.dependsOn)}
+              </span>
+            {/if}
+          </span>
+          <span role="cell">
+            {#if (streaks[habit.id] || 0) > 0}
+              <span class="streak-badge">
+                <Flame size={14} strokeWidth={1.5} />
+                {streaks[habit.id]}
+              </span>
+            {:else}
+              <span style="color: var(--color-text-tertiary); font-size: 0.8125rem;">--</span>
+            {/if}
+          </span>
+          <span role="cell">
+            <span class="priority-badge priority-{habit.priority}">{priorityLabels[habit.priority]}</span>
+          </span>
+          <span role="cell" class="hide-mobile freq-cell">{habit.frequency}</span>
+          <span role="cell" class="font-mono hide-mobile" style="color: var(--color-text-secondary);">{habit.durationMin}-{habit.durationMax}m</span>
+          <span role="cell" class="font-mono hide-mobile" style="color: var(--color-text-secondary);">{habit.windowStart}-{habit.windowEnd}</span>
+          <span role="cell">
+            <button
+              class="toggle-btn"
+              onclick={(e) => { e.stopPropagation(); toggleEnabled(habit); }}
+              aria-label={habit.enabled ? 'Disable habit' : 'Enable habit'}
+            >
+              {#if habit.enabled}
+                <ToggleRight size={20} strokeWidth={1.5} style="color: var(--color-accent);" />
+              {:else}
+                <ToggleLeft size={20} strokeWidth={1.5} style="color: var(--color-text-tertiary);" />
+              {/if}
+            </button>
+          </span>
+          <span role="cell" class="kebab-cell">
+            <button
+              class="kebab-btn"
+              onclick={(e) => { e.stopPropagation(); confirmingDeleteId = null; menuOpenId = menuOpenId === habit.id ? null : habit.id; }}
+              aria-label="Actions for {habit.name}"
+              aria-haspopup="menu"
+              aria-expanded={menuOpenId === habit.id}
+            >
+              <EllipsisVertical size={16} strokeWidth={1.5} />
+            </button>
+            {#if menuOpenId === habit.id}
+              <div class="kebab-menu" role="menu" aria-label="Actions for {habit.name}" onclick={(e) => e.stopPropagation()}>
+                {#if confirmingDeleteId === habit.id}
+                  <span class="confirm-text" role="none">Delete this habit?</span>
+                  <button class="kebab-menu-item kebab-menu-item--danger" role="menuitem" onclick={() => deleteHabit(habit.id)}>
+                    Confirm
+                  </button>
+                  <button class="kebab-menu-item" role="menuitem" onclick={() => { confirmingDeleteId = null; }}>
+                    Cancel
+                  </button>
+                {:else}
+                  <button class="kebab-menu-item" role="menuitem" onclick={() => { menuOpenId = null; markComplete(habit.id); }}>
+                    <CircleCheck size={15} strokeWidth={1.5} />
+                    Mark complete
+                  </button>
+                  <button class="kebab-menu-item" role="menuitem" onclick={() => { menuOpenId = null; openEditForm(habit); }}>
+                    <Pencil size={15} strokeWidth={1.5} />
+                    Edit
+                  </button>
+                  <button class="kebab-menu-item kebab-menu-item--danger" role="menuitem" onclick={() => { confirmingDeleteId = habit.id; }}>
+                    <Trash2 size={15} strokeWidth={1.5} />
+                    Delete
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </span>
+        </div>
+      {/each}
+    </div>
   {/if}
 </div>
 
@@ -555,7 +592,7 @@
     onkeydown={trapFocus}
   >
     <div class="panel-header">
-      <h2 id="panel-title" style="font-size: 1.125rem; font-weight: 600; color: var(--color-text);">
+      <h2 id="panel-title" class="panel-title">
         {editingId ? 'Edit Habit' : 'Add Habit'}
       </h2>
       <button onclick={closePanel} class="panel-close-btn" aria-label="Close panel">
@@ -610,7 +647,7 @@
             type="button"
             class="day-preset"
             class:day-preset--active={getActivePreset(formDays) === 'custom'}
-            onclick={() => { /* already custom, no-op */ }}
+            disabled={getActivePreset(formDays) === 'custom'}
           >Custom</button>
         </div>
         <div class="day-picker">
@@ -703,7 +740,7 @@
               class:color-swatch--active={formColor === c}
               style="background: {c};"
               onclick={() => { formColor = c; }}
-              aria-label="Select color {c}"
+              aria-label="Select {colorNames[c] ?? c}"
             ></button>
           {/each}
           <button
@@ -724,6 +761,10 @@
         <label class="toggle-label">
           <input type="checkbox" bind:checked={formAutoDecline} />
           <span>Auto-decline</span>
+        </label>
+        <label class="toggle-label">
+          <input type="checkbox" bind:checked={formNotifications} />
+          <span>Notifications</span>
         </label>
         <label class="toggle-label">
           <input type="checkbox" bind:checked={formSkipBuffer} />
@@ -777,10 +818,94 @@
 <style lang="scss">
   @use '$lib/styles/mixins' as *;
 
+  .page-wrapper {
+    padding: var(--space-6);
+  }
+
+  .panel-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+  }
+
+  .loading-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-12) 0;
+  }
+
+  .loading-text {
+    color: var(--color-text-secondary);
+  }
+
+  .empty-state-title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-top: var(--space-4);
+  }
+
+  .empty-state-desc {
+    color: var(--color-text-secondary);
+    margin-top: var(--space-2);
+  }
+
+  .empty-state-btn {
+    margin-top: var(--space-5);
+  }
+
+  .habits-grid {
+    grid-template-columns: 1fr 60px 80px 100px 120px 140px 60px 40px;
+  }
+
+  @include mobile {
+    .habits-grid {
+      grid-template-columns: 1fr 60px 80px 60px 40px;
+    }
+  }
+
+  .name-cell {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-weight: 500;
+    color: var(--color-text);
+    overflow: hidden;
+  }
+
+  .name-btn {
+    @include text-truncate;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-weight: 500;
+    color: var(--color-text);
+    cursor: pointer;
+    text-align: left;
+
+    &:hover {
+      color: var(--color-accent);
+    }
+  }
+
+  .freq-cell {
+    color: var(--color-text-secondary);
+    text-transform: capitalize;
+  }
+
+  .notification-toggle {
+    padding: 0;
+    flex-shrink: 0;
+    line-height: 0;
+  }
+
   .form-toggles {
     display: flex;
     gap: var(--space-6);
     padding: var(--space-2) 0;
+    flex-wrap: wrap;
   }
 
   .streak-badge {
@@ -886,8 +1011,13 @@
     cursor: pointer;
     transition: color var(--transition-fast);
 
-    &:hover {
+    &:hover:not(:disabled) {
       color: var(--color-text);
+    }
+
+    &:disabled {
+      cursor: default;
+      opacity: 0.5;
     }
 
     &--active {

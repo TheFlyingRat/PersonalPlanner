@@ -1,5 +1,12 @@
 import { Priority, ItemType } from './types.js';
 
+// Brand constants — single source of truth for app name and tagline
+export const BRAND = {
+  name: 'Cadence',
+  tagline: 'Your calendar, intelligently managed',
+  description: 'Cadence automatically schedules your habits, tasks, and focus time around your existing calendar. Open-source, self-hostable.',
+} as const;
+
 // Event title prefixes for Google Calendar
 export const STATUS_PREFIX = {
   free: '\u{1F7E2}',    // green circle

@@ -1,9 +1,12 @@
 <script lang="ts">
+  import { pageTitle } from '$lib/brand';
   import Repeat from 'lucide-svelte/icons/repeat';
   import CheckSquare from 'lucide-svelte/icons/check-square';
   import Users from 'lucide-svelte/icons/users';
   import Target from 'lucide-svelte/icons/target';
-  import { analytics as analyticsApi } from '$lib/api';
+  import { analytics as analyticsApi, schedule } from '$lib/api';
+  import type { AnalyticsData, QualityScore } from '@cadence/shared';
+  import Gauge from 'lucide-svelte/icons/gauge';
 
   let loading = $state(true);
   let error = $state('');
@@ -39,35 +42,76 @@
     return { start: start.toISOString(), end };
   }
 
-  // Analytics data
-  let habitHours = $state(6.5);
-  let taskHours = $state(8.0);
-  let meetingHours = $state(5.5);
-  let focusHours = $state(8.0);
+  function getWorkdayDivisor(range: DateRange): number {
+    const now = new Date();
+    if (range === 'week') {
+      // Weekdays elapsed so far this week (Mon=1 ... Fri=5, Sat/Sun cap at 5)
+      const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon...6=Sat
+      if (dayOfWeek === 0) return 5; // Sunday: full week passed
+      if (dayOfWeek === 6) return 5; // Saturday: all 5 weekdays passed
+      return Math.max(dayOfWeek, 1); // Mon=1, Tue=2, ...Fri=5
+    }
+    if (range === 'month') {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      let weekdays = 0;
+      const cursor = new Date(start);
+      while (cursor <= now) {
+        const d = cursor.getDay();
+        if (d !== 0 && d !== 6) weekdays++;
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return Math.max(weekdays, 1);
+    }
+    if (range === '30days') {
+      const start = new Date(now);
+      start.setDate(start.getDate() - 30);
+      let weekdays = 0;
+      const cursor = new Date(start);
+      while (cursor <= now) {
+        const d = cursor.getDay();
+        if (d !== 0 && d !== 6) weekdays++;
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return Math.max(weekdays, 1);
+    }
+    // 'all' — not meaningful, return 0 to signal hiding the stat
+    return 0;
+  }
 
-  let habitCompletionRate = $state(82);
+  function minutesToHours(minutes: number): number {
+    return Math.round((minutes / 60) * 10) / 10;
+  }
 
-  let weeklyBreakdown = $state([
-    { day: 'Mon', habits: 1.0, tasks: 1.5, meetings: 1.0, focus: 1.5 },
-    { day: 'Tue', habits: 1.5, tasks: 1.0, meetings: 0.5, focus: 2.0 },
-    { day: 'Wed', habits: 0.5, tasks: 2.0, meetings: 1.5, focus: 1.0 },
-    { day: 'Thu', habits: 1.0, tasks: 1.5, meetings: 1.0, focus: 2.0 },
-    { day: 'Fri', habits: 1.5, tasks: 1.0, meetings: 1.5, focus: 1.5 },
-    { day: 'Sat', habits: 0.5, tasks: 0.5, meetings: 0, focus: 0 },
-    { day: 'Sun', habits: 0.5, tasks: 0.5, meetings: 0, focus: 0 },
-  ]);
+  // Analytics data — initialized to 0
+  let habitHours = $state(0);
+  let taskHours = $state(0);
+  let meetingHours = $state(0);
+  let focusHours = $state(0);
+
+  let habitCompletionRate = $state(0);
+
+  interface WeeklyBreakdownEntry {
+    day: string;
+    habits: number;
+    tasks: number;
+    meetings: number;
+    focus: number;
+  }
+
+  let weeklyBreakdown = $state<WeeklyBreakdownEntry[]>([]);
 
   let totalHours = $derived(habitHours + taskHours + meetingHours + focusHours);
 
-  let topCategory = $derived(() => {
-    const cats = [
+  let workdayDivisor = $derived(getWorkdayDivisor(selectedRange));
+
+  let topCategory = $derived(
+    [
       { name: 'Habits', hours: habitHours },
       { name: 'Tasks', hours: taskHours },
       { name: 'Meetings', hours: meetingHours },
       { name: 'Focus', hours: focusHours },
-    ];
-    return cats.reduce((a, b) => a.hours >= b.hours ? a : b).name;
-  });
+    ].reduce((a, b) => (a.hours >= b.hours ? a : b)).name
+  );
 
   // Ring chart
   const ringRadius = 58;
@@ -82,65 +126,111 @@
     )
   );
 
-  const barChartHeight = 160;
-
-  function barH(value: number): number {
-    if (maxDayTotal === 0) return 0;
-    return (value / maxDayTotal) * barChartHeight;
-  }
-
   async function fetchAnalytics(range: DateRange) {
     loading = true;
     error = '';
     try {
       const { start, end } = getDateRange(range);
-      const [data, weeklyData] = await Promise.all([
-        analyticsApi.get(start, end),
-        analyticsApi.weekly(),
-      ]);
-      habitHours = Math.round((data.habitMinutes / 60) * 10) / 10;
-      taskHours = Math.round((data.taskMinutes / 60) * 10) / 10;
-      meetingHours = Math.round((data.meetingMinutes / 60) * 10) / 10;
-      focusHours = Math.round((data.focusMinutes / 60) * 10) / 10;
+      const data = await analyticsApi.get(start, end);
+      habitHours = minutesToHours(data.habitMinutes);
+      taskHours = minutesToHours(data.taskMinutes);
+      meetingHours = minutesToHours(data.meetingMinutes);
+      focusHours = minutesToHours(data.focusMinutes);
       const rawRate = data.habitCompletionRate;
       habitCompletionRate = Math.round(rawRate <= 1 ? rawRate * 100 : rawRate);
 
-      const breakdown = weeklyData?.weeklyBreakdown ?? data.weeklyBreakdown;
+      const breakdown = data.weeklyBreakdown;
       if (breakdown && breakdown.length > 0) {
         const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-        weeklyBreakdown = breakdown.map((entry: any, i: number) => ({
+        weeklyBreakdown = breakdown.map((entry: AnalyticsData['weeklyBreakdown'][number], i: number) => ({
           day: dayLabels[i] || new Date(entry.date).toLocaleDateString('en-US', { weekday: 'short' }),
-          habits: Math.round((entry.habitMinutes / 60) * 10) / 10,
-          tasks: Math.round((entry.taskMinutes / 60) * 10) / 10,
-          meetings: Math.round((entry.meetingMinutes / 60) * 10) / 10,
-          focus: Math.round((entry.focusMinutes / 60) * 10) / 10,
+          habits: minutesToHours(entry.habitMinutes),
+          tasks: minutesToHours(entry.taskMinutes),
+          meetings: minutesToHours(entry.meetingMinutes),
+          focus: minutesToHours(entry.focusMinutes),
         }));
       }
-    } catch {
-      error = 'Failed to load data from API. Showing cached data.';
+    } catch (err) {
+      console.error(err);
+      error = 'Could not load analytics data.';
     } finally {
       loading = false;
     }
   }
 
   $effect(() => {
-    const _range = selectedRange;
-    fetchAnalytics(_range);
+    fetchAnalytics(selectedRange);
+  });
+
+  // Quality Score Trend (last 7 days)
+  interface DayQuality {
+    day: string;
+    score: number;
+  }
+
+  let qualityTrend = $state<DayQuality[]>([]);
+  let qualityLoading = $state(true);
+
+  function qualityColor(score: number): string {
+    if (score >= 90) return 'var(--color-success)';
+    if (score >= 70) return 'var(--color-accent)';
+    if (score >= 50) return 'var(--color-warning-amber)';
+    return 'var(--color-danger)';
+  }
+
+  async function fetchQualityTrend() {
+    qualityLoading = true;
+    try {
+      const days: DayQuality[] = [];
+      const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const now = new Date();
+
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const dateStr = d.toISOString().slice(0, 10);
+        try {
+          const q = await schedule.getQuality(dateStr);
+          const dow = d.getDay();
+          days.push({ day: dayLabels[dow === 0 ? 6 : dow - 1], score: q.overall });
+        } catch {
+          const dow = d.getDay();
+          days.push({ day: dayLabels[dow === 0 ? 6 : dow - 1], score: 0 });
+        }
+      }
+      qualityTrend = days;
+    } catch {
+      qualityTrend = [];
+    } finally {
+      qualityLoading = false;
+    }
+  }
+
+  let maxQuality = $derived(Math.max(...qualityTrend.map(d => d.score), 1));
+  let avgQuality = $derived(
+    qualityTrend.length > 0
+      ? Math.round(qualityTrend.reduce((s, d) => s + d.score, 0) / qualityTrend.length)
+      : 0,
+  );
+
+  $effect(() => {
+    fetchQualityTrend();
   });
 </script>
 
 <svelte:head>
-  <title>Analytics - Cadence</title>
+  <title>{pageTitle('Analytics')}</title>
 </svelte:head>
 
-<div style="padding: 24px;">
-  <div class="analytics-header">
-    <h1 style="font-size: 20px; font-weight: 600; color: var(--color-text); margin: 0;">Analytics</h1>
-    <div class="date-range-selector">
+<div class="analytics-page">
+  <div class="page-header">
+    <h1 class="page-title">Analytics</h1>
+    <div class="date-range-selector" role="group" aria-label="Date range">
       {#each rangeOptions as range}
         <button
           class="range-btn"
           class:range-btn--active={selectedRange === range.key}
+          aria-pressed={selectedRange === range.key}
           onclick={() => { selectedRange = range.key; }}
         >
           {range.label}
@@ -150,47 +240,44 @@
   </div>
 
   {#if error}
-    <div role="alert" style="margin-bottom: 16px; padding: 10px 14px; background: var(--color-danger-muted); color: var(--color-danger); border-radius: var(--radius-md); font-size: 13px;">
+    <div class="analytics-error" role="alert">
       {error}
     </div>
   {/if}
 
   {#if loading}
-    <div style="display: flex; align-items: center; justify-content: center; padding: 48px 0;" role="status" aria-live="polite">
-      <p style="color: var(--color-text-secondary); font-size: 14px;">Loading...</p>
+    <div class="analytics-loading" role="status" aria-live="polite">
+      <p>Loading...</p>
     </div>
   {:else}
     <!-- KPI Cards -->
-    <div class="analytics-kpi-grid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px;">
+    <div class="analytics-kpi-grid">
       {#each [
         { icon: Repeat, label: 'Habit Hours', value: habitHours, color: 'var(--color-habit-border)' },
         { icon: CheckSquare, label: 'Task Hours', value: taskHours, color: 'var(--color-task-border)' },
         { icon: Users, label: 'Meeting Hours', value: meetingHours, color: 'var(--color-meeting-border)' },
         { icon: Target, label: 'Focus Hours', value: focusHours, color: 'var(--color-focus-border)' },
       ] as card}
-        <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 20px;">
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
-            {#if card.icon === Repeat}<Repeat size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
-            {:else if card.icon === CheckSquare}<CheckSquare size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
-            {:else if card.icon === Users}<Users size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
-            {:else if card.icon === Target}<Target size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
-            {/if}
-            <span style="font-size: 12px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">
+        {@const Icon = card.icon}
+        <div class="kpi-card">
+          <div class="kpi-label-row">
+            <Icon size={16} color="var(--color-text-tertiary)" aria-hidden="true" />
+            <span class="kpi-label">
               {card.label}
             </span>
           </div>
-          <div class="font-mono" style="font-size: 28px; font-weight: 700; color: var(--color-text);">
-            {card.value}<span style="font-size: 16px; font-weight: 400; color: var(--color-text-secondary);">h</span>
+          <div class="kpi-value font-mono">
+            {card.value}<span class="kpi-unit">h</span>
           </div>
         </div>
       {/each}
     </div>
 
-    <div class="analytics-content-grid" style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; margin-bottom: 32px;">
+    <div class="analytics-content-grid">
       <!-- Habit Completion Ring -->
-      <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px; display: flex; flex-direction: column; align-items: center;">
-        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0; align-self: flex-start;">Habit Completion</h2>
-        <svg width="140" height="140" viewBox="0 0 140 140" aria-label="Habit completion: {habitCompletionRate}%">
+      <div class="ring-card">
+        <h2 class="section-heading">Habit Completion</h2>
+        <svg width="140" height="140" viewBox="0 0 140 140" role="img" aria-label="Habit completion: {habitCompletionRate}%">
           <circle
             cx="70" cy="70" r={ringRadius}
             fill="none"
@@ -211,15 +298,16 @@
           <text
             x="70" y="66"
             text-anchor="middle"
-            class="font-mono"
-            style="font-size: 26px; font-weight: 700; fill: var(--color-text);"
+            class="ring-value font-mono"
+            aria-hidden="true"
           >
             {habitCompletionRate}%
           </text>
           <text
             x="70" y="84"
             text-anchor="middle"
-            style="font-size: 11px; fill: var(--color-text-secondary);"
+            class="ring-label-text"
+            aria-hidden="true"
           >
             completed
           </text>
@@ -227,44 +315,46 @@
       </div>
 
       <!-- Weekly Summary -->
-      <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px;">
-        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0 0 20px 0;">Weekly Summary</h2>
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
-          <div style="padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md);">
-            <div class="font-mono" style="font-size: 24px; font-weight: 700; color: var(--color-text); margin-bottom: 4px;">
-              {totalHours}<span style="font-size: 14px; font-weight: 400; color: var(--color-text-secondary);">h</span>
+      <div class="summary-card">
+        <h2 class="section-heading">Weekly Summary</h2>
+        <div class="summary-grid">
+          <div class="summary-stat">
+            <div class="summary-value font-mono">
+              {totalHours}<span class="summary-unit">h</span>
             </div>
-            <div style="font-size: 12px; color: var(--color-text-secondary);">Total Hours</div>
+            <div class="summary-label">Total Hours</div>
           </div>
-          <div style="padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md);">
-            <div class="font-mono" style="font-size: 24px; font-weight: 700; color: var(--color-text); margin-bottom: 4px;">
-              {(totalHours / 5).toFixed(1)}<span style="font-size: 14px; font-weight: 400; color: var(--color-text-secondary);">h</span>
+          {#if workdayDivisor > 0}
+            <div class="summary-stat">
+              <div class="summary-value font-mono">
+                {(totalHours / workdayDivisor).toFixed(1)}<span class="summary-unit">h</span>
+              </div>
+              <div class="summary-label">Avg / Workday</div>
             </div>
-            <div style="font-size: 12px; color: var(--color-text-secondary);">Avg / Workday</div>
-          </div>
-          <div style="padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-md);">
-            <div style="font-size: 24px; font-weight: 700; color: var(--color-text); margin-bottom: 4px;">
-              {topCategory()}
+          {/if}
+          <div class="summary-stat">
+            <div class="summary-top-cat">
+              {topCategory}
             </div>
-            <div style="font-size: 12px; color: var(--color-text-secondary);">Top Category</div>
+            <div class="summary-label">Top Category</div>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Daily Breakdown -->
-    <div style="border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: 24px;">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
-        <h2 style="font-size: 14px; font-weight: 600; color: var(--color-text); margin: 0;">Daily Breakdown</h2>
-        <div style="display: flex; gap: 16px;">
+    <div class="breakdown-card">
+      <div class="breakdown-header">
+        <h2 class="section-heading">Daily Breakdown</h2>
+        <div class="legend">
           {#each [
             { label: 'Habits', color: 'var(--color-habit-border)' },
             { label: 'Tasks', color: 'var(--color-task-border)' },
             { label: 'Meetings', color: 'var(--color-meeting-border)' },
             { label: 'Focus', color: 'var(--color-focus-border)' },
           ] as legend}
-            <span style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--color-text-tertiary);">
-              <span style="width: 8px; height: 8px; border-radius: 2px; background: {legend.color};"></span>
+            <span class="legend-item">
+              <span class="legend-swatch" style="background: {legend.color};" aria-hidden="true"></span>
               {legend.label}
             </span>
           {/each}
@@ -272,34 +362,66 @@
       </div>
 
       <!-- Horizontal stacked bars -->
-      <div class="analytics-bars" style="display: flex; flex-direction: column; gap: 8px;">
+      <ul class="analytics-bars" role="list">
         {#each weeklyBreakdown as day}
           {@const dayTotal = day.habits + day.tasks + day.meetings + day.focus}
-          {@const barMax = maxDayTotal}
-          <div style="display: grid; grid-template-columns: 36px 1fr 48px; gap: 12px; align-items: center;">
-            <span class="font-mono" style="font-size: 12px; color: var(--color-text-secondary); text-align: right;">
+          <li class="bar-row" aria-label="{day.day}: {dayTotal.toFixed(1)} hours total - Habits {day.habits}h, Tasks {day.tasks}h, Meetings {day.meetings}h, Focus {day.focus}h">
+            <span class="bar-day font-mono">
               {day.day}
             </span>
-            <div style="display: flex; height: 24px; border-radius: var(--radius-sm); overflow: hidden; background: var(--color-surface-hover);">
+            <div class="bar-track">
               {#if day.habits > 0}
-                <div style="width: {(day.habits / barMax) * 100}%; background: var(--color-habit-border); transition: width var(--transition-base);"></div>
+                <div class="bar-segment bar-segment--habits" style="width: {(day.habits / maxDayTotal) * 100}%;"></div>
               {/if}
               {#if day.tasks > 0}
-                <div style="width: {(day.tasks / barMax) * 100}%; background: var(--color-task-border); transition: width var(--transition-base);"></div>
+                <div class="bar-segment bar-segment--tasks" style="width: {(day.tasks / maxDayTotal) * 100}%;"></div>
               {/if}
               {#if day.meetings > 0}
-                <div style="width: {(day.meetings / barMax) * 100}%; background: var(--color-meeting-border); transition: width var(--transition-base);"></div>
+                <div class="bar-segment bar-segment--meetings" style="width: {(day.meetings / maxDayTotal) * 100}%;"></div>
               {/if}
               {#if day.focus > 0}
-                <div style="width: {(day.focus / barMax) * 100}%; background: var(--color-focus-border); transition: width var(--transition-base);"></div>
+                <div class="bar-segment bar-segment--focus" style="width: {(day.focus / maxDayTotal) * 100}%;"></div>
               {/if}
             </div>
-            <span class="font-mono" style="font-size: 12px; color: var(--color-text-tertiary); text-align: right;">
+            <span class="bar-total font-mono">
               {dayTotal.toFixed(1)}h
             </span>
-          </div>
+          </li>
         {/each}
+      </ul>
+    </div>
+
+    <!-- Schedule Quality Trend -->
+    <div class="quality-trend-card">
+      <div class="breakdown-header">
+        <h2 class="section-heading">Schedule Quality (7-day trend)</h2>
+        {#if !qualityLoading && qualityTrend.length > 0}
+          <span class="quality-avg font-mono">
+            Avg: {avgQuality}
+          </span>
+        {/if}
       </div>
+
+      {#if qualityLoading}
+        <div class="quality-trend-loading">Loading...</div>
+      {:else if qualityTrend.length > 0}
+        <ul class="quality-trend-bars" role="list">
+          {#each qualityTrend as day}
+            <li class="quality-bar-row" aria-label="{day.day}: score {day.score}">
+              <span class="bar-day font-mono">{day.day}</span>
+              <div class="bar-track">
+                <div
+                  class="quality-bar-fill"
+                  style="width: {(day.score / 100) * 100}%; background: {qualityColor(day.score)}"
+                ></div>
+              </div>
+              <span class="bar-total font-mono">{day.score}</span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="quality-trend-empty">No quality data available.</p>
+      {/if}
     </div>
   {/if}
 </div>
@@ -307,9 +429,8 @@
 <style lang="scss">
   @use '$lib/styles/mixins' as *;
 
-  .analytics-header {
-    @include flex-between;
-    margin-bottom: 24px;
+  .analytics-page {
+    padding: var(--space-6);
   }
 
   .date-range-selector {
@@ -347,12 +468,224 @@
     }
   }
 
+  .analytics-error {
+    margin-bottom: var(--space-4);
+    padding: var(--space-2) var(--space-4);
+    background: var(--color-danger-muted);
+    color: var(--color-danger);
+    border-radius: var(--radius-md);
+    font-size: 0.8125rem;
+  }
+
+  .analytics-loading {
+    @include flex-center;
+    padding: var(--space-12) 0;
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+  }
+
+  .analytics-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-4);
+    margin-bottom: var(--space-8);
+  }
+
+  .kpi-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+  }
+
+  .kpi-label-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+
+  .kpi-label {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .kpi-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--color-text);
+  }
+
+  .kpi-unit {
+    font-size: 1rem;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+  }
+
+  .analytics-content-grid {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: var(--space-6);
+    margin-bottom: var(--space-8);
+  }
+
+  .ring-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .section-heading {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--color-text);
+    margin: 0 0 var(--space-5) 0;
+    align-self: flex-start;
+  }
+
+  .ring-value {
+    font-size: 26px;
+    font-weight: 700;
+    fill: var(--color-text);
+  }
+
+  .ring-label-text {
+    font-size: 11px;
+    fill: var(--color-text-secondary);
+  }
+
   .ring-progress {
     @include ring-progress;
   }
 
+  .summary-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: var(--space-4);
+  }
+
+  .summary-stat {
+    padding: var(--space-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  .summary-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--color-text);
+    margin-bottom: var(--space-1);
+  }
+
+  .summary-unit {
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+  }
+
+  .summary-top-cat {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--color-text);
+    margin-bottom: var(--space-1);
+  }
+
+  .summary-label {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+  }
+
+  .breakdown-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+  }
+
+  .breakdown-header {
+    @include flex-between;
+    margin-bottom: var(--space-5);
+  }
+
+  .legend {
+    display: flex;
+    gap: var(--space-4);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.6875rem;
+    color: var(--color-text-tertiary);
+  }
+
+  .legend-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .analytics-bars {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .bar-row {
+    display: grid;
+    grid-template-columns: 36px 1fr 48px;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  .bar-day {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    text-align: right;
+  }
+
+  .bar-track {
+    display: flex;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--color-surface-hover);
+  }
+
+  .bar-segment {
+    transition: width var(--transition-base);
+
+    &--habits { background: var(--color-habit-border); }
+    &--tasks { background: var(--color-task-border); }
+    &--meetings { background: var(--color-meeting-border); }
+    &--focus { background: var(--color-focus-border); }
+
+    @media (prefers-reduced-motion: reduce) {
+      transition: none;
+    }
+  }
+
+  .bar-total {
+    font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+    text-align: right;
+  }
+
   @include mobile {
-    .analytics-header {
+    :global(.page-header) {
       flex-direction: column;
       align-items: flex-start;
       gap: var(--space-3);
@@ -361,10 +694,10 @@
       flex-wrap: wrap;
     }
     .analytics-kpi-grid {
-      grid-template-columns: repeat(2, 1fr) !important;
+      grid-template-columns: repeat(2, 1fr);
     }
     .analytics-content-grid {
-      grid-template-columns: 1fr !important;
+      grid-template-columns: 1fr;
     }
     .analytics-bars {
       overflow-x: auto;
@@ -373,7 +706,50 @@
 
   @include small {
     .analytics-kpi-grid {
-      grid-template-columns: 1fr !important;
+      grid-template-columns: 1fr;
     }
+  }
+
+  // Quality Trend
+  .quality-trend-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    margin-top: var(--space-8);
+  }
+
+  .quality-avg {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: var(--color-text);
+  }
+
+  .quality-trend-bars {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .quality-bar-row {
+    display: grid;
+    grid-template-columns: 36px 1fr 32px;
+    gap: var(--space-3);
+    align-items: center;
+  }
+
+  .quality-bar-fill {
+    height: 100%;
+    border-radius: var(--radius-sm);
+    transition: width var(--transition-base);
+  }
+
+  .quality-trend-loading,
+  .quality-trend-empty {
+    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+    padding: var(--space-4) 0;
   }
 </style>

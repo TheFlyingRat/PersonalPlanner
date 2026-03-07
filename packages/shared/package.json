@@ -1,6 +1,6 @@
 {
   "name": "@cadence/shared",
-  "version": "0.0.1",
+  "version": "0.9.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -8,10 +8,16 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./auth-types": {
+      "types": "./dist/auth-types.d.ts",
+      "import": "./dist/auth-types.js"
     }
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest"
   }
 }

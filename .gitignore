@@ -8,5 +8,6 @@ dist/
 .svelte-kit/
 build/
 .DS_Store
-.claude/settings.local.json
+.claude/
+CLAUDE.md
 data/

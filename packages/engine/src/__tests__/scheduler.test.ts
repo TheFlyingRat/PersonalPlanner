@@ -1290,4 +1290,170 @@ describe('reschedule', () => {
       expect(currStart).toBeGreaterThanOrEqual(prevEnd);
     }
   });
+
+  // ============================================================
+  // External event priority: P1 override + locked item stability
+  // ============================================================
+
+  it('should block P3 habit by writable-calendar external event', () => {
+    // External event fills the entire habit window on Monday (local time)
+    const monStart = new Date(2026, 2, 2, 9, 0, 0).toISOString();
+    const monEnd = new Date(2026, 2, 2, 12, 0, 0).toISOString();
+    const externalEvent: CalendarEvent = {
+      id: 'ext-busy-1',
+      googleEventId: 'g-busy-1',
+      title: 'External Meeting',
+      start: monStart,
+      end: monEnd,
+      isManaged: false,
+      itemType: null,
+      itemId: null,
+      status: EventStatus.Busy, // writable calendar
+    };
+
+    const habit = makeHabit({
+      id: 'habit-p3',
+      priority: Priority.Medium, // P3
+      frequency: Frequency.Weekly,
+      frequencyConfig: { days: ['mon'] },
+      windowStart: '09:00',
+      windowEnd: '12:00',
+      durationMin: 60,
+      durationMax: 60,
+    });
+
+    const result = reschedule(
+      [habit], [], [], [], [externalEvent],
+      defaultBuffer, defaultSettings, NOW,
+    );
+
+    // P3 cannot override the external event and the window is fully blocked
+    const creates = result.operations.filter(
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('habit-p3'),
+    );
+    expect(creates.length).toBe(0);
+    expect(result.unschedulable.some(u => u.itemId.startsWith('habit-p3'))).toBe(true);
+  });
+
+  it('should allow P1 task to override writable-calendar external when no other slot', () => {
+    // External event fills 09:00–12:00 on Monday (writable calendar = Busy, local time)
+    const monStart = new Date(2026, 2, 2, 9, 0, 0).toISOString();
+    const monEnd = new Date(2026, 2, 2, 12, 0, 0).toISOString();
+    const externalEvent: CalendarEvent = {
+      id: 'ext-busy-2',
+      googleEventId: 'g-busy-2',
+      title: 'External Meeting',
+      start: monStart,
+      end: monEnd,
+      isManaged: false,
+      itemType: null,
+      itemId: null,
+      status: EventStatus.Busy,
+    };
+
+    // P1 task with a narrow window that only overlaps the external event
+    const task = makeTask({
+      id: 'task-p1',
+      priority: Priority.Critical,
+      totalDuration: 60,
+      remainingDuration: 60,
+      chunkMax: 60,
+      earliestStart: monStart,
+      dueDate: monEnd,
+    });
+
+    const result = reschedule(
+      [], [task], [], [], [externalEvent],
+      defaultBuffer, defaultSettings, NOW,
+    );
+
+    // P1 should be placed (overriding the writable external)
+    const creates = result.operations.filter(
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('task-p1'),
+    );
+    expect(creates.length).toBe(1);
+  });
+
+  it('should NOT allow P1 task to override locked-calendar external', () => {
+    // Locked external fills the entire task window (local time)
+    const monStart = new Date(2026, 2, 2, 9, 0, 0).toISOString();
+    const monEnd = new Date(2026, 2, 2, 12, 0, 0).toISOString();
+    const lockedExternal: CalendarEvent = {
+      id: 'ext-locked-2',
+      googleEventId: 'g-locked-2',
+      title: 'University Lecture',
+      start: monStart,
+      end: monEnd,
+      isManaged: false,
+      itemType: null,
+      itemId: null,
+      status: EventStatus.Locked, // locked calendar
+    };
+
+    const task = makeTask({
+      id: 'task-p1-locked',
+      priority: Priority.Critical,
+      totalDuration: 60,
+      remainingDuration: 60,
+      chunkMax: 60,
+      earliestStart: monStart,
+      dueDate: monEnd,
+    });
+
+    const result = reschedule(
+      [], [task], [], [], [lockedExternal],
+      defaultBuffer, defaultSettings, NOW,
+    );
+
+    // P1 cannot override locked external — should be unschedulable
+    const creates = result.operations.filter(
+      (op) => op.type === CalendarOpType.Create && op.itemId.startsWith('task-p1-locked'),
+    );
+    expect(creates.length).toBe(0);
+    expect(result.unschedulable.some(u => u.itemId.startsWith('task-p1-locked'))).toBe(true);
+  });
+
+  it('should not re-place locked scheduled events in the greedy loop', () => {
+    const habit = makeHabit({
+      id: 'habit-stable',
+      priority: Priority.Medium,
+      frequency: Frequency.Weekly,
+      frequencyConfig: { days: ['mon'] },
+      windowStart: '09:00',
+      windowEnd: '17:00',
+      durationMin: 30,
+      durationMax: 30,
+    });
+
+    // Existing locked managed event at 14:00-14:30
+    const lockedManaged: CalendarEvent = {
+      id: 'locked-managed-1',
+      googleEventId: 'g-locked-m1',
+      title: 'Morning Exercise',
+      start: '2026-03-02T14:00:00.000Z',
+      end: '2026-03-02T14:30:00.000Z',
+      isManaged: true,
+      itemType: ItemType.Habit,
+      itemId: 'habit-stable__2026-03-02',
+      status: EventStatus.Locked,
+    };
+
+    const result = reschedule(
+      [habit], [], [], [], [lockedManaged],
+      defaultBuffer, defaultSettings, NOW,
+    );
+
+    // The locked event should NOT be deleted
+    const deletes = result.operations.filter(op => op.type === CalendarOpType.Delete);
+    expect(deletes.length).toBe(0);
+
+    // No update should move the locked event to a different time
+    const updates = result.operations.filter(
+      op => op.type === CalendarOpType.Update && op.eventId === 'locked-managed-1',
+    );
+    for (const up of updates) {
+      expect(new Date(up.start).getTime()).toBe(new Date('2026-03-02T14:00:00.000Z').getTime());
+      expect(new Date(up.end).getTime()).toBe(new Date('2026-03-02T14:30:00.000Z').getTime());
+    }
+  });
 });

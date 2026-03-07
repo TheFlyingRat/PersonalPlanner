@@ -1,12 +1,13 @@
 import { Router } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { z } from 'zod/v4';
-import { db } from '../db/index.js';
-import { calendars, users } from '../db/schema.js';
+import { db } from '../db/pg-index.js';
+import { calendars, users } from '../db/pg-schema.js';
 import { createOAuth2Client, setCredentials, GoogleCalendarClient } from '../google/index.js';
 import { decrypt } from '../crypto.js';
 import { CalendarMode } from '@cadence/shared';
-import { pollingRef } from '../polling-ref.js';
+import { schedulerRegistry } from '../scheduler-registry.js';
+import { sendValidationError, sendNotFound, sendError } from './helpers.js';
 
 const patchCalendarSchema = z.object({
   mode: z.enum([CalendarMode.Writable, CalendarMode.Locked]).optional(),
@@ -15,22 +16,19 @@ const patchCalendarSchema = z.object({
 
 const router = Router();
 
-// GET /api/calendars - list all saved calendars
-router.get('/', (_req, res) => {
-  const rows = db.select().from(calendars).all();
+// GET /api/calendars - list all saved calendars for the current user
+router.get('/', async (req, res) => {
+  const rows = await db.select().from(calendars).where(eq(calendars.userId, req.userId));
   res.json(rows);
 });
 
 // GET /api/calendars/discover - fetch from Google and upsert
-router.get('/discover', async (_req, res) => {
+router.get('/discover', async (req, res) => {
   try {
-    const userRows = db.select().from(users).all();
-    const now = new Date().toISOString();
+    const userRows = await db.select().from(users).where(eq(users.id, req.userId));
 
-    let googleCalendars: Array<{ googleCalendarId: string; name: string; color: string }>;
-
-    if (!userRows[0]?.googleRefreshToken) {
-      res.status(400).json({ error: 'Google Calendar not connected. Connect in Settings first.' });
+    if (userRows.length === 0 || !userRows[0].googleRefreshToken) {
+      sendError(res, 400, 'Google Calendar not connected. Connect in Settings first.');
       return;
     }
 
@@ -38,40 +36,37 @@ router.get('/discover', async (_req, res) => {
     const refreshToken = decrypt(userRows[0].googleRefreshToken);
     setCredentials(oauth2Client, refreshToken);
     const client = new GoogleCalendarClient(oauth2Client);
-    googleCalendars = await client.listCalendars();
+    const googleCalendars = await client.listCalendars();
+    const now = new Date().toISOString();
 
     for (const gcal of googleCalendars) {
-      const existing = db.select().from(calendars)
-        .where(eq(calendars.googleCalendarId, gcal.googleCalendarId))
-        .all();
+      const existing = await db.select().from(calendars)
+        .where(and(eq(calendars.googleCalendarId, gcal.googleCalendarId), eq(calendars.userId, req.userId)));
 
       if (existing.length > 0) {
         // Update name and color, keep user's mode/enabled
-        db.update(calendars)
+        await db.update(calendars)
           .set({ name: gcal.name, color: gcal.color, updatedAt: now })
-          .where(eq(calendars.googleCalendarId, gcal.googleCalendarId))
-          .run();
+          .where(and(eq(calendars.googleCalendarId, gcal.googleCalendarId), eq(calendars.userId, req.userId)));
       } else {
-        db.insert(calendars).values({
-          id: crypto.randomUUID(),
+        await db.insert(calendars).values({
+          userId: req.userId,
           googleCalendarId: gcal.googleCalendarId,
           name: gcal.name,
           color: gcal.color,
           mode: 'writable',
           enabled: false,  // new calendars start disabled
           syncToken: null,
-          createdAt: now,
-          updatedAt: now,
-        }).run();
+        });
       }
     }
 
     // Return updated list
-    const rows = db.select().from(calendars).all();
+    const rows = await db.select().from(calendars).where(eq(calendars.userId, req.userId));
     res.json(rows);
   } catch (err) {
     console.error('[calendars] Discovery failed:', err);
-    res.status(500).json({ error: 'Failed to discover calendars' });
+    sendError(res, 500, 'Failed to discover calendars');
   }
 });
 
@@ -81,25 +76,25 @@ router.patch('/:id', async (req, res) => {
 
   const parsed = patchCalendarSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    sendValidationError(res, parsed.error);
     return;
   }
   const { mode, enabled } = parsed.data;
 
-  const existing = db.select().from(calendars).where(eq(calendars.id, id)).all();
+  const existing = await db.select().from(calendars).where(and(eq(calendars.id, id), eq(calendars.userId, req.userId)));
   if (existing.length === 0) {
-    res.status(404).json({ error: 'Calendar not found' });
+    sendNotFound(res, 'Calendar');
     return;
   }
 
   // Protect primary calendar
   if (existing[0].googleCalendarId === 'primary') {
     if (enabled === false) {
-      res.status(400).json({ error: 'Cannot disable the primary calendar' });
+      sendError(res, 400, 'Cannot disable the primary calendar');
       return;
     }
     if (mode === CalendarMode.Locked) {
-      res.status(400).json({ error: 'Cannot lock the primary calendar' });
+      sendError(res, 400, 'Cannot lock the primary calendar');
       return;
     }
   }
@@ -108,23 +103,28 @@ router.patch('/:id', async (req, res) => {
   if (mode !== undefined) updates.mode = mode;
   if (enabled !== undefined) updates.enabled = enabled;
 
-  db.update(calendars).set(updates).where(eq(calendars.id, id)).run();
+  await db.update(calendars).set(updates).where(and(eq(calendars.id, id), eq(calendars.userId, req.userId)));
 
   // Start/stop poller when enabled state changes
-  if (enabled !== undefined && pollingRef.manager) {
-    const cal = db.select().from(calendars).where(eq(calendars.id, id)).all()[0];
-    if (enabled) {
-      await pollingRef.manager.startPoller(cal.id, cal.googleCalendarId);
-    } else {
-      pollingRef.manager.stopPoller(cal.id);
+  if (enabled !== undefined) {
+    const scheduler = schedulerRegistry.get(req.userId);
+    const manager = scheduler?.getPollerManager();
+    if (manager) {
+      const calRows = await db.select().from(calendars).where(and(eq(calendars.id, id), eq(calendars.userId, req.userId)));
+      const cal = calRows[0];
+      if (enabled) {
+        await manager.startPoller(cal.id, cal.googleCalendarId);
+      } else {
+        manager.stopPoller(cal.id);
+      }
     }
   }
 
   // Reset defaults if disabled calendar was a default
   if (enabled === false) {
-    const userRows = db.select().from(users).all();
-    if (userRows[0]?.settings) {
-      const settings = JSON.parse(userRows[0].settings);
+    const userRows = await db.select().from(users).where(eq(users.id, req.userId));
+    if (userRows[0]?.settings && typeof userRows[0].settings === 'object') {
+      const settings = { ...(userRows[0].settings as Record<string, unknown>) };
       let changed = false;
       if (settings.defaultHabitCalendarId === id) {
         settings.defaultHabitCalendarId = 'primary';
@@ -135,15 +135,14 @@ router.patch('/:id', async (req, res) => {
         changed = true;
       }
       if (changed) {
-        db.update(users)
-          .set({ settings: JSON.stringify(settings) })
-          .where(eq(users.id, userRows[0].id))
-          .run();
+        await db.update(users)
+          .set({ settings, updatedAt: new Date().toISOString() })
+          .where(eq(users.id, req.userId));
       }
     }
   }
 
-  const updated = db.select().from(calendars).where(eq(calendars.id, id)).all();
+  const updated = await db.select().from(calendars).where(and(eq(calendars.id, id), eq(calendars.userId, req.userId)));
   res.json(updated[0]);
 });
 

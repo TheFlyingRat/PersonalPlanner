@@ -8,7 +8,9 @@ function getKey(salt: Buffer): Buffer {
   if (!secret) {
     throw new Error('ENCRYPTION_KEY environment variable is required');
   }
-  return scryptSync(secret, salt, 32);
+  // Note: changing scrypt params invalidates previously encrypted data.
+  // Existing OAuth tokens will need to be re-obtained via the OAuth flow.
+  return scryptSync(secret, salt, 32, { N: 65536, r: 8, p: 1 });
 }
 
 export function encrypt(text: string): string {

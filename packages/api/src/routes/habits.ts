@@ -1,36 +1,43 @@
 import { Router } from 'express';
-import { eq, desc } from 'drizzle-orm';
-import { db } from '../db/index.js';
-import { habits, scheduledEvents, habitCompletions } from '../db/schema.js';
+import { eq, and, desc } from 'drizzle-orm';
+import { db } from '../db/pg-index.js';
+import { habits, scheduledEvents, habitCompletions } from '../db/pg-schema.js';
 import type { CreateHabitRequest, Habit, FrequencyConfig, HabitCompletion } from '@cadence/shared';
-import { createHabitSchema, updateHabitSchema } from '../validation.js';
+import { createHabitSchema, updateHabitSchema, lockBodySchema } from '../validation.js';
 import { logActivity } from './activity.js';
-import { broadcast } from '../ws.js';
+import { broadcastToUser } from '../ws.js';
 import { triggerReschedule } from '../polling-ref.js';
+import { sendValidationError, sendNotFound, sendError } from './helpers.js';
 
 const router = Router();
 
-// GET /api/habits — list all habits
-router.get('/', (_req, res) => {
-  const rows = db.select().from(habits).all();
+// GET /api/habits — list all habits for the current user
+router.get('/', async (req, res) => {
+  const rows = await db.select().from(habits).where(eq(habits.userId, req.userId));
   const result: Habit[] = rows.map(toHabit);
   res.json(result);
 });
 
 // POST /api/habits — create a habit
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const parsed = createHabitSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    sendValidationError(res, parsed.error);
     return;
   }
   const body = parsed.data as CreateHabitRequest;
 
-  const now = new Date().toISOString();
-  const id = crypto.randomUUID();
+  // Validate dependsOn references an existing habit owned by this user
+  if (body.dependsOn) {
+    const depRows = await db.select().from(habits).where(and(eq(habits.id, body.dependsOn), eq(habits.userId, req.userId)));
+    if (depRows.length === 0) {
+      sendError(res, 400, 'Referenced habit not found');
+      return;
+    }
+  }
 
   const row = {
-    id,
+    userId: req.userId,
     name: body.name,
     priority: body.priority ?? 3,
     windowStart: body.windowStart,
@@ -39,48 +46,58 @@ router.post('/', (req, res) => {
     durationMin: body.durationMin,
     durationMax: body.durationMax,
     frequency: body.frequency,
-    frequencyConfig: body.frequencyConfig ? JSON.stringify(body.frequencyConfig) : null,
+    frequencyConfig: body.frequencyConfig ?? null,
     schedulingHours: body.schedulingHours ?? 'working',
     locked: false,
     autoDecline: body.autoDecline ?? false,
     dependsOn: body.dependsOn ?? null,
     enabled: true,
     skipBuffer: body.skipBuffer ?? false,
+    notifications: body.notifications ?? false,
     calendarId: body.calendarId ?? null,
     color: body.color ?? null,
-    createdAt: now,
-    updatedAt: now,
   };
 
-  db.insert(habits).values(row).run();
-
-  const created = db.select().from(habits).where(eq(habits.id, id)).get();
-  logActivity('create', 'habit', id, { name: body.name });
-  broadcast('schedule_updated', 'Habit created');
-  triggerReschedule('Habit created');
-  res.status(201).json(toHabit(created!));
+  const inserted = await db.insert(habits).values(row).returning();
+  const created = inserted[0];
+  await logActivity(req.userId, 'create', 'habit', created.id, { name: body.name });
+  broadcastToUser(req.userId, 'schedule_updated', 'Habit created');
+  triggerReschedule('Habit created', req.userId);
+  res.status(201).json(toHabit(created));
 });
 
 // PUT /api/habits/:id — update a habit
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
+  const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
 
-  if (!existing) {
-    res.status(404).json({ error: 'Habit not found' });
+  if (existing.length === 0) {
+    sendNotFound(res, 'Habit');
     return;
   }
 
   const parsed = updateHabitSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: 'Validation failed', details: parsed.error.issues });
+    sendValidationError(res, parsed.error);
     return;
   }
 
   const body = parsed.data;
-  const now = new Date().toISOString();
 
-  const updates: Record<string, unknown> = { updatedAt: now };
+  // Validate dependsOn references an existing habit and is not a self-reference
+  if (body.dependsOn !== undefined && body.dependsOn !== null) {
+    if (body.dependsOn === id) {
+      sendError(res, 400, 'A habit cannot depend on itself');
+      return;
+    }
+    const depRows = await db.select().from(habits).where(and(eq(habits.id, body.dependsOn), eq(habits.userId, req.userId)));
+    if (depRows.length === 0) {
+      sendError(res, 400, 'Referenced habit not found');
+      return;
+    }
+  }
+
+  const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
 
   if (body.name !== undefined) updates.name = body.name;
   if (body.priority !== undefined) updates.priority = body.priority;
@@ -90,82 +107,83 @@ router.put('/:id', (req, res) => {
   if (body.durationMin !== undefined) updates.durationMin = body.durationMin;
   if (body.durationMax !== undefined) updates.durationMax = body.durationMax;
   if (body.frequency !== undefined) updates.frequency = body.frequency;
-  if (body.frequencyConfig !== undefined) updates.frequencyConfig = JSON.stringify(body.frequencyConfig);
+  if (body.frequencyConfig !== undefined) updates.frequencyConfig = body.frequencyConfig;
   if (body.schedulingHours !== undefined) updates.schedulingHours = body.schedulingHours;
   if (body.locked !== undefined) updates.locked = body.locked;
   if (body.autoDecline !== undefined) updates.autoDecline = body.autoDecline;
   if (body.dependsOn !== undefined) updates.dependsOn = body.dependsOn;
   if (body.enabled !== undefined) updates.enabled = body.enabled;
   if (body.skipBuffer !== undefined) updates.skipBuffer = body.skipBuffer;
+  if (body.notifications !== undefined) updates.notifications = body.notifications;
   if (body.calendarId !== undefined) updates.calendarId = body.calendarId;
   if (body.color !== undefined) updates.color = body.color;
 
-  db.update(habits).set(updates).where(eq(habits.id, id)).run();
-
-  const updated = db.select().from(habits).where(eq(habits.id, id)).get();
-  logActivity('update', 'habit', id, { fields: Object.keys(updates) });
-  broadcast('schedule_updated', 'Habit updated');
-  triggerReschedule('Habit updated');
-  res.json(toHabit(updated!));
+  const updated = await db.update(habits).set(updates).where(and(eq(habits.id, id), eq(habits.userId, req.userId))).returning();
+  await logActivity(req.userId, 'update', 'habit', id, { fields: Object.keys(updates) });
+  broadcastToUser(req.userId, 'schedule_updated', 'Habit updated');
+  triggerReschedule('Habit updated', req.userId);
+  res.json(toHabit(updated[0]));
 });
 
 // DELETE /api/habits/:id — delete habit and its scheduled events
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
+  const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
 
-  if (!existing) {
-    res.status(404).json({ error: 'Habit not found' });
+  if (existing.length === 0) {
+    sendNotFound(res, 'Habit');
     return;
   }
 
-  db.delete(scheduledEvents).where(eq(scheduledEvents.itemId, id)).run();
-  db.delete(habits).where(eq(habits.id, id)).run();
-  logActivity('delete', 'habit', id, { name: existing.name });
-  broadcast('schedule_updated', 'Habit deleted');
-  triggerReschedule('Habit deleted');
+  await db.delete(scheduledEvents).where(and(eq(scheduledEvents.itemId, id), eq(scheduledEvents.userId, req.userId)));
+  await db.delete(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
+  await logActivity(req.userId, 'delete', 'habit', id, { name: existing[0].name });
+  broadcastToUser(req.userId, 'schedule_updated', 'Habit deleted');
+  triggerReschedule('Habit deleted', req.userId);
 
   res.status(204).send();
 });
 
 // POST /api/habits/:id/lock — toggle locked field
-router.post('/:id/lock', (req, res) => {
+router.post('/:id/lock', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
+  const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
 
-  if (!existing) {
-    res.status(404).json({ error: 'Habit not found' });
+  if (existing.length === 0) {
+    sendNotFound(res, 'Habit');
     return;
   }
 
-  const { locked } = req.body;
-  const newLocked = locked !== undefined ? !!locked : !existing.locked;
+  const lockParsed = lockBodySchema.safeParse(req.body);
+  if (!lockParsed.success) {
+    sendValidationError(res, lockParsed.error);
+    return;
+  }
 
-  const now = new Date().toISOString();
-  db.update(habits)
-    .set({ locked: newLocked, updatedAt: now })
-    .where(eq(habits.id, id))
-    .run();
+  const newLocked = lockParsed.data.locked;
 
-  const updated = db.select().from(habits).where(eq(habits.id, id)).get();
-  broadcast('schedule_updated', 'Habit lock toggled');
-  triggerReschedule('Habit lock toggled');
-  res.json(toHabit(updated!));
+  const updated = await db.update(habits)
+    .set({ locked: newLocked, updatedAt: new Date().toISOString() })
+    .where(and(eq(habits.id, id), eq(habits.userId, req.userId)))
+    .returning();
+
+  broadcastToUser(req.userId, 'schedule_updated', 'Habit lock toggled');
+  triggerReschedule('Habit lock toggled', req.userId);
+  res.json(toHabit(updated[0]));
 });
 
 // GET /api/habits/:id/completions — list completions for a habit
-router.get('/:id/completions', (req, res) => {
+router.get('/:id/completions', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
-  if (!existing) {
-    res.status(404).json({ error: 'Habit not found' });
+  const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
+  if (existing.length === 0) {
+    sendNotFound(res, 'Habit');
     return;
   }
 
-  const rows = db.select().from(habitCompletions)
-    .where(eq(habitCompletions.habitId, id))
-    .orderBy(desc(habitCompletions.scheduledDate))
-    .all();
+  const rows = await db.select().from(habitCompletions)
+    .where(and(eq(habitCompletions.habitId, id), eq(habitCompletions.userId, req.userId)))
+    .orderBy(desc(habitCompletions.scheduledDate));
 
   const result: HabitCompletion[] = rows.map((row) => ({
     id: row.id,
@@ -178,35 +196,34 @@ router.get('/:id/completions', (req, res) => {
 });
 
 // POST /api/habits/:id/completions — record a completion
-router.post('/:id/completions', (req, res) => {
+router.post('/:id/completions', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
-  if (!existing) {
-    res.status(404).json({ error: 'Habit not found' });
+  const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
+  if (existing.length === 0) {
+    sendNotFound(res, 'Habit');
     return;
   }
 
   const { scheduledDate } = req.body;
   if (!scheduledDate || !/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate)) {
-    res.status(400).json({ error: 'scheduledDate must be YYYY-MM-DD' });
+    sendError(res, 400, 'scheduledDate must be YYYY-MM-DD');
     return;
   }
 
-  const completionId = crypto.randomUUID();
   const now = new Date().toISOString();
 
-  db.insert(habitCompletions).values({
-    id: completionId,
+  const inserted = await db.insert(habitCompletions).values({
+    userId: req.userId,
     habitId: id,
     scheduledDate,
     completedAt: now,
-  }).run();
+  }).returning();
 
-  logActivity('create', 'habit', id, { completion: scheduledDate });
-  broadcast('schedule_updated', 'Habit completed');
+  await logActivity(req.userId, 'create', 'habit', id, { completion: scheduledDate });
+  broadcastToUser(req.userId, 'schedule_updated', 'Habit completed');
 
   res.status(201).json({
-    id: completionId,
+    id: inserted[0].id,
     habitId: id,
     scheduledDate,
     completedAt: now,
@@ -214,18 +231,17 @@ router.post('/:id/completions', (req, res) => {
 });
 
 // GET /api/habits/:id/streak — compute current streak
-router.get('/:id/streak', (req, res) => {
+router.get('/:id/streak', async (req, res) => {
   const { id } = req.params;
-  const existing = db.select().from(habits).where(eq(habits.id, id)).get();
-  if (!existing) {
-    res.status(404).json({ error: 'Habit not found' });
+  const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
+  if (existing.length === 0) {
+    sendNotFound(res, 'Habit');
     return;
   }
 
-  const rows = db.select().from(habitCompletions)
-    .where(eq(habitCompletions.habitId, id))
-    .orderBy(desc(habitCompletions.scheduledDate))
-    .all();
+  const rows = await db.select().from(habitCompletions)
+    .where(and(eq(habitCompletions.habitId, id), eq(habitCompletions.userId, req.userId)))
+    .orderBy(desc(habitCompletions.scheduledDate));
 
   const completedDates = new Set(rows.map((r) => r.scheduledDate));
 
@@ -257,13 +273,14 @@ function toHabit(row: typeof habits.$inferSelect): Habit {
     durationMin: row.durationMin,
     durationMax: row.durationMax,
     frequency: row.frequency as Habit['frequency'],
-    frequencyConfig: row.frequencyConfig ? JSON.parse(row.frequencyConfig) as FrequencyConfig : {} as FrequencyConfig,
+    frequencyConfig: (row.frequencyConfig ?? {}) as FrequencyConfig,
     schedulingHours: (row.schedulingHours ?? 'working') as Habit['schedulingHours'],
     locked: row.locked ?? false,
     autoDecline: row.autoDecline ?? false,
     dependsOn: row.dependsOn ?? null,
     enabled: row.enabled ?? true,
     skipBuffer: row.skipBuffer ?? false,
+    notifications: row.notifications ?? false,
     calendarId: row.calendarId ?? undefined,
     color: row.color ?? undefined,
     createdAt: row.createdAt ?? '',

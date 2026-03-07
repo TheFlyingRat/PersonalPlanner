@@ -3,3 +3,4 @@ export { scoreSlot } from './scoring.js';
 export { generateCandidateSlots } from './slots.js';
 export { computeFreeBusyStatus } from './free-busy.js';
 export { buildTimeline } from './timeline.js';
+export { calculateScheduleQuality } from './quality.js';

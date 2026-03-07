@@ -1,6 +1,20 @@
 import { z } from 'zod/v4';
 
 const timeRegex = /^([01]\d|2[0-3]):[0-5]\d$/;
+const hexColorRegex = /^#[0-9a-fA-F]{6}$/;
+
+const frequencyConfigSchema = z.object({
+  days: z.array(z.enum(['mon','tue','wed','thu','fri','sat','sun'])).optional(),
+  weekInterval: z.number().int().min(1).max(52).optional(),
+  monthDay: z.number().int().min(1).max(31).optional(),
+  monthWeek: z.number().int().min(1).max(5).optional(),
+  monthWeekday: z.enum(['mon','tue','wed','thu','fri','sat','sun']).optional(),
+}).optional();
+
+const timezoneSchema = z.string().refine(
+  tz => { try { Intl.DateTimeFormat(undefined, { timeZone: tz }); return true; } catch { return false; } },
+  { message: 'Invalid IANA timezone' },
+);
 
 export const createHabitSchema = z.object({
   name: z.string().min(1).max(200),
@@ -8,36 +22,46 @@ export const createHabitSchema = z.object({
   windowStart: z.string().regex(timeRegex, 'Must be HH:MM format'),
   windowEnd: z.string().regex(timeRegex, 'Must be HH:MM format'),
   idealTime: z.string().regex(timeRegex, 'Must be HH:MM format'),
-  durationMin: z.number().int().positive(),
-  durationMax: z.number().int().positive(),
+  durationMin: z.number().int().positive().max(1440),
+  durationMax: z.number().int().positive().max(1440),
   frequency: z.enum(['daily', 'weekly', 'monthly', 'custom']),
-  frequencyConfig: z.record(z.string(), z.unknown()).optional(),
+  frequencyConfig: frequencyConfigSchema,
   schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
   autoDecline: z.boolean().optional(),
-  dependsOn: z.string().nullable().optional(),
+  dependsOn: z.string().uuid().nullable().optional(),
   skipBuffer: z.boolean().optional(),
-  calendarId: z.string().optional(),
-  color: z.string().optional(),
-});
+  notifications: z.boolean().optional(),
+  calendarId: z.string().max(256).optional(),
+  color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
+}).refine(
+  data => !(data.durationMin !== undefined && data.durationMax !== undefined && data.durationMin > data.durationMax),
+  { message: 'durationMin must be <= durationMax' },
+).refine(
+  data => !(data.windowStart && data.windowEnd && data.windowStart >= data.windowEnd),
+  { message: 'windowStart must be before windowEnd' },
+);
 
 export const createTaskSchema = z.object({
   name: z.string().min(1).max(200),
   priority: z.number().int().min(1).max(4).optional(),
-  totalDuration: z.number().int().positive(),
+  totalDuration: z.number().int().positive().max(43200),
   dueDate: z.string().datetime({ offset: true }),
   earliestStart: z.string().datetime({ offset: true }).optional(),
-  chunkMin: z.number().int().positive().optional(),
-  chunkMax: z.number().int().positive().optional(),
+  chunkMin: z.number().int().positive().max(1440).optional(),
+  chunkMax: z.number().int().positive().max(1440).optional(),
   schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
   skipBuffer: z.boolean().optional(),
-  calendarId: z.string().optional(),
-  color: z.string().optional(),
-});
+  calendarId: z.string().max(256).optional(),
+  color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
+}).refine(
+  data => !(data.chunkMin !== undefined && data.chunkMax !== undefined && data.chunkMin > data.chunkMax),
+  { message: 'chunkMin must be <= chunkMax' },
+);
 
 export const createMeetingSchema = z.object({
   name: z.string().min(1).max(200),
   priority: z.number().int().min(1).max(4).optional(),
-  attendees: z.array(z.string()).optional(),
+  attendees: z.array(z.string().email()).max(50).optional(),
   duration: z.number().int().positive(),
   frequency: z.enum(['daily', 'weekly', 'monthly', 'custom']),
   idealTime: z.string().regex(timeRegex, 'Must be HH:MM format'),
@@ -46,13 +70,16 @@ export const createMeetingSchema = z.object({
   location: z.string().optional(),
   conferenceType: z.string().optional(),
   skipBuffer: z.boolean().optional(),
-  calendarId: z.string().optional(),
-  color: z.string().optional(),
-});
+  calendarId: z.string().max(256).optional(),
+  color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
+}).refine(
+  data => !(data.windowStart && data.windowEnd && data.windowStart >= data.windowEnd),
+  { message: 'windowStart must be before windowEnd' },
+);
 
 export const createFocusSchema = z.object({
-  weeklyTargetMinutes: z.number().int().positive(),
-  dailyTargetMinutes: z.number().int().positive(),
+  weeklyTargetMinutes: z.number().int().positive().max(10080),
+  dailyTargetMinutes: z.number().int().positive().max(1440),
   schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
   enabled: z.boolean().optional(),
 });
@@ -64,20 +91,80 @@ export const createBufferSchema = z.object({
   applyDecompressionTo: z.enum(['all', 'video_only']).optional(),
 });
 
-export const updateHabitSchema = createHabitSchema.extend({
+export const updateHabitSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  priority: z.number().int().min(1).max(4).optional(),
+  windowStart: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
+  windowEnd: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
+  idealTime: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
+  durationMin: z.number().int().positive().max(1440).optional(),
+  durationMax: z.number().int().positive().max(1440).optional(),
+  frequency: z.enum(['daily', 'weekly', 'monthly', 'custom']).optional(),
+  frequencyConfig: frequencyConfigSchema,
+  schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
+  autoDecline: z.boolean().optional(),
+  dependsOn: z.string().uuid().nullable().optional(),
+  skipBuffer: z.boolean().optional(),
+  notifications: z.boolean().optional(),
+  calendarId: z.string().max(256).optional(),
+  color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
   locked: z.boolean().optional(),
   enabled: z.boolean().optional(),
-}).partial();
+}).refine(
+  data => !(data.durationMin !== undefined && data.durationMax !== undefined && data.durationMin > data.durationMax),
+  { message: 'durationMin must be <= durationMax' },
+).refine(
+  data => !(data.windowStart && data.windowEnd && data.windowStart >= data.windowEnd),
+  { message: 'windowStart must be before windowEnd' },
+);
 
-export const updateTaskSchema = createTaskSchema.extend({
+export const updateTaskSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  priority: z.number().int().min(1).max(4).optional(),
+  totalDuration: z.number().int().positive().max(43200).optional(),
+  dueDate: z.string().datetime({ offset: true }).optional(),
+  earliestStart: z.string().datetime({ offset: true }).optional(),
+  chunkMin: z.number().int().positive().max(1440).optional(),
+  chunkMax: z.number().int().positive().max(1440).optional(),
+  schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
+  skipBuffer: z.boolean().optional(),
+  calendarId: z.string().max(256).optional(),
+  color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
   remainingDuration: z.number().int().positive().optional(),
   status: z.enum(['open', 'done_scheduling', 'completed']).optional(),
   isUpNext: z.boolean().optional(),
-}).partial();
+}).refine(
+  data => !(data.chunkMin !== undefined && data.chunkMax !== undefined && data.chunkMin > data.chunkMax),
+  { message: 'chunkMin must be <= chunkMax' },
+);
 
-export const updateMeetingSchema = createMeetingSchema.partial();
+export const updateMeetingSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  priority: z.number().int().min(1).max(4).optional(),
+  attendees: z.array(z.string().email()).max(50).optional(),
+  duration: z.number().int().positive().optional(),
+  frequency: z.enum(['daily', 'weekly', 'monthly', 'custom']).optional(),
+  idealTime: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
+  windowStart: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
+  windowEnd: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
+  location: z.string().optional(),
+  conferenceType: z.string().optional(),
+  skipBuffer: z.boolean().optional(),
+  calendarId: z.string().max(256).optional(),
+  color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
+}).refine(
+  data => !(data.windowStart && data.windowEnd && data.windowStart >= data.windowEnd),
+  { message: 'windowStart must be before windowEnd' },
+);
 export const updateFocusSchema = createFocusSchema.partial();
 export const updateBufferSchema = createBufferSchema.partial();
+
+export const moveEventSchema = z.object({
+  start: z.string().datetime({ offset: true }),
+  end: z.string().datetime({ offset: true }),
+}).refine(data => new Date(data.start) < new Date(data.end), {
+  message: 'start must be before end',
+});
 
 export const createLinkSchema = z.object({
   name: z.string().min(1).max(200),
@@ -90,3 +177,87 @@ export const createLinkSchema = z.object({
 export const updateLinkSchema = createLinkSchema.extend({
   enabled: z.boolean().optional(),
 }).partial();
+
+export const userSettingsSchema = z.object({
+  workingHours: z.object({
+    start: z.string().regex(timeRegex, 'Must be HH:MM format'),
+    end: z.string().regex(timeRegex, 'Must be HH:MM format'),
+  }).optional(),
+  personalHours: z.object({
+    start: z.string().regex(timeRegex, 'Must be HH:MM format'),
+    end: z.string().regex(timeRegex, 'Must be HH:MM format'),
+  }).optional(),
+  timezone: timezoneSchema.optional(),
+  schedulingWindowDays: z.number().int().positive().max(90).optional(),
+  defaultHabitCalendarId: z.string().min(1).max(200).optional(),
+  defaultTaskCalendarId: z.string().min(1).max(200).optional(),
+});
+
+export const bookingAvailabilitySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be YYYY-MM-DD format'),
+  duration: z.coerce.number().int().positive(),
+});
+
+export const bookingRequestSchema = z.object({
+  start: z.string().datetime({ offset: true }),
+  end: z.string().datetime({ offset: true }),
+  name: z.string().min(1).max(200),
+  email: z.string().email().max(254),
+  notes: z.string().max(1000).optional(),
+}).refine(data => new Date(data.start) < new Date(data.end), {
+  message: 'start must be before end',
+});
+
+export const updateSubtaskSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  completed: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).optional(),
+});
+
+export const lockBodySchema = z.object({
+  locked: z.boolean(),
+});
+
+export const upNextBodySchema = z.object({
+  isUpNext: z.boolean(),
+});
+
+export const scheduleChangesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  since: z.string().datetime({ offset: true }).optional(),
+});
+
+// ============================================================
+// Auth Schemas
+// ============================================================
+
+export const signupSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(8).max(128),
+  name: z.string().min(1).max(100),
+  gdprConsent: z.boolean(),
+});
+
+export const loginSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(1).max(128),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email().max(254),
+});
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1).max(256),
+  password: z.string().min(8).max(128),
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: z.string().min(8).max(128),
+});
+
+export const deleteAccountSchema = z.object({
+  confirm: z.literal(true),
+  password: z.string().min(1).max(128).optional(),
+});

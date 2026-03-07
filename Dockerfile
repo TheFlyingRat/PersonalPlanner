@@ -4,7 +4,7 @@ RUN npm install -g pnpm@9.15.4
 
 WORKDIR /app
 
-# Copy workspace config (cached layer — only changes when deps change)
+# Copy workspace config (cached layer -- only changes when deps change)
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
 
 # Copy all package.json files
@@ -46,14 +46,10 @@ COPY --from=builder /app/packages/engine/dist packages/engine/dist
 COPY --from=builder /app/packages/api/dist packages/api/dist
 COPY --from=builder /app/packages/web/build packages/web/build
 
-# Ensure data directory exists and is owned by appuser
-RUN mkdir -p /app/data && chown -R appuser:appgroup /app
+RUN chown -R appuser:appgroup /app
 
 EXPOSE 3000
 
-VOLUME /app/data
-
-ENV DB_PATH=/app/data/cadence.db
 ENV NODE_ENV=production
 
 USER appuser

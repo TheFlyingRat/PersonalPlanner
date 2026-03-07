@@ -73,6 +73,7 @@ export interface Habit {
   dependsOn: string | null; // habit ID
   enabled: boolean;
   skipBuffer: boolean;
+  notifications: boolean;
   calendarId?: string;
   color?: string;
   createdAt: string;
@@ -260,6 +261,7 @@ export interface CalendarOperation {
   status: EventStatus;
   extendedProperties: Record<string, string>;
   calendarId?: string;         // target calendar for this operation
+  useDefaultReminders?: boolean;
 }
 
 export interface ScheduleResult {
@@ -305,6 +307,7 @@ export interface CreateHabitRequest {
   autoDecline?: boolean;
   dependsOn?: string | null;
   skipBuffer?: boolean;
+  notifications?: boolean;
   calendarId?: string;
   color?: string;
 }
@@ -345,6 +348,90 @@ export interface CreateLinkRequest {
   durations: number[];
   schedulingHours?: SchedulingHours;
   priority?: Priority;
+}
+
+// ============================================================
+// Booking Types (public scheduling links)
+// ============================================================
+
+export interface BookingSlot {
+  start: string;   // ISO datetime
+  end: string;     // ISO datetime
+}
+
+export interface BookingRequest {
+  start: string;   // ISO datetime
+  end: string;     // ISO datetime
+  name: string;
+  email: string;
+  notes?: string;
+}
+
+export interface BookingConfirmation {
+  id: string;
+  slug: string;
+  title: string;
+  start: string;
+  end: string;
+  duration: number;
+  name: string | null;
+  email: string | null;
+  createdAt: string;
+}
+
+export interface BookingLinkInfo {
+  slug: string;
+  name: string;
+  durations: number[];
+  enabled: boolean;
+}
+
+// ============================================================
+// Schedule Change Tracking
+// ============================================================
+
+export enum ScheduleChangeType {
+  Created = 'created',
+  Moved = 'moved',
+  Resized = 'resized',
+  Deleted = 'deleted',
+}
+
+export interface ScheduleChange {
+  id: string;
+  operationType: ScheduleChangeType;
+  itemType: string;
+  itemId: string;
+  itemName: string;
+  previousStart: string | null;
+  previousEnd: string | null;
+  newStart: string | null;
+  newEnd: string | null;
+  reason: string | null;
+  batchId: string;
+  createdAt: string;
+}
+
+// ============================================================
+// Schedule Quality Score
+// ============================================================
+
+export interface QualityComponent {
+  score: number;    // 0-100
+  weight: number;   // 0-1
+  label: string;
+}
+
+export interface QualityScore {
+  overall: number;  // 0-100 weighted average
+  components: {
+    placement: QualityComponent;
+    idealTime: QualityComponent;
+    focusTime: QualityComponent;
+    buffers: QualityComponent;
+    priorities: QualityComponent;
+  };
+  breakdown: string[];  // human-readable notes
 }
 
 export interface AnalyticsData {
