@@ -54,7 +54,7 @@ export function setAuthCookies(res: Response, accessToken: string, refreshToken:
 
   res.cookie('refresh_token', refreshToken, {
     httpOnly: true,
-    secure: isProduction,
+    secure: isProduction || sameSite === 'none',
     sameSite,
     path: '/api/auth',
     maxAge: REFRESH_TOKEN_EXPIRY_MS,
