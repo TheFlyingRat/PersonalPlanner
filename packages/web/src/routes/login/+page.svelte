@@ -1,6 +1,7 @@
 <script lang="ts">
   import { pageTitle, APP_NAME } from '$lib/brand';
   import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import { login, googleAuth } from '$lib/auth.svelte';
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
   import GoogleLogo from '$lib/components/auth/GoogleLogo.svelte';
@@ -10,11 +11,19 @@
   import EyeOff from 'lucide-svelte/icons/eye-off';
   import Loader from 'lucide-svelte/icons/loader';
 
+  const oauthErrors: Record<string, string> = {
+    oauth_failed: 'Google sign-in failed. Please try again.',
+    missing_code: 'Google sign-in was cancelled or failed.',
+    invalid_state: 'Google sign-in expired. Please try again.',
+    state_expired: 'Google sign-in expired. Please try again.',
+    no_email: 'Could not retrieve email from Google account.',
+  };
+
   let email = $state('');
   let password = $state('');
   let showPassword = $state(false);
   let submitting = $state(false);
-  let loginError = $state('');
+  let loginError = $state(oauthErrors[page.url.searchParams.get('error') ?? ''] ?? '');
   let emailError = $state('');
   let passwordError = $state('');
 
