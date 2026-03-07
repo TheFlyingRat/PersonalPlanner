@@ -2,7 +2,7 @@
 // A single shared connection is opened on first subscribe() and closed when
 // the last listener unsubscribes. Reconnects automatically with exponential backoff.
 import { browser } from '$app/environment';
-import { PUBLIC_API_URL } from '$env/static/public';
+const PUBLIC_API_URL = import.meta.env.PUBLIC_API_URL ?? '';
 
 type MessageHandler = (data: { type: string; reason: string; timestamp: string }) => void;
 export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
@@ -92,7 +92,7 @@ export function subscribe(handler: MessageHandler): () => void {
   return () => {
     listeners.delete(handler);
     document.removeEventListener('visibilitychange', onVisibilityChange);
-    if (listeners.size === 0) disconnect();
+    if (listeners.size === 0 && connectionListeners.size === 0) disconnect();
   };
 }
 
@@ -113,13 +113,17 @@ export function disconnect(): void {
 export function subscribeConnectionState(handler: ConnectionStateHandler): () => void {
   if (!browser) return () => {};
   connectionListeners.add(handler);
+  // Ensure a connection is initiated when someone is watching state
+  if (ws === null && currentState !== 'connected') {
+    connect();
+  }
   // Immediately emit current state
   handler(currentState);
 
   // Listen for browser online/offline events
   const onOffline = () => setConnectionState('disconnected');
   const onOnline = () => {
-    if (ws === null && listeners.size > 0) {
+    if (ws === null) {
       setConnectionState('reconnecting');
       connect();
     }

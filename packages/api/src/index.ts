@@ -19,6 +19,22 @@ if (process.env.NODE_ENV === 'production') {
   if (!process.env.CORS_ORIGIN) {
     throw new Error('CORS_ORIGIN must be set in production');
   }
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL must be set in production');
+  }
+  if (!process.env.ENCRYPTION_KEY) {
+    throw new Error('ENCRYPTION_KEY must be set in production');
+  }
+  if (!process.env.TRUST_PROXY) {
+    console.warn('WARNING: TRUST_PROXY is not set in production. Rate limiting may not work correctly behind a reverse proxy.');
+  }
+  if (!process.env.COOKIE_DOMAIN) {
+    console.warn('WARNING: COOKIE_DOMAIN is not set in production. Cross-subdomain cookies will not work.');
+  }
+}
+// Validate ENCRYPTION_KEY format if present (AES-256-GCM requires 64 hex chars = 32 bytes)
+if (process.env.ENCRYPTION_KEY && !/^[0-9a-fA-F]{64}$/.test(process.env.ENCRYPTION_KEY)) {
+  throw new Error('ENCRYPTION_KEY must be exactly 64 hex characters (256 bits for AES-256-GCM)');
 }
 if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
   console.warn('WARNING: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set. Google Calendar integration will not work.');
@@ -58,6 +74,9 @@ const wsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
 // Security headers — allow Geist font CDN
 // Note: SvelteKit static builds emit inline <script> and <style> tags,
 // so both 'unsafe-inline' directives are required.
+// Note: SvelteKit static builds emit inline <script> and <style> tags,
+// so 'unsafe-inline' for scriptSrc and styleSrc is required until
+// nonce-based CSP is configured in the SvelteKit build (owned by frontend).
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -67,6 +86,9 @@ app.use(helmet({
       scriptSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:"],
       connectSrc: ["'self'", ...wsOrigins, ...wsOrigins.map((o) => o.replace('ws:', 'wss:'))],
+      frameAncestors: ["'self'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
     },
   },
 }));
@@ -213,12 +235,17 @@ async function startServer() {
   async function gracefulShutdown(signal: string) {
     console.log(`${signal} received. Shutting down gracefully...`);
     await schedulerRegistry.stopAll();
-    closeWebSocket();
+    await closeWebSocket();
     server.close(async () => {
       console.log('HTTP server closed.');
       await closeDb();
       process.exit(0);
     });
+    // Force-drain keep-alive connections after 5s
+    setTimeout(() => {
+      console.log('Draining keep-alive connections...');
+      server.closeAllConnections();
+    }, 5_000);
     setTimeout(() => {
       console.error('Forced shutdown after timeout.');
       process.exit(1);
@@ -227,6 +254,14 @@ async function startServer() {
 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  // INFRA-C1: Catch unhandled errors to prevent silent crashes
+  process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught exception:', err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('[FATAL] Unhandled rejection:', reason);
+  });
 }
 
 startServer().catch((err) => {

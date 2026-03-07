@@ -38,6 +38,14 @@ export function generateCandidateSlots(
   const stepMs = 15 * 60 * 1000; // 15-minute step for sliding window
   const bufferMs = item.skipBuffer ? 0 : bufferConfig.breakBetweenItemsMinutes * 60 * 1000;
 
+  // PERF-H1: Pre-sort occupied slots by start time for binary search
+  const sortedOccupied = occupiedSlots
+    .map(s => ({
+      startMs: s.start.getTime() - bufferMs,
+      endMs: s.end.getTime() + bufferMs,
+    }))
+    .sort((a, b) => a.startMs - b.startMs);
+
   // Resolve dependency placement for hard constraint
   const depPlacement = (dependsOn && existingPlacements)
     ? existingPlacements.get(dependsOn) ?? null
@@ -56,28 +64,41 @@ export function generateCandidateSlots(
     let candidateStart = windowStart;
     while (candidateStart + durationMs <= windowEnd) {
       const candidateEnd = candidateStart + durationMs;
-      const candidateSlot: TimeSlot = {
-        start: new Date(candidateStart),
-        end: new Date(candidateEnd),
-      };
 
-      // Check for overlap with occupied slots (including buffer)
-      const hasConflict = occupiedSlots.some((occupied) => {
-        // Expand occupied slot by buffer on both sides
-        const bufferedOccupied: TimeSlot = {
-          start: new Date(occupied.start.getTime() - bufferMs),
-          end: new Date(occupied.end.getTime() + bufferMs),
-        };
-        return slotsOverlap(candidateSlot, bufferedOccupied);
-      });
+      // PERF-H1: Use binary search to find first potentially overlapping occupied slot.
+      // A buffered occupied slot overlaps candidate [candidateStart, candidateEnd]
+      // iff occupied.startMs < candidateEnd AND occupied.endMs > candidateStart.
+      // Binary search for the first slot where startMs < candidateEnd.
+      let hasConflict = false;
+      let lo = 0, hi = sortedOccupied.length;
+      // Find first index where startMs >= candidateEnd (all before could overlap)
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (sortedOccupied[mid].startMs < candidateEnd) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+      // All slots at indices [0, lo) have startMs < candidateEnd.
+      // Check backwards from lo-1 for any with endMs > candidateStart.
+      for (let i = lo - 1; i >= 0; i--) {
+        if (sortedOccupied[i].endMs <= candidateStart) {
+          // Since sorted by startMs, earlier slots end even earlier — stop.
+          break;
+        }
+        // sortedOccupied[i].startMs < candidateEnd && sortedOccupied[i].endMs > candidateStart
+        hasConflict = true;
+        break;
+      }
 
       // Hard dependency constraint: candidate must start after
       // the dependency ends on the same day
       let violatesDependency = false;
       if (depPlacement) {
         if (
-          isSameDay(candidateSlot.start, depPlacement.start, tz) &&
-          candidateStart < depPlacement.end.getTime()
+          candidateStart < depPlacement.end.getTime() &&
+          isSameDay(new Date(candidateStart), depPlacement.start, tz)
         ) {
           violatesDependency = true;
         }

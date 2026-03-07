@@ -11,7 +11,7 @@
     "isolatedModules": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": false,
+    "sourceMap": true,
     "outDir": "dist",
     "rootDir": "src"
   }

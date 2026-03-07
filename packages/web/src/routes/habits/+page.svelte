@@ -626,6 +626,7 @@
             type="button"
             class="day-preset"
             class:day-preset--active={getActivePreset(formDays) === 'every-day'}
+            aria-pressed={getActivePreset(formDays) === 'every-day'}
             onclick={() => { formDays = [...ALL_DAYS]; }}
           >Every day</button>
           <span class="day-preset-sep">&middot;</span>
@@ -633,6 +634,7 @@
             type="button"
             class="day-preset"
             class:day-preset--active={getActivePreset(formDays) === 'weekdays'}
+            aria-pressed={getActivePreset(formDays) === 'weekdays'}
             onclick={() => { formDays = [...WEEKDAYS]; }}
           >Weekdays</button>
           <span class="day-preset-sep">&middot;</span>
@@ -640,6 +642,7 @@
             type="button"
             class="day-preset"
             class:day-preset--active={getActivePreset(formDays) === 'weekends'}
+            aria-pressed={getActivePreset(formDays) === 'weekends'}
             onclick={() => { formDays = [...WEEKENDS]; }}
           >Weekends</button>
           <span class="day-preset-sep">&middot;</span>
@@ -647,6 +650,7 @@
             type="button"
             class="day-preset"
             class:day-preset--active={getActivePreset(formDays) === 'custom'}
+            aria-pressed={getActivePreset(formDays) === 'custom'}
             disabled={getActivePreset(formDays) === 'custom'}
           >Custom</button>
         </div>
@@ -741,6 +745,7 @@
               style="background: {c};"
               onclick={() => { formColor = c; }}
               aria-label="Select {colorNames[c] ?? c}"
+              aria-pressed={formColor === c}
             ></button>
           {/each}
           <button
@@ -749,6 +754,7 @@
             class:color-swatch--active={!formColor}
             onclick={() => { formColor = ''; }}
             aria-label="No color"
+            aria-pressed={!formColor}
           >&#x2715;</button>
         </div>
       </div>

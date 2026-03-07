@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
 import { calendars, calendarEvents } from '../db/pg-schema.js';
 import { GoogleCalendarClient } from './calendar.js';
@@ -18,14 +18,18 @@ export class CalendarPollerManager {
     private client: GoogleCalendarClient,
     private onChanges: (calendarId: string, events: CalendarEvent[]) => Promise<void>,
     userId?: string,
+    private onAuthError?: () => Promise<void>,
   ) {
     this.userId = userId || '';
   }
 
   /** Start pollers for all enabled calendars (scoped to user if userId set). */
   async startAll(): Promise<void> {
+    const query = this.userId
+      ? and(eq(calendars.userId, this.userId), eq(calendars.enabled, true))
+      : eq(calendars.enabled, true);
     const enabledCalendars = await db.select().from(calendars)
-      .where(eq(calendars.enabled, true));
+      .where(query!);
 
     for (const cal of enabledCalendars) {
       await this.startPoller(cal.id, cal.googleCalendarId);
@@ -96,6 +100,7 @@ export class CalendarPollerManager {
           .set({ syncToken: token })
           .where(eq(calendars.id, calId));
       },
+      this.onAuthError,
     );
 
     await poller.start();

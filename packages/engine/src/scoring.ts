@@ -4,7 +4,7 @@ import {
   TimeSlot,
   BufferConfig,
 } from '@cadence/shared';
-import { isSameDay, getDatePartsInTimezone } from './utils.js';
+import { isSameDay, getDatePartsInTimezone, getFormatter } from './utils.js';
 
 /**
  * Parse "HH:MM" into minutes since midnight.
@@ -22,9 +22,7 @@ function parseTimeToMinutes(hhmm: string): number {
  */
 function dateToMinutesSinceMidnight(d: Date, tz?: string): number {
   if (tz) {
-    const fmt = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz, hour: 'numeric', minute: 'numeric', hour12: false,
-    });
+    const fmt = getFormatter(tz, { hour: 'numeric', minute: 'numeric', hour12: false });
     const parts = fmt.formatToParts(d);
     const h = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0');
     const m = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0');
@@ -53,6 +51,7 @@ export function scoreSlot(
   existingPlacements: Map<string, TimeSlot>,
   bufferConfig: BufferConfig,
   tz?: string,
+  placementsByDay?: Map<string, TimeSlot[]>,
 ): number {
   let score = 0;
 
@@ -66,7 +65,7 @@ export function scoreSlot(
   score += scoreIdealTimeProximity(slot, item, tz) * wIdeal;
 
   // 2. Buffer compliance (neutral score if item skips buffers)
-  score += (item.skipBuffer ? 0.5 : scoreBufferCompliance(slot, existingPlacements, bufferConfig, tz)) * wBuffer;
+  score += (item.skipBuffer ? 0.5 : scoreBufferCompliance(slot, existingPlacements, bufferConfig, tz, placementsByDay)) * wBuffer;
 
   // 3. Continuity with related/dependent items
   score += scoreContinuity(slot, item, existingPlacements, tz) * wContinuity;
@@ -108,6 +107,7 @@ function scoreBufferCompliance(
   existingPlacements: Map<string, TimeSlot>,
   bufferConfig: BufferConfig,
   tz?: string,
+  placementsByDay?: Map<string, TimeSlot[]>,
 ): number {
   if (existingPlacements.size === 0) {
     return 1; // No neighbors, full compliance
@@ -118,14 +118,28 @@ function scoreBufferCompliance(
     return 1;
   }
 
+  // Use pre-indexed placements by day if available (PERF-H2)
+  let sameDayPlacements: TimeSlot[];
+  if (placementsByDay) {
+    const dayKey = tz
+      ? (() => {
+          const p = getDatePartsInTimezone(slot.start, tz);
+          return `${p.year}-${p.month}-${p.day}`;
+        })()
+      : `${slot.start.getFullYear()}-${slot.start.getMonth()}-${slot.start.getDate()}`;
+    sameDayPlacements = placementsByDay.get(dayKey) ?? [];
+  } else {
+    sameDayPlacements = [];
+    for (const [, placement] of existingPlacements) {
+      if (isSameDay(slot.start, placement.start, tz)) {
+        sameDayPlacements.push(placement);
+      }
+    }
+  }
+
   let nearestGapMs = Infinity;
 
-  for (const [, placement] of existingPlacements) {
-    // Only consider placements on the same day
-    if (!isSameDay(slot.start, placement.start, tz)) {
-      continue;
-    }
-
+  for (const placement of sameDayPlacements) {
     // Gap before: placement ends before slot starts
     if (placement.end.getTime() <= slot.start.getTime()) {
       const gap = slot.start.getTime() - placement.end.getTime();

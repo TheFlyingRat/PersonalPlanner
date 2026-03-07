@@ -4,8 +4,9 @@ import * as schema from './pg-schema.js';
 const { Pool } = pg;
 
 /**
- * Run PostgreSQL schema creation.
+ * Run PostgreSQL schema creation with versioned migrations.
  * Uses CREATE TABLE IF NOT EXISTS for idempotent execution.
+ * Tracks applied migrations via schema_migrations table.
  */
 export async function runMigrations(databaseUrl: string): Promise<void> {
   const pool = new Pool({ connectionString: databaseUrl });
@@ -14,7 +15,25 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
     await pool.query('SELECT 1'); // verify connection
     console.log('[migrate] Connected to PostgreSQL');
 
+    // INFRA-H3: Create schema_migrations table for version tracking
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        description TEXT
+      );
+    `);
+
+    // Get already-applied versions
+    const appliedResult = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
+    const appliedVersions = new Set(appliedResult.rows.map((r: { version: number }) => r.version));
+
+    // Define versioned migrations
+    const migrations: Array<{ version: number; description: string; sql: string }> = [
+      {
+        version: 1,
+        description: 'Initial schema creation',
+        sql: `
       CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
       -- Users
@@ -282,30 +301,53 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_scheduling_links_user_id ON scheduling_links(user_id);
-    `);
-
-    // Additive migrations for columns that may be missing on existing tables
-    const alterStatements = [
-      `ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE`,
-      `ALTER TABLE users ADD COLUMN IF NOT EXISTS gdpr_consent_at TIMESTAMPTZ`,
-      `ALTER TABLE users ADD COLUMN IF NOT EXISTS consent_version TEXT`,
-      `ALTER TABLE users ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free'`,
-      `ALTER TABLE habits ADD COLUMN IF NOT EXISTS skip_buffer BOOLEAN DEFAULT FALSE`,
-      `ALTER TABLE tasks ADD COLUMN IF NOT EXISTS skip_buffer BOOLEAN DEFAULT FALSE`,
-      `ALTER TABLE smart_meetings ADD COLUMN IF NOT EXISTS skip_buffer BOOLEAN DEFAULT FALSE`,
+    `,
+      },
+      {
+        version: 2,
+        description: 'Add skip_buffer columns',
+        sql: `
+      ALTER TABLE habits ADD COLUMN IF NOT EXISTS skip_buffer BOOLEAN DEFAULT FALSE;
+      ALTER TABLE tasks ADD COLUMN IF NOT EXISTS skip_buffer BOOLEAN DEFAULT FALSE;
+      ALTER TABLE smart_meetings ADD COLUMN IF NOT EXISTS skip_buffer BOOLEAN DEFAULT FALSE;
+    `,
+      },
+      {
+        version: 3,
+        description: 'Add composite indexes on (userId, end) for scheduled_events and calendar_events',
+        sql: `
+      CREATE INDEX IF NOT EXISTS idx_scheduled_events_user_id_end ON scheduled_events(user_id, "end");
+      CREATE INDEX IF NOT EXISTS idx_calendar_events_user_id_end ON calendar_events(user_id, "end");
+    `,
+      },
     ];
-    for (const stmt of alterStatements) {
+
+    // INFRA-H1: Run each pending migration in a transaction
+    for (const migration of migrations) {
+      if (appliedVersions.has(migration.version)) {
+        continue;
+      }
+
+      console.log(`[migrate] Applying migration v${migration.version}: ${migration.description}`);
+      const client = await pool.connect();
       try {
-        await pool.query(stmt);
-      } catch (e: any) {
-        // Ignore "column already exists" errors
-        if (!e.message?.includes('already exists')) {
-          console.warn(`[migrate] ALTER warning: ${e.message}`);
-        }
+        await client.query('BEGIN');
+        await client.query(migration.sql);
+        await client.query(
+          'INSERT INTO schema_migrations (version, description) VALUES ($1, $2)',
+          [migration.version, migration.description],
+        );
+        await client.query('COMMIT');
+        console.log(`[migrate] Migration v${migration.version} applied successfully`);
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
     }
 
-    console.log('[migrate] All tables created successfully');
+    console.log('[migrate] All migrations up to date');
   } finally {
     await pool.end();
   }

@@ -11,7 +11,7 @@
   import ChevronLeft from 'lucide-svelte/icons/chevron-left';
   import Loader from 'lucide-svelte/icons/loader';
   import AlertCircle from 'lucide-svelte/icons/alert-circle';
-  import { PUBLIC_API_URL } from '$env/static/public';
+  const PUBLIC_API_URL = import.meta.env.PUBLIC_API_URL ?? '';
 
   const API_BASE = PUBLIC_API_URL || '/api';
   const slug = $derived(page.params.slug);
@@ -216,10 +216,10 @@
       <!-- Duration selector -->
       {#if linkInfo && linkInfo.durations.length > 1}
         <div class="section">
-          <label class="section-label">
+          <span class="section-label">
             <Clock size={14} strokeWidth={1.5} />
             Duration
-          </label>
+          </span>
           <div class="duration-chips">
             {#each linkInfo.durations as dur}
               <button
@@ -241,10 +241,10 @@
 
       <!-- Date selector -->
       <div class="section">
-        <label class="section-label">
+        <span class="section-label">
           <Calendar size={14} strokeWidth={1.5} />
           Date
-        </label>
+        </span>
         <div class="date-chips">
           {#each dateChips as chip}
             <button
@@ -314,7 +314,7 @@
       <form class="booking-form" onsubmit={(e) => { e.preventDefault(); submitBooking(); }}>
         <div class="form-field">
           <label for="booking-name">
-            <User size={14} strokeWidth={1.5} />
+            <User size={14} strokeWidth={1.5} aria-hidden="true" />
             Name
           </label>
           <input
@@ -330,7 +330,7 @@
 
         <div class="form-field">
           <label for="booking-email">
-            <Mail size={14} strokeWidth={1.5} />
+            <Mail size={14} strokeWidth={1.5} aria-hidden="true" />
             Email
           </label>
           <input
@@ -346,7 +346,7 @@
 
         <div class="form-field">
           <label for="booking-notes">
-            <FileText size={14} strokeWidth={1.5} />
+            <FileText size={14} strokeWidth={1.5} aria-hidden="true" />
             Notes <span class="optional">(optional)</span>
           </label>
           <textarea

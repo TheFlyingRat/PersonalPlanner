@@ -1,3 +1,19 @@
+// ============================================================
+// Intl.DateTimeFormat cache — avoids repeated allocations (PERF-M1)
+// ============================================================
+
+const formatterCache = new Map<string, Intl.DateTimeFormat>();
+
+export function getFormatter(tz: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = tz + JSON.stringify(options);
+  let fmt = formatterCache.get(key);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat('en-US', { ...options, timeZone: tz });
+    formatterCache.set(key, fmt);
+  }
+  return fmt;
+}
+
 /**
  * Parse an "HH:MM" string into { hours, minutes }.
  */
@@ -36,8 +52,7 @@ export function setTimeInTimezone(date: Date, hours: number, minutes: number, tz
   rough.setHours(hours, minutes, 0, 0);
 
   // Get the timezone offset for this date in the target timezone
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz,
+  const formatter = getFormatter(tz, {
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
     hour12: false,
@@ -71,6 +86,15 @@ export function setTimeInTimezone(date: Date, hours: number, minutes: number, tz
     return new Date(result.getTime() + diffMs);
   }
 
+  // DST fall-back ambiguity: during a fall-back transition (e.g., 2:00 AM occurs
+  // twice), the result hour may not match the target hour. When this happens,
+  // prefer the first occurrence (earlier UTC offset) by nudging backward.
+  const resultHour = rGet('hour') === 24 ? 0 : rGet('hour');
+  if (resultHour !== hours) {
+    const hourDiffMin = (hours * 60 + minutes) - (resultHour * 60 + rGet('minute'));
+    return new Date(result.getTime() + hourDiffMin * 60000);
+  }
+
   return result;
 }
 
@@ -78,7 +102,7 @@ export function setTimeInTimezone(date: Date, hours: number, minutes: number, tz
  * Get the day-of-week (0=Sun, 6=Sat) for a date in a specific timezone.
  */
 export function getDayOfWeekInTimezone(date: Date, tz: string): number {
-  const formatter = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' });
+  const formatter = getFormatter(tz, { weekday: 'short' });
   const weekday = formatter.format(date);
   const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return map[weekday] ?? 0;
@@ -104,8 +128,8 @@ export function nextDayInTimezone(date: Date, tz: string): Date {
  * Get the date components (year, month, day) in a timezone.
  */
 export function getDatePartsInTimezone(date: Date, tz: string): { year: number; month: number; day: number } {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+  const formatter = getFormatter(tz, {
+    year: 'numeric', month: '2-digit', day: '2-digit',
   });
   const parts = formatter.formatToParts(date);
   const get = (type: string) => parseInt(parts.find(p => p.type === type)?.value ?? '0');

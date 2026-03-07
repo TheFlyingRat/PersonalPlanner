@@ -6,11 +6,12 @@
 </script>
 
 <div class="booking-shell">
-  <header class="booking-header">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <header class="booking-header" aria-label="Cadence">
     <span class="booking-logo">C</span>
     <span class="booking-brand">{BRAND.name}</span>
   </header>
-  <main class="booking-main">
+  <main class="booking-main" id="main-content">
     {@render children()}
   </main>
   <footer class="booking-footer">

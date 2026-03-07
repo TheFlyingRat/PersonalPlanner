@@ -43,17 +43,25 @@ function getDayAbbrev(date: Date, tz: string): string {
   return days[dayIndex];
 }
 
+// PERF-L2: Memoize getWeekNumber by date string key
+const weekNumberCache = new Map<string, number>();
+
 function getWeekNumber(date: Date, tz?: string): number {
-  // Use timezone-aware date parts when available, otherwise fallback to UTC
   const parts = tz ? getDatePartsInTimezone(date, tz) : null;
   const year = parts ? parts.year : date.getFullYear();
-  const month = parts ? parts.month - 1 : date.getMonth(); // Date.UTC uses 0-indexed month
+  const month = parts ? parts.month - 1 : date.getMonth();
   const day = parts ? parts.day : date.getDate();
+
+  const cacheKey = `${year}-${month}-${day}`;
+  const cached = weekNumberCache.get(cacheKey);
+  if (cached !== undefined) return cached;
 
   const d = new Date(Date.UTC(year, month, day));
   d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
   const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  const result = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  weekNumberCache.set(cacheKey, result);
+  return result;
 }
 
 // ============================================================
@@ -106,9 +114,10 @@ function habitsToScheduleItems(
   scheduleEnd: Date,
   windowStart: Date,
   tz: string,
+  precomputedDays?: Date[],
 ): ScheduleItem[] {
   const items: ScheduleItem[] = [];
-  const days = enumerateDays(scheduleStart, scheduleEnd, tz);
+  const days = precomputedDays ?? enumerateDays(scheduleStart, scheduleEnd, tz);
 
   for (const habit of habits) {
     if (!habit.enabled) continue;
@@ -248,6 +257,9 @@ function tasksToScheduleItems(
     // Skip completed or done-scheduling tasks
     if (task.status === TaskStatus.Completed || task.status === TaskStatus.DoneScheduling) continue;
 
+    // EDGE-H6: Guard against invalid chunkMax to prevent infinite loops
+    if (!task.chunkMax || task.chunkMax <= 0) continue;
+
     const remaining = task.remainingDuration;
     if (remaining <= 0) continue;
 
@@ -323,9 +335,10 @@ function meetingsToScheduleItems(
   scheduleEnd: Date,
   windowStart: Date,
   tz: string,
+  precomputedDays?: Date[],
 ): ScheduleItem[] {
   const items: ScheduleItem[] = [];
-  const days = enumerateDays(scheduleStart, scheduleEnd, tz);
+  const days = precomputedDays ?? enumerateDays(scheduleStart, scheduleEnd, tz);
 
   for (const meeting of meetings) {
     if (meeting.frequency === Frequency.Daily) {
@@ -470,12 +483,18 @@ function detectCircularDependencies(habits: Habit[]): CircularDependencyError[] 
   const inStack = new Set<string>();
   const reported = new Set<string>();
 
+  // PERF-M4: Pre-build a Map for O(1) habit lookup instead of O(n) find
+  const habitMap = new Map<string, Habit>();
+  for (const h of habits) {
+    habitMap.set(h.id, h);
+  }
+
   function dfs(id: string): boolean {
     if (inStack.has(id)) return true; // cycle found
     if (visited.has(id)) return false;
     visited.add(id);
     inStack.add(id);
-    const habit = habits.find(h => h.id === id);
+    const habit = habitMap.get(id);
     if (habit?.dependsOn) {
       if (dfs(habit.dependsOn)) {
         if (!reported.has(id)) {
@@ -518,6 +537,11 @@ export function reschedule(
   // 0. Detect circular dependencies in habits
   const circularErrors = detectCircularDependencies(habits);
   const circularHabitIds = new Set<string>();
+  // PERF-M4: Pre-build habit map for O(1) lookup
+  const habitLookup = new Map<string, Habit>();
+  for (const h of habits) {
+    habitLookup.set(h.id, h);
+  }
   if (circularErrors.length > 0) {
     // Collect IDs of habits that are part of a cycle
     for (const habit of habits) {
@@ -529,7 +553,7 @@ export function reschedule(
         while (current) {
           if (seen.has(current)) { isCyclic = true; break; }
           seen.add(current);
-          const h = habits.find(hh => hh.id === current);
+          const h = habitLookup.get(current);
           current = h?.dependsOn ?? null;
         }
         if (isCyclic) {
@@ -544,6 +568,12 @@ export function reschedule(
   const scheduleStart = new Date(currentTime);
   const scheduleEnd = new Date(currentTime);
   scheduleEnd.setDate(scheduleEnd.getDate() + safeDays);
+
+  // PERF-L2: Clear week number cache between reschedule runs
+  weekNumberCache.clear();
+
+  // PERF-L1: Compute days once for the scheduling window
+  const days = enumerateDays(scheduleStart, scheduleEnd, tz);
 
   // 2. Build timeline
   const timeline = buildTimeline(scheduleStart, scheduleEnd, userSettings);
@@ -588,10 +618,10 @@ export function reschedule(
   // Combined fixed events = hard + soft (used by default for all items)
   const fixedEvents: TimeSlot[] = [...hardFixedEvents, ...softExternalEvents];
 
-  // 4. Convert domain objects to ScheduleItems
-  const habitItems = habitsToScheduleItems(habits, scheduleStart, scheduleEnd, scheduleStart, tz);
+  // 4. Convert domain objects to ScheduleItems (PERF-L1: pass precomputed days)
+  const habitItems = habitsToScheduleItems(habits, scheduleStart, scheduleEnd, scheduleStart, tz, days);
   const taskItems = tasksToScheduleItems(tasks, scheduleStart, scheduleEnd, userSettings);
-  const meetingItems = meetingsToScheduleItems(meetings, scheduleStart, scheduleEnd, scheduleStart, tz);
+  const meetingItems = meetingsToScheduleItems(meetings, scheduleStart, scheduleEnd, scheduleStart, tz, days);
 
   // 4b. Handle circular dependencies: add errors and strip dependsOn
   const unschedulable: Array<{ itemId: string; itemType: ItemType; reason: string }> = [];
@@ -627,13 +657,27 @@ export function reschedule(
   for (const [, slot] of lockedPlacements) {
     occupiedSlots.push(slot);
   }
+  // PERF-M2: Keep occupiedSlots sorted by start time for efficient merge in focus time
+  occupiedSlots.sort((a, b) => a.start.getTime() - b.start.getTime());
+
   const placements = new Map<string, TimeSlot>();
   const candidateSlotsMap = new Map<string, CandidateSlot[]>();
   const itemMap = new Map<string, ScheduleItem>();
 
+  // PERF-H2: Pre-index placements by day string for scoring
+  const placementsByDay = new Map<string, TimeSlot[]>();
+
   // Seed placements with locked managed events so they are not deleted
   for (const [itemId, slot] of lockedPlacements) {
     placements.set(itemId, slot);
+    // Index by day
+    const dayKey = `${getDatePartsInTimezone(slot.start, tz).year}-${getDatePartsInTimezone(slot.start, tz).month}-${getDatePartsInTimezone(slot.start, tz).day}`;
+    const daySlots = placementsByDay.get(dayKey);
+    if (daySlots) {
+      daySlots.push(slot);
+    } else {
+      placementsByDay.set(dayKey, [slot]);
+    }
   }
 
   for (const item of flexibleItems) {
@@ -676,10 +720,10 @@ export function reschedule(
       continue;
     }
 
-    // Score each candidate
+    // Score each candidate (PERF-H2: pass placementsByDay index)
     const scoredCandidates = candidates.map((candidate) => ({
       ...candidate,
-      score: scoreSlot(candidate, effectiveItem, placements, bufferConfig, tz),
+      score: scoreSlot(candidate, effectiveItem, placements, bufferConfig, tz, placementsByDay),
     }));
 
     // Sort by score descending
@@ -692,7 +736,26 @@ export function reschedule(
       end: new Date(bestSlot.end),
     };
     placements.set(item.id, placement);
-    occupiedSlots.push(placement);
+
+    // PERF-M2: Binary insert into sorted occupiedSlots
+    const insertTime = placement.start.getTime();
+    let lo = 0, hi = occupiedSlots.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (occupiedSlots[mid].start.getTime() < insertTime) lo = mid + 1;
+      else hi = mid;
+    }
+    occupiedSlots.splice(lo, 0, placement);
+
+    // PERF-H2: Update placementsByDay index
+    const pParts = getDatePartsInTimezone(placement.start, tz);
+    const pDayKey = `${pParts.year}-${pParts.month}-${pParts.day}`;
+    const pDaySlots = placementsByDay.get(pDayKey);
+    if (pDaySlots) {
+      pDaySlots.push(placement);
+    } else {
+      placementsByDay.set(pDayKey, [placement]);
+    }
 
     // Store scored candidates for free/busy computation
     candidateSlotsMap.set(item.id, scoredCandidates);
@@ -721,6 +784,7 @@ export function reschedule(
       scheduleEnd,
       currentTime,
       itemTypeMap,
+      days,
     );
   }
 
@@ -771,6 +835,7 @@ function placeFocusTime(
   scheduleEnd: Date,
   now: Date,
   itemTypeMap: Map<string, ItemType> = new Map(),
+  precomputedDays?: Date[],
 ): void {
   const tz = userSettings.timezone || 'UTC';
 
@@ -796,10 +861,9 @@ function placeFocusTime(
     }
 
     // Calculate remaining available time this week (in the timeline minus occupied)
-    // Merge overlapping occupied slots first to prevent double-subtraction
-    const sortedOccupied = [...occupiedSlots].sort((a, b) => a.start.getTime() - b.start.getTime());
+    // PERF-M2: occupiedSlots is maintained in sorted order, no re-sort needed
     const mergedOccupied: TimeSlot[] = [];
-    for (const slot of sortedOccupied) {
+    for (const slot of occupiedSlots) {
       const last = mergedOccupied[mergedOccupied.length - 1];
       if (last && slot.start.getTime() <= last.end.getTime()) {
         mergedOccupied[mergedOccupied.length - 1] = {
@@ -839,9 +903,12 @@ function placeFocusTime(
       : Math.min(60, targetRemaining); // default 60 min blocks
 
     let placedTotal = 0;
-    const days = enumerateDays(now, scheduleEnd, tz);
+    // PERF-L1: Filter precomputed days to [now, scheduleEnd] instead of recomputing
+    const focusDays = precomputedDays
+      ? precomputedDays.filter(d => d >= startOfDayInTimezone(now, tz))
+      : enumerateDays(now, scheduleEnd, tz);
 
-    for (const day of days) {
+    for (const day of focusDays) {
       if (placedTotal >= targetRemaining) break;
 
       // Build a focus schedule item for this day
@@ -878,7 +945,15 @@ function placeFocusTime(
       const best = scored[0];
       const placement: TimeSlot = { start: new Date(best.start), end: new Date(best.end) };
       placements.set(focusItem.id, placement);
-      occupiedSlots.push(placement);
+      // PERF-M2: Binary insert to maintain sorted order
+      const focusInsertTime = placement.start.getTime();
+      let fLo = 0, fHi = occupiedSlots.length;
+      while (fLo < fHi) {
+        const fMid = (fLo + fHi) >>> 1;
+        if (occupiedSlots[fMid].start.getTime() < focusInsertTime) fLo = fMid + 1;
+        else fHi = fMid;
+      }
+      occupiedSlots.splice(fLo, 0, placement);
       placedTotal += focusItem.duration;
     }
   }

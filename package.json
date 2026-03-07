@@ -12,13 +12,11 @@
     "lint": "pnpm -r lint"
   },
   "devDependencies": {
+    "dotenv": "^17.3.1",
+    "open": "^11.0.0",
+    "pg": "^8.13.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
-  },
-  "dependencies": {
-    "dotenv": "^17.3.1",
-    "open": "^11.0.0",
-    "pg": "^8.13.0"
   }
 }

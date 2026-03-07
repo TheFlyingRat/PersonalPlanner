@@ -551,6 +551,15 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes wizardStepEnterBack {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.wizard-step--back {
+  animation-name: wizardStepEnterBack;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .wizard-step { animation: none; }
   .wizard-dot { transition: none; }
@@ -645,6 +654,64 @@
 @keyframes successPop {
   from { opacity: 0; transform: scale(0.9); }
   to { opacity: 1; transform: scale(1); }
+}
+
+.wizard-calendars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 480px;
+
+  h2 { font-size: 1.25rem; font-weight: 600; margin: 0; text-align: center; }
+  p { font-size: 0.9375rem; color: var(--color-text-secondary); text-align: center; margin: 0; line-height: 1.6; }
+}
+
+.wizard-calendars-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.wizard-cal-table {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.wizard-btn-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  align-self: center;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+
+  &:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border-strong);
+  }
+}
+
+.wizard-cal-hint {
+  font-size: 0.75rem !important;
+  color: var(--color-text-tertiary) !important;
+
+  strong {
+    color: var(--color-text-secondary);
+    font-weight: 500;
+  }
 }
 
 .wizard-hours {

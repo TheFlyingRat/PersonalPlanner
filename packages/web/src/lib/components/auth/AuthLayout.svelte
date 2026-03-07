@@ -3,7 +3,7 @@
   let { children } = $props();
 </script>
 
-<div class="auth-layout">
+<main class="auth-layout" aria-label="Authentication">
   <div class="auth-card">
     <div class="auth-logo">
       <span class="sidebar-logo">C</span>
@@ -18,4 +18,4 @@
     &middot;
     <a href="/terms">Terms</a>
   </footer>
-</div>
+</main>

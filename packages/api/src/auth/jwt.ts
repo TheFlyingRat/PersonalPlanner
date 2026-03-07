@@ -40,6 +40,7 @@ export function getRefreshTokenExpiry(): string {
 
 export function setAuthCookies(res: Response, accessToken: string, refreshToken: string): void {
   const isProduction = process.env.NODE_ENV === 'production';
+  const cookieDomain = process.env.COOKIE_DOMAIN; // e.g. '.theflyingrat.com' for cross-subdomain
 
   res.cookie('access_token', accessToken, {
     httpOnly: true,
@@ -47,6 +48,7 @@ export function setAuthCookies(res: Response, accessToken: string, refreshToken:
     sameSite: 'lax',
     path: '/',
     maxAge: 15 * 60 * 1000, // 15 minutes
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
   });
 
   res.cookie('refresh_token', refreshToken, {
@@ -55,10 +57,16 @@ export function setAuthCookies(res: Response, accessToken: string, refreshToken:
     sameSite: 'lax',
     path: '/api/auth',
     maxAge: REFRESH_TOKEN_EXPIRY_MS,
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
   });
 }
 
+export function getAccessTokenCookieName(): string {
+  return 'access_token';
+}
+
 export function clearAuthCookies(res: Response): void {
-  res.clearCookie('access_token', { path: '/' });
-  res.clearCookie('refresh_token', { path: '/api/auth' });
+  const cookieDomain = process.env.COOKIE_DOMAIN;
+  res.clearCookie('access_token', { path: '/', ...(cookieDomain ? { domain: cookieDomain } : {}) });
+  res.clearCookie('refresh_token', { path: '/api/auth', ...(cookieDomain ? { domain: cookieDomain } : {}) });
 }

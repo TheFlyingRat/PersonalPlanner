@@ -223,6 +223,7 @@ export const scheduledEvents = pgTable('scheduled_events', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
   index('idx_scheduled_events_user_id').on(table.userId),
+  index('idx_scheduled_events_user_id_end').on(table.userId, table.end),
 ]);
 
 // ============================================================
@@ -242,6 +243,7 @@ export const calendarEvents = pgTable('calendar_events', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
   index('idx_calendar_events_user_id').on(table.userId),
+  index('idx_calendar_events_user_id_end').on(table.userId, table.end),
 ]);
 
 // ============================================================

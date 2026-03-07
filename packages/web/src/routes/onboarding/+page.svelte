@@ -4,8 +4,9 @@
   import { page } from '$app/state';
   import { onMount } from 'svelte';
   import { getAuthState, googleAuth } from '$lib/auth.svelte';
-  import { settings as settingsApi, habits as habitsApi } from '$lib/api';
-  import { Frequency } from '@cadence/shared';
+  import { settings as settingsApi, habits as habitsApi, calendars as calendarsApi } from '$lib/api';
+  import { Frequency, CalendarMode } from '@cadence/shared';
+  import type { Calendar } from '@cadence/shared';
   import GoogleLogo from '$lib/components/auth/GoogleLogo.svelte';
   import CalendarIcon from 'lucide-svelte/icons/calendar';
   import Check from 'lucide-svelte/icons/check';
@@ -13,30 +14,94 @@
   import ChevronRight from 'lucide-svelte/icons/chevron-right';
   import ArrowRight from 'lucide-svelte/icons/arrow-right';
   import Lock from 'lucide-svelte/icons/lock';
+  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import Dumbbell from 'lucide-svelte/icons/dumbbell';
   import BookOpen from 'lucide-svelte/icons/book-open';
   import Brain from 'lucide-svelte/icons/brain';
   import ClipboardList from 'lucide-svelte/icons/clipboard-list';
   import Languages from 'lucide-svelte/icons/languages';
 
-  const TOTAL_STEPS = 5;
+  const TOTAL_STEPS = 6;
 
-  // Resume at step 2 if returning from Google OAuth
+  // Resume at a specific step (e.g. ?step=2 after Google OAuth callback)
+  // Clamped to valid range; actual auth is verified in onMount via getGoogleStatus()
   const resumeStep = page.url.searchParams.get('step');
-  let currentStep = $state(resumeStep ? parseInt(resumeStep, 10) : 0);
+  const parsedStep = resumeStep ? Math.max(0, Math.min(parseInt(resumeStep, 10) || 0, TOTAL_STEPS - 1)) : 0;
+  let currentStep = $state(parsedStep);
   let stepKey = $state(0);
+  let stepDirection = $state<'forward' | 'back'>('forward');
 
-  // Step 2: Calendar
+  // Step 1: Calendar connection
   let calendarConnected = $state(false);
 
+  // Step 2: Calendar selection
+  let calendarList = $state<Calendar[]>([]);
+  let discoveringCalendars = $state(false);
+  let calendarsLoaded = $state(false);
+
+  async function discoverCalendars() {
+    discoveringCalendars = true;
+    try {
+      calendarList = await calendarsApi.discover();
+      calendarsLoaded = true;
+    } catch {
+      // ignore
+    } finally {
+      discoveringCalendars = false;
+    }
+  }
+
+  async function loadCalendars() {
+    try {
+      calendarList = await calendarsApi.list();
+      calendarsLoaded = calendarList.length > 0;
+      if (!calendarsLoaded) {
+        await discoverCalendars();
+      }
+    } catch {
+      await discoverCalendars();
+    }
+  }
+
+  async function toggleCalendar(cal: Calendar) {
+    try {
+      const updated = await calendarsApi.update(cal.id, { enabled: !cal.enabled });
+      calendarList = calendarList.map((c: Calendar) => c.id === cal.id ? updated : c);
+    } catch { /* ignore */ }
+  }
+
+  async function setCalendarMode(cal: Calendar, mode: CalendarMode) {
+    try {
+      const updated = await calendarsApi.update(cal.id, { mode });
+      calendarList = calendarList.map((c: Calendar) => c.id === cal.id ? updated : c);
+    } catch { /* ignore */ }
+  }
+
   onMount(async () => {
+    // Auth guard: redirect to login if not authenticated
+    const auth = getAuthState();
+    if (!auth.isAuthenticated && !auth.isLoading) {
+      goto('/login');
+      return;
+    }
+    if (auth.isLoading) {
+      const { checkAuth } = await import('$lib/auth.svelte');
+      const user = await checkAuth();
+      if (!user) {
+        goto('/login');
+        return;
+      }
+    }
+
     try {
       const status = await settingsApi.getGoogleStatus();
       calendarConnected = status.connected;
-      // Skip welcome + calendar steps if already connected via Google sign-in
+      // Skip welcome + connect steps if already connected via Google sign-in
       if (calendarConnected && currentStep < 2) {
         currentStep = 2;
         stepKey += 1;
+        // Pre-load calendars for the calendar selection step
+        loadCalendars();
       }
     } catch {
       // ignore
@@ -94,8 +159,9 @@
   let canProceed = $derived(
     currentStep === 0 ? true :
     currentStep === 1 ? true : // calendar is optional
-    currentStep === 2 ? workStart < workEnd :
-    currentStep === 3 ? habitName.trim().length > 0 :
+    currentStep === 2 ? true : // calendar selection is optional
+    currentStep === 3 ? workStart < workEnd :
+    currentStep === 4 ? habitName.trim().length > 0 :
     true
   );
 
@@ -103,7 +169,8 @@
     currentStep === 0 ? "Let's go" :
     currentStep === 1 ? (calendarConnected ? 'Continue' : 'Skip for now') :
     currentStep === 2 ? 'Continue' :
-    currentStep === 3 ? 'Create habit' :
+    currentStep === 3 ? 'Continue' :
+    currentStep === 4 ? 'Create habit' :
     'Continue'
   );
 
@@ -115,8 +182,13 @@
   }
 
   async function nextStep() {
+    // Load calendars when entering the calendar selection step
+    if (currentStep === 1 && calendarConnected && !calendarsLoaded) {
+      loadCalendars();
+    }
+
     // Save data on specific steps
-    if (currentStep === 2) {
+    if (currentStep === 3) {
       try {
         await settingsApi.update({
           workingHours: { start: workStart, end: workEnd },
@@ -127,7 +199,7 @@
       }
     }
 
-    if (currentStep === 3 && habitName.trim()) {
+    if (currentStep === 4 && habitName.trim()) {
       try {
         const freqMap: Record<string, Frequency> = {
           daily: Frequency.Daily,
@@ -150,6 +222,7 @@
     }
 
     if (currentStep < TOTAL_STEPS - 1) {
+      stepDirection = 'forward';
       currentStep += 1;
       stepKey += 1;
     }
@@ -158,6 +231,7 @@
   function prevStep() {
     const minStep = calendarConnected ? 2 : 0;
     if (currentStep > minStep) {
+      stepDirection = 'back';
       currentStep -= 1;
       stepKey += 1;
     }
@@ -214,7 +288,7 @@
 
   <div class="wizard-body">
     {#key stepKey}
-      <div class="wizard-step">
+      <div class="wizard-step" class:wizard-step--back={stepDirection === 'back'}>
         {#if currentStep === 0}
           <!-- Step 1: Welcome -->
           <div class="wizard-welcome">
@@ -253,7 +327,71 @@
           </div>
 
         {:else if currentStep === 2}
-          <!-- Step 3: Working Hours -->
+          <!-- Step 3: Choose Calendars -->
+          <div class="wizard-calendars">
+            <h2>Choose your calendars</h2>
+            <p>Select which calendars Cadence can see and schedule on.</p>
+
+            {#if !calendarConnected}
+              <p class="text-hint">Connect Google Calendar first to manage your calendars.</p>
+            {:else if discoveringCalendars}
+              <div class="wizard-calendars-loading">
+                <RefreshCw size={18} class="spinning" />
+                <span>Discovering your calendars...</span>
+              </div>
+            {:else if calendarList.length === 0}
+              <p class="text-hint">No calendars found.</p>
+              <button class="wizard-btn-refresh" onclick={discoverCalendars} type="button">
+                <RefreshCw size={14} />
+                Discover calendars
+              </button>
+            {:else}
+              <div class="wizard-cal-table">
+                {#each calendarList as cal, i}
+                  <div class="cal-row" class:cal-row--bordered={i > 0}>
+                    <div class="cal-info">
+                      <span class="cal-dot" style:background={cal.color ?? 'var(--color-accent)'}></span>
+                      <span class="cal-name">{cal.name}</span>
+                    </div>
+                    <div class="cal-actions">
+                      {#if cal.enabled && cal.googleCalendarId !== 'primary'}
+                        <select
+                          value={cal.mode}
+                          onchange={(e) => setCalendarMode(cal, e.currentTarget.value as CalendarMode)}
+                          aria-label={`Mode for ${cal.name}`}
+                          class="cal-mode-select"
+                        >
+                          <option value="writable">Writable</option>
+                          <option value="locked">Locked</option>
+                        </select>
+                      {/if}
+                      {#if cal.googleCalendarId !== 'primary'}
+                        <button
+                          onclick={() => toggleCalendar(cal)}
+                          role="switch"
+                          aria-checked={cal.enabled}
+                          aria-label="Toggle {cal.name}"
+                          class="toggle-switch"
+                          class:toggle-switch--on={cal.enabled}
+                        >
+                          <span
+                            class="toggle-switch-knob"
+                            class:toggle-switch-knob--on={cal.enabled}
+                          ></span>
+                        </button>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+              <p class="wizard-cal-hint">
+                <strong>Writable</strong> = Cadence can create events. <strong>Locked</strong> = read-only, used to avoid conflicts.
+              </p>
+            {/if}
+          </div>
+
+        {:else if currentStep === 3}
+          <!-- Step 4: Working Hours -->
           <div class="wizard-hours">
             <h2>Set your working hours</h2>
             <p>Tell us when you're available so we schedule around your real life.</p>
@@ -283,8 +421,8 @@
             </div>
           </div>
 
-        {:else if currentStep === 3}
-          <!-- Step 4: First Habit -->
+        {:else if currentStep === 4}
+          <!-- Step 5: First Habit -->
           <div class="wizard-habit">
             <h2>Create your first habit</h2>
             <p>Pick something you want to do regularly. Cadence will find time for it.</p>
@@ -339,7 +477,7 @@
           </div>
 
         {:else}
-          <!-- Step 5: All Set -->
+          <!-- Step 6: All Set -->
           <div class="wizard-complete">
             <div class="wizard-complete-icon">
               <Check size={32} />
@@ -356,7 +494,7 @@
   </div>
 
   <div class="wizard-footer">
-    {#if currentStep > 0 && currentStep < TOTAL_STEPS - 1}
+    {#if currentStep > (calendarConnected ? 2 : 0) && currentStep < TOTAL_STEPS - 1}
       <button class="wizard-btn-back" onclick={prevStep} type="button">
         <ChevronLeft size={16} />
         Back

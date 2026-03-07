@@ -80,6 +80,7 @@
 
   // Danger zone inline confirmation (#13)
   let confirmingDanger = $state(false);
+  let dangerConfirmText = $state('');
   let nuking = $state(false);
 
   // Account info
@@ -240,11 +241,13 @@
       confirmingDanger = true;
       return;
     }
+    if (dangerConfirmText !== 'DELETE') return;
     nukeAllManagedEvents();
   }
 
   function cancelDanger() {
     confirmingDanger = false;
+    dangerConfirmText = '';
   }
 
   async function nukeAllManagedEvents() {
@@ -258,6 +261,7 @@
     } finally {
       nuking = false;
       confirmingDanger = false;
+      dangerConfirmText = '';
     }
   }
 
@@ -546,8 +550,8 @@
                         class:toggle-switch--on={cal.enabled}
                       >
                         <span
-                          class="toggle-knob"
-                          style:left={cal.enabled ? '18px' : '2px'}
+                          class="toggle-switch-knob"
+                          class:toggle-switch-knob--on={cal.enabled}
                         ></span>
                       </button>
                     {/if}
@@ -963,14 +967,24 @@
           </p>
           {#if confirmingDanger}
             <div class="danger-confirm">
-              <p class="danger-confirm-text">Are you sure? This will delete all managed events. This cannot be undone.</p>
+              <p class="danger-confirm-text">This will permanently delete all Cadence-managed events from your Google Calendar. This cannot be undone.</p>
+              <div class="form-field">
+                <label for="danger-confirm-input">Type <strong>DELETE</strong> to confirm</label>
+                <input
+                  id="danger-confirm-input"
+                  type="text"
+                  placeholder="DELETE"
+                  bind:value={dangerConfirmText}
+                  autocomplete="off"
+                />
+              </div>
               <div class="danger-confirm-actions">
                 <button
                   class="btn-danger btn-danger--filled"
                   onclick={handleDangerClick}
-                  disabled={nuking}
+                  disabled={nuking || dangerConfirmText !== 'DELETE'}
                 >
-                  {nuking ? 'Deleting...' : 'Confirm Delete'}
+                  {nuking ? 'Deleting...' : 'Permanently delete all events'}
                 </button>
                 <button class="btn-cancel" onclick={cancelDanger} disabled={nuking}>
                   Cancel
@@ -1142,86 +1156,6 @@
     margin: var(--space-2) 0 0 0;
   }
 
-  /* Calendar table */
-  .cal-table {
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-  }
-
-  .cal-row {
-    @include flex-between;
-    padding: var(--space-2) var(--space-3);
-
-    &--bordered {
-      border-top: 1px solid var(--color-border);
-    }
-  }
-
-  .cal-info {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    min-width: 0;
-    flex: 1;
-  }
-
-  .cal-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: var(--radius-full);
-    flex-shrink: 0;
-  }
-
-  .cal-name {
-    font-size: 0.8125rem;
-    color: var(--color-text);
-    @include text-truncate;
-  }
-
-  .cal-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    flex-shrink: 0;
-  }
-
-  .cal-mode-select {
-    font-size: 0.75rem;
-    padding: var(--space-1) var(--space-2);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-  }
-
-  /* Toggle switch */
-  .toggle-switch {
-    position: relative;
-    width: 36px;
-    height: 20px;
-    border-radius: var(--radius-full);
-    border: none;
-    background: var(--color-border-strong);
-    cursor: pointer;
-    transition: background var(--transition-fast);
-
-    &--on {
-      background: var(--color-accent);
-    }
-  }
-
-  .toggle-knob {
-    position: absolute;
-    top: 2px;
-    width: 16px;
-    height: 16px;
-    border-radius: var(--radius-full);
-    background: white;
-    transition: left var(--transition-fast);
-  }
-
   /* Default calendars */
   .default-cals {
     margin-top: var(--space-5);
@@ -1352,11 +1286,6 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-  }
-
-  /* Spinning icon animation (uses global @keyframes spin from _components.scss) */
-  :global(.spinning) {
-    animation: spin 1s linear infinite;
   }
 
   /* Focus styles (global within this component) */

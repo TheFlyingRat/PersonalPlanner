@@ -2,6 +2,7 @@
   import { pageTitle } from '$lib/brand';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
+  import { onDestroy } from 'svelte';
   import { resetPassword } from '$lib/auth.svelte';
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
   import Lock from 'lucide-svelte/icons/lock';
@@ -16,6 +17,11 @@
   let submitting = $state(false);
   let formError = $state('');
   let success = $state(false);
+  let redirectTimer: ReturnType<typeof setTimeout> | undefined;
+
+  onDestroy(() => {
+    if (redirectTimer) clearTimeout(redirectTimer);
+  });
 
   function getPasswordStrength(pw: string): 'weak' | 'fair' | 'strong' {
     let score = 0;
@@ -56,7 +62,7 @@
     try {
       await resetPassword(token, password);
       success = true;
-      setTimeout(() => goto('/login'), 2000);
+      redirectTimer = setTimeout(() => goto('/login'), 2000);
     } catch (err) {
       formError = err instanceof Error ? err.message : 'Password reset failed. Please try again.';
     } finally {
@@ -120,6 +126,7 @@
               class:strong={strength === 'strong'}
             />
           </div>
+          <span class="sr-only" aria-live="polite">Password strength: {strength}</span>
         {/if}
       </div>
 

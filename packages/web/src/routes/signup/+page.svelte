@@ -163,6 +163,7 @@
             class:strong={strength === 'strong'}
           />
         </div>
+        <span class="sr-only" aria-live="polite">Password strength: {strength}</span>
       {/if}
     </div>
 

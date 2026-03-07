@@ -463,6 +463,7 @@
               style="background: {c};"
               onclick={() => { formColor = c; }}
               aria-label="Select color {colorNames[c] ?? c}"
+              aria-pressed={formColor === c}
             ></button>
           {/each}
           <button
@@ -471,6 +472,7 @@
             class:color-swatch--active={!formColor}
             onclick={() => { formColor = ''; }}
             aria-label="No color"
+            aria-pressed={!formColor}
           >&#x2715;</button>
         </div>
       </fieldset>

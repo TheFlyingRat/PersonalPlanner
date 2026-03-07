@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'http';
 import type { IncomingMessage } from 'http';
-import { verifyAccessToken } from './auth/jwt.js';
+import { verifyAccessToken, getAccessTokenCookieName } from './auth/jwt.js';
 import { schedulerRegistry } from './scheduler-registry.js';
 
 let wss: WebSocketServer | null = null;
@@ -11,10 +11,11 @@ const userChannels = new Map<string, Set<WebSocket>>();
 
 function parseAccessTokenFromCookies(cookieHeader: string | undefined): string | null {
   if (!cookieHeader) return null;
+  const cookieName = getAccessTokenCookieName();
   const cookies = cookieHeader.split(';').map(c => c.trim());
   for (const cookie of cookies) {
     const [name, ...rest] = cookie.split('=');
-    if (name === 'access_token') {
+    if (name === cookieName) {
       return rest.join('=');
     }
   }
@@ -22,18 +23,12 @@ function parseAccessTokenFromCookies(cookieHeader: string | undefined): string |
 }
 
 function authenticateWs(req: IncomingMessage): string | null {
-  // Try cookie first (same-origin, httpOnly cookies are sent automatically)
+  // Only use httpOnly cookies for auth (same-origin SvelteKit always sends them)
   const token = parseAccessTokenFromCookies(req.headers.cookie);
-
-  // Fallback: query parameter
-  const url = new URL(req.url || '', `http://${req.headers.host}`);
-  const queryToken = url.searchParams.get('token');
-
-  const provided = token || queryToken;
-  if (!provided) return null;
+  if (!token) return null;
 
   try {
-    const payload = verifyAccessToken(provided);
+    const payload = verifyAccessToken(token);
     return payload.userId;
   } catch {
     return null;
@@ -131,6 +126,12 @@ export function hasActiveConnections(userId: string): boolean {
   return !!channels && channels.size > 0;
 }
 
-export function closeWebSocket(): void {
-  if (wss) wss.close();
+export function closeWebSocket(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!wss) {
+      resolve();
+      return;
+    }
+    wss.close(() => resolve());
+  });
 }

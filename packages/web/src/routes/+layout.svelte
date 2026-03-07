@@ -279,7 +279,7 @@
   </div>
 {/if}
 
-{#if navigating}
+{#if navigating.to}
   <div class="nav-progress" aria-hidden="true"></div>
 {/if}
 
@@ -313,7 +313,7 @@
       <kbd class="search-kbd">Esc</kbd>
     </div>
 
-    <div class="search-results" id="search-listbox" role="listbox" aria-label="Search results">
+    <div class="search-results" id="search-listbox" role="menu" aria-label="Search results">
       {#if searchLoading}
         <div class="search-empty">
           <Loader size={18} strokeWidth={1.5} class="spin" />
@@ -330,8 +330,7 @@
             class="search-result"
             class:selected={i === selectedIndex}
             id="search-option-{i}"
-            role="option"
-            aria-selected={i === selectedIndex}
+            role="menuitem"
             onclick={() => selectResult(result)}
           >
             <Icon size={16} strokeWidth={1.5} />
@@ -878,7 +877,4 @@
     animation: spin 1s linear infinite;
   }
 
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
 </style>

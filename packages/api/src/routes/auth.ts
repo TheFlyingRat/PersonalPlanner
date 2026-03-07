@@ -1,8 +1,8 @@
 import { Router } from 'express';
-import { eq, and, gt } from 'drizzle-orm';
+import { eq, and, gt, sql } from 'drizzle-orm';
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import rateLimit from 'express-rate-limit';
-import { db } from '../db/pg-index.js';
+import { db, pool as getPool } from '../db/pg-index.js';
 import {
   users, sessions, emailVerifications, passwordResets,
   habits, tasks, smartMeetings, focusTimeRules, bufferConfig,
@@ -62,6 +62,30 @@ const forgotPasswordLimiter = rateLimit({
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many password reset requests, please try again later.' },
+});
+
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many reset attempts, please try again later.' },
+});
+
+const verifyEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many verification attempts, please try again later.' },
+});
+
+const changePasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many password change attempts, please try again later.' },
 });
 
 // ============================================================
@@ -193,6 +217,8 @@ router.post('/login', loginLimiter, async (req, res) => {
 
   const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
   if (!user || !user.passwordHash) {
+    // Run bcrypt against a dummy hash to equalize response timing (prevent timing oracle)
+    await verifyPassword(password, '$2b$12$000000000000000000000uGbOQPJ9K7.1JCJfUnpDBqkEGfjXbkm');
     sendError(res, 401, 'Invalid email or password');
     return;
   }
@@ -225,32 +251,49 @@ router.post('/refresh', async (req, res) => {
   }
 
   const oldHash = hashToken(oldRefreshToken);
+  const pool = getPool();
+  const client = await pool.connect();
 
-  // Find the session with this refresh token
-  const [session] = await db.select().from(sessions).where(
-    and(
-      eq(sessions.refreshTokenHash, oldHash),
-      gt(sessions.expiresAt, new Date().toISOString()),
-    ),
-  );
+  try {
+    await client.query('BEGIN');
 
-  if (!session) {
-    clearAuthCookies(res);
-    sendError(res, 401, 'Invalid or expired refresh token');
-    return;
+    // Find and lock the session row atomically
+    const { rows: sessionRows } = await client.query(
+      `SELECT id, "userId" FROM sessions
+       WHERE "refreshTokenHash" = $1 AND "expiresAt" > NOW()
+       FOR UPDATE`,
+      [oldHash],
+    );
+
+    if (sessionRows.length === 0) {
+      await client.query('ROLLBACK');
+      clearAuthCookies(res);
+      sendError(res, 401, 'Invalid or expired refresh token');
+      return;
+    }
+
+    const session = sessionRows[0];
+
+    // Delete old session
+    await client.query('DELETE FROM sessions WHERE id = $1', [session.id]);
+
+    await client.query('COMMIT');
+
+    // Create new session (outside transaction — uses Drizzle)
+    const { accessToken, refreshToken } = await createSession(
+      session.userId,
+      req.headers['user-agent'],
+      getClientIp(req),
+    );
+    setAuthCookies(res, accessToken, refreshToken);
+
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
-
-  // Rotate: delete old session, create new one
-  await db.delete(sessions).where(eq(sessions.id, session.id));
-
-  const { accessToken, refreshToken } = await createSession(
-    session.userId,
-    req.headers['user-agent'],
-    getClientIp(req),
-  );
-  setAuthCookies(res, accessToken, refreshToken);
-
-  res.json({ success: true });
 });
 
 // ============================================================
@@ -272,7 +315,7 @@ router.post('/logout', async (req, res) => {
 // GET /api/auth/verify-email?token=
 // ============================================================
 
-router.get('/verify-email', async (req, res) => {
+router.get('/verify-email', verifyEmailLimiter, async (req, res) => {
   const token = req.query.token as string;
   if (!token) {
     sendError(res, 400, 'Missing verification token');
@@ -342,7 +385,7 @@ router.post('/forgot-password', forgotPasswordLimiter, async (req, res) => {
 // POST /api/auth/reset-password
 // ============================================================
 
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', resetPasswordLimiter, async (req, res) => {
   const parsed = resetPasswordSchema.safeParse(req.body);
   if (!parsed.success) {
     sendValidationError(res, parsed.error);
@@ -351,29 +394,32 @@ router.post('/reset-password', async (req, res) => {
 
   const { token, password } = parsed.data;
   const tokenHash = hashToken(token);
+  const now = new Date().toISOString();
 
-  const [reset] = await db.select().from(passwordResets).where(
-    and(
-      eq(passwordResets.tokenHash, tokenHash),
-      gt(passwordResets.expiresAt, new Date().toISOString()),
-    ),
-  );
+  // Atomic: mark token as used only if it hasn't been used yet (prevents TOCTOU)
+  const updated = await db.update(passwordResets)
+    .set({ usedAt: now })
+    .where(
+      and(
+        eq(passwordResets.tokenHash, tokenHash),
+        gt(passwordResets.expiresAt, now),
+        sql`${passwordResets.usedAt} IS NULL`,
+      ),
+    )
+    .returning();
 
-  if (!reset || reset.usedAt) {
+  if (updated.length === 0) {
     sendError(res, 400, 'Invalid or expired reset token');
     return;
   }
 
+  const reset = updated[0];
   const passwordHash = await hashPassword(password);
 
-  // Update password and mark token as used
+  // Update password
   await db.update(users)
-    .set({ passwordHash, updatedAt: new Date().toISOString() })
+    .set({ passwordHash, updatedAt: now })
     .where(eq(users.id, reset.userId));
-
-  await db.update(passwordResets)
-    .set({ usedAt: new Date().toISOString() })
-    .where(eq(passwordResets.id, reset.id));
 
   // Revoke all existing sessions for this user (force re-login)
   await db.delete(sessions).where(eq(sessions.userId, reset.userId));
@@ -385,23 +431,46 @@ router.post('/reset-password', async (req, res) => {
 // Google OAuth — unified sign-in + calendar scoping
 // ============================================================
 
-// Module-level OAuth state store (per-request, short-lived)
-const pendingOAuthStates = new Map<string, { expiresAt: number }>();
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-// Cleanup expired states periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [state, { expiresAt }] of pendingOAuthStates) {
-    if (now > expiresAt) pendingOAuthStates.delete(state);
+// Initialize OAuth states table (lazy — deferred until first use so dotenv has loaded)
+let oauthStatesTableReady: Promise<void> | null = null;
+function ensureOAuthStatesTable(): Promise<void> {
+  if (!oauthStatesTableReady) {
+    oauthStatesTableReady = (async () => {
+      const pool = getPool();
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS oauth_states (
+          state_hash TEXT PRIMARY KEY,
+          expires_at TIMESTAMPTZ NOT NULL
+        )
+      `);
+    })();
   }
+  return oauthStatesTableReady;
+}
+
+// Cleanup expired OAuth states periodically
+setInterval(async () => {
+  try {
+    const pool = getPool();
+    await pool.query('DELETE FROM oauth_states WHERE expires_at < NOW()');
+  } catch { /* ignore cleanup errors */ }
 }, 60_000);
 
 // GET /api/auth/google — initiate unified OAuth
-router.get('/google', (_req, res) => {
+router.get('/google', async (_req, res) => {
+  await ensureOAuthStatesTable();
   const oauth2Client = createOAuth2Client();
   const state = randomBytes(16).toString('hex');
-  pendingOAuthStates.set(state, { expiresAt: Date.now() + OAUTH_STATE_TTL_MS });
+  const stateHash = createHash('sha256').update(state).digest('hex');
+  const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS).toISOString();
+
+  const pool = getPool();
+  await pool.query(
+    'INSERT INTO oauth_states (state_hash, expires_at) VALUES ($1, $2)',
+    [stateHash, expiresAt],
+  );
 
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -426,21 +495,29 @@ router.get('/google/callback', async (req, res) => {
   const frontendOrigin = process.env.FRONTEND_URL || process.env.CORS_ORIGIN?.split(',')[0] || 'http://localhost:5173';
 
   if (!code) {
-    res.redirect(`${frontendOrigin}/login?error=missing_code`);
+    console.warn('[auth] OAuth callback missing code parameter');
+    res.redirect(`${frontendOrigin}/login?error=auth_failed`);
     return;
   }
 
-  // Verify state
-  if (!state || !pendingOAuthStates.has(state)) {
-    res.redirect(`${frontendOrigin}/login?error=invalid_state`);
+  // Verify state from database
+  if (!state) {
+    console.warn('[auth] OAuth callback missing state parameter');
+    res.redirect(`${frontendOrigin}/login?error=auth_failed`);
     return;
   }
 
-  const stateEntry = pendingOAuthStates.get(state)!;
-  pendingOAuthStates.delete(state);
+  await ensureOAuthStatesTable();
+  const pool = getPool();
+  const stateHash = createHash('sha256').update(state).digest('hex');
+  const { rows: stateRows } = await pool.query(
+    'DELETE FROM oauth_states WHERE state_hash = $1 AND expires_at > NOW() RETURNING state_hash',
+    [stateHash],
+  );
 
-  if (Date.now() > stateEntry.expiresAt) {
-    res.redirect(`${frontendOrigin}/login?error=state_expired`);
+  if (stateRows.length === 0) {
+    console.warn('[auth] OAuth callback: invalid or expired state');
+    res.redirect(`${frontendOrigin}/login?error=auth_failed`);
     return;
   }
 
@@ -455,7 +532,8 @@ router.get('/google/callback', async (req, res) => {
     const { data: profile } = await oauth2.userinfo.get();
 
     if (!profile.email) {
-      res.redirect(`${frontendOrigin}/login?error=no_email`);
+      console.warn('[auth] OAuth: Google profile has no email');
+      res.redirect(`${frontendOrigin}/login?error=auth_failed`);
       return;
     }
 
@@ -484,7 +562,7 @@ router.get('/google/callback', async (req, res) => {
         // Re-fetch updated user
         [user] = await db.select().from(users).where(eq(users.id, user.id));
       } else {
-        // Create new user via Google
+        // Create new user via Google (GDPR consent deferred to onboarding)
         [user] = await db.insert(users).values({
           email,
           emailVerified: true,
@@ -492,8 +570,8 @@ router.get('/google/callback', async (req, res) => {
           avatarUrl,
           googleId,
           googleRefreshToken: tokens.refresh_token ? encrypt(tokens.refresh_token) : null,
-          gdprConsentAt: new Date().toISOString(),
-          consentVersion: '1.0',
+          gdprConsentAt: null,
+          consentVersion: null,
         }).returning();
       }
     } else {
@@ -719,14 +797,26 @@ router.get('/sessions', requireAuth, async (req, res) => {
     ),
   );
 
-  const result = userSessions.map(s => ({
-    id: s.id,
-    userAgent: s.userAgent,
-    ipAddress: s.ipAddress,
-    createdAt: s.createdAt,
-    expiresAt: s.expiresAt,
-    current: currentHash ? s.refreshTokenHash === currentHash : false,
-  }));
+  const result = userSessions.map(s => {
+    let isCurrent = false;
+    if (currentHash) {
+      try {
+        const a = Buffer.from(s.refreshTokenHash, 'hex');
+        const b = Buffer.from(currentHash, 'hex');
+        isCurrent = a.length === b.length && timingSafeEqual(a, b);
+      } catch {
+        isCurrent = false;
+      }
+    }
+    return {
+      id: s.id,
+      userAgent: s.userAgent,
+      ipAddress: s.ipAddress,
+      createdAt: s.createdAt,
+      expiresAt: s.expiresAt,
+      current: isCurrent,
+    };
+  });
 
   res.json({ sessions: result });
 });
@@ -788,7 +878,7 @@ router.delete('/sessions', requireAuth, async (req, res) => {
 // Change Password — POST /api/auth/change-password
 // ============================================================
 
-router.post('/change-password', requireAuth, async (req, res) => {
+router.post('/change-password', requireAuth, changePasswordLimiter, async (req, res) => {
   const parsed = changePasswordSchema.safeParse(req.body);
   if (!parsed.success) {
     sendValidationError(res, parsed.error);

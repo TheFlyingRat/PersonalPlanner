@@ -1,6 +1,6 @@
 // API Client - Typed fetch wrapper for all endpoints
 
-import { PUBLIC_API_URL } from '$env/static/public';
+const PUBLIC_API_URL = import.meta.env.PUBLIC_API_URL ?? '';
 import type {
   Habit,
   CreateHabitRequest,
@@ -349,6 +349,9 @@ export const auth = {
     request<{ user: { id: string; name: string; email: string; avatarUrl: string | null; emailVerified: boolean; hasPassword: boolean; plan: string; onboardingCompleted: boolean } }>('/auth/me'),
   google: async () => {
     const res = await fetch(`${API_BASE}/auth/google`, { credentials: 'include' });
+    if (!res.ok) {
+      throw new ApiError('Failed to start Google auth', res.status);
+    }
     const { redirectUrl } = await res.json();
     window.location.href = redirectUrl;
   },

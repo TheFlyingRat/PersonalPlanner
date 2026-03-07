@@ -7,7 +7,9 @@
   "display": "standalone",
   "orientation": "portrait",
   "theme_color": "#6366F1",
-  "background_color": "#FAFAFA",
+  "background_color": "#111111",
+  "categories": ["productivity", "utilities"],
+  "screenshots": [],
   "icons": [
     {
       "src": "/icons/icon-192.svg",

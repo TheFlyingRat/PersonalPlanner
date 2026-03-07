@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken } from '../auth/jwt.js';
+import { verifyAccessToken, getAccessTokenCookieName } from '../auth/jwt.js';
 
 declare global {
   namespace Express {
@@ -17,7 +17,7 @@ declare global {
  * and attaches userId, userEmail, userPlan to the request.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const token = req.cookies?.access_token;
+  const token = req.cookies?.[getAccessTokenCookieName()];
 
   if (!token) {
     res.status(401).json({ error: 'Authentication required' });

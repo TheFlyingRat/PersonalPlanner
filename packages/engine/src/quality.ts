@@ -9,6 +9,7 @@ import {
   QualityComponent,
   TimeSlot,
 } from '@cadence/shared';
+import { getFormatter } from './utils.js';
 
 /**
  * Parse "HH:MM" into minutes since midnight.
@@ -23,9 +24,7 @@ function parseTimeToMinutes(hhmm: string): number {
  * Get minutes-since-midnight from a Date in a specific timezone.
  */
 function dateToMinutesSinceMidnight(d: Date, tz: string): number {
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: tz, hour: 'numeric', minute: 'numeric', hour12: false,
-  });
+  const fmt = getFormatter(tz, { hour: 'numeric', minute: 'numeric', hour12: false });
   const parts = fmt.formatToParts(d);
   const h = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0');
   const m = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0');
@@ -196,14 +195,13 @@ function scoreBuffers(
   }
 
   const requiredBufferMs = bufferConfig.breakBetweenItemsMinutes * 60 * 1000;
-  const allPlacedSlots = [...placements.values()];
   let compliant = 0;
 
   for (const meeting of meetingItems) {
     const slot = placements.get(meeting.id)!;
     let hasAdequateBuffer = true;
 
-    for (const other of allPlacedSlots) {
+    for (const other of placements.values()) {
       if (other.start.getTime() === slot.start.getTime() && other.end.getTime() === slot.end.getTime()) {
         continue; // same slot
       }
@@ -241,6 +239,61 @@ function scoreBuffers(
   return { score, weight: 0.15, label: 'Buffer Compliance' };
 }
 
+/**
+ * Count inversions and total differing-priority pairs using a modified merge sort.
+ * O(n log n) instead of O(n²). An inversion is when a lower-priority item
+ * (higher number) appears before a higher-priority item (lower number).
+ */
+function countInversions(arr: number[]): { inversions: number; totalPairs: number } {
+  // Count total differing-priority pairs (this is always n*(n-1)/2 minus same-priority pairs)
+  const freqMap = new Map<number, number>();
+  for (const v of arr) {
+    freqMap.set(v, (freqMap.get(v) ?? 0) + 1);
+  }
+  const n = arr.length;
+  const totalAllPairs = (n * (n - 1)) / 2;
+  let samePriorityPairs = 0;
+  for (const count of freqMap.values()) {
+    samePriorityPairs += (count * (count - 1)) / 2;
+  }
+  const totalPairs = totalAllPairs - samePriorityPairs;
+
+  // Merge sort to count inversions (where left[i] > right[j])
+  function mergeSortCount(a: number[]): { sorted: number[]; inv: number } {
+    if (a.length <= 1) return { sorted: a, inv: 0 };
+    const mid = Math.floor(a.length / 2);
+    const left = mergeSortCount(a.slice(0, mid));
+    const right = mergeSortCount(a.slice(mid));
+    let inv = left.inv + right.inv;
+    const sorted: number[] = [];
+    let i = 0, j = 0;
+    while (i < left.sorted.length && j < right.sorted.length) {
+      if (left.sorted[i] <= right.sorted[j]) {
+        sorted.push(left.sorted[i++]);
+      } else {
+        // left.sorted[i] > right.sorted[j]: all remaining left elements are inversions
+        // But we only count pairs where priorities differ
+        // Since we want inversions where left > right (higher number = lower priority before higher priority),
+        // count how many left elements are strictly greater than right[j]
+        inv += left.sorted.length - i;
+        sorted.push(right.sorted[j++]);
+      }
+    }
+    while (i < left.sorted.length) sorted.push(left.sorted[i++]);
+    while (j < right.sorted.length) sorted.push(right.sorted[j++]);
+    return { sorted, inv };
+  }
+
+  // The merge sort counts all pairs where left > right (including same-priority).
+  // We need to subtract same-priority "inversions" which aren't real inversions.
+  // However, same-priority elements with left > right doesn't happen since they're equal.
+  // Merge sort counts left[i] > right[j], and equal elements go left-first (<=),
+  // so same-priority pairs are never counted. This is correct as-is.
+  const { inv: inversions } = mergeSortCount(arr);
+
+  return { inversions, totalPairs };
+}
+
 function scorePriorities(
   items: ScheduleItem[],
   placements: Map<string, TimeSlot>,
@@ -258,22 +311,9 @@ function scorePriorities(
     return { score: 100, weight: 0.1, label: 'Priority Respect' };
   }
 
-  // Count inversions: a P3 item placed earlier than a P1 item is an inversion
-  let inversions = 0;
-  let totalPairs = 0;
-
-  for (let i = 0; i < placedItems.length; i++) {
-    for (let j = i + 1; j < placedItems.length; j++) {
-      // Only count pairs where priority differs
-      if (placedItems[i].priority !== placedItems[j].priority) {
-        totalPairs++;
-        // Inversion: earlier slot has lower priority (higher number)
-        if (placedItems[i].priority > placedItems[j].priority) {
-          inversions++;
-        }
-      }
-    }
-  }
+  // Use O(n log n) merge sort inversion count (PERF-H3)
+  const priorities = placedItems.map(p => p.priority);
+  const { inversions, totalPairs } = countInversions(priorities);
 
   if (totalPairs === 0) {
     return { score: 100, weight: 0.1, label: 'Priority Respect' };

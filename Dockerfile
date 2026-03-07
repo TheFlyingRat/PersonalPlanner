@@ -26,24 +26,25 @@ RUN pnpm --filter @cadence/shared --filter @cadence/engine --filter @cadence/api
 # --- Production image ---
 FROM node:22-alpine
 
-RUN npm install -g pnpm@9.15.4 && \
-    addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Copy pnpm from builder instead of reinstalling
+COPY --from=builder /usr/local/lib/node_modules/pnpm /usr/local/lib/node_modules/pnpm
+RUN ln -s /usr/local/lib/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm
 
 WORKDIR /app
 
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
-COPY packages/shared/package.json packages/shared/
-COPY packages/engine/package.json packages/engine/
-COPY packages/api/package.json packages/api/
+COPY --chown=appuser:appgroup package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json ./
+COPY --chown=appuser:appgroup packages/shared/package.json packages/shared/
+COPY --chown=appuser:appgroup packages/engine/package.json packages/engine/
+COPY --chown=appuser:appgroup packages/api/package.json packages/api/
 
 RUN pnpm install --frozen-lockfile --prod
 
 # Copy built artifacts
-COPY --from=builder /app/packages/shared/dist packages/shared/dist
-COPY --from=builder /app/packages/engine/dist packages/engine/dist
-COPY --from=builder /app/packages/api/dist packages/api/dist
-
-RUN chown -R appuser:appgroup /app
+COPY --chown=appuser:appgroup --from=builder /app/packages/shared/dist packages/shared/dist
+COPY --chown=appuser:appgroup --from=builder /app/packages/engine/dist packages/engine/dist
+COPY --chown=appuser:appgroup --from=builder /app/packages/api/dist packages/api/dist
 
 EXPOSE 3000
 

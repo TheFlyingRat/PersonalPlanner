@@ -1,7 +1,7 @@
 // Client-side auth state management using Svelte 5 runes
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { PUBLIC_API_URL } from '$env/static/public';
+const PUBLIC_API_URL = import.meta.env.PUBLIC_API_URL ?? '';
 import { ApiError } from '$lib/api';
 
 export interface User {

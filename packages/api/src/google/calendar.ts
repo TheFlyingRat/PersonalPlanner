@@ -212,14 +212,18 @@ export class GoogleCalendarClient {
 
   /**
    * Apply an ordered list of CalendarOperations.
-   * Individual failures are logged but do not abort the batch.
    * For Create ops, the returned Google event ID is set on `op.googleEventId`.
+   * Returns an array of operations that failed due to rate limiting (429/503).
+   * Other failures are logged but do not abort the batch.
    */
   async applyOperations(
     calendarId: string = 'primary',
     operations: CalendarOperation[],
-  ): Promise<void> {
-    for (const op of operations) {
+  ): Promise<CalendarOperation[]> {
+    const failedOps: CalendarOperation[] = [];
+
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
       try {
         switch (op.type) {
           case CalendarOpType.Create: {
@@ -247,9 +251,17 @@ export class GoogleCalendarClient {
           }
         }
       } catch (err) {
+        // EDGE-H3: On 429/503, stop the batch and return remaining ops as failed
+        if (isGoogleApiError(err) && (err.code === 429 || err.code === 503)) {
+          console.warn(`[calendar] Rate limited (${err.code}) at op ${i}/${operations.length}, stopping batch`);
+          failedOps.push(...operations.slice(i));
+          break;
+        }
         console.error(`[calendar] Failed to apply ${op.type} for item ${op.itemId}:`, err);
       }
     }
+
+    return failedOps;
   }
 
   // ---------- Nuke (delete all managed events) -----------------------------

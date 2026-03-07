@@ -18,7 +18,8 @@ router.get('/', async (req, res) => {
     return;
   }
 
-  const pattern = `%${q.trim()}%`;
+  const escaped = q.trim().replace(/[%_\\]/g, (ch) => `\\${ch}`);
+  const pattern = `%${escaped}%`;
   const userId = req.userId;
 
   const [habitResults, taskResults, meetingResults, eventResults] = await Promise.all([

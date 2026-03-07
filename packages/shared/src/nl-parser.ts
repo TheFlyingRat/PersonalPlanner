@@ -31,7 +31,7 @@ export type ParsedItem = ParsedHabit | ParsedTask | ParsedMeeting;
 
 const DAY_ABBREVS: Record<string, DayOfWeek> = {
   m: 'mon', mo: 'mon', mon: 'mon', monday: 'mon',
-  t: 'tue', tu: 'tue', tue: 'tue', tuesday: 'tue',
+  tu: 'tue', tue: 'tue', tuesday: 'tue',
   w: 'wed', we: 'wed', wed: 'wed', wednesday: 'wed',
   th: 'thu', thu: 'thu', thursday: 'thu',
   f: 'fri', fr: 'fri', fri: 'fri', friday: 'fri',
@@ -229,6 +229,7 @@ function parseDateExpr(tokens: string[], startIdx: number, referenceDate?: Date)
 export function parseQuickAdd(input: string, referenceDate?: Date): ParsedItem | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
+  if (trimmed.length > 500) return null;
 
   const tokens = trimmed.split(/\s+/);
   if (tokens.length === 0) return null;

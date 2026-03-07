@@ -22,6 +22,7 @@ import type {
   FocusTimeRule,
   BufferConfig as BufferConfigType,
   CalendarEvent,
+  CalendarOperation,
   UserSettings,
 } from '@cadence/shared';
 import {
@@ -106,6 +107,7 @@ export class UserScheduler {
   private isRescheduling = false;
   private pendingReschedule: { reason: string } | null = null;
   private started = false;
+  private lastRescheduleAt = 0;
 
   constructor(userId: string, oauth2Client: OAuth2Client) {
     this.userId = userId;
@@ -131,6 +133,15 @@ export class UserScheduler {
         await this.handlePolledEvents(calendarId, polledEvents, manager);
       },
       this.userId,
+      // EDGE-H4: Handle Google token revocation during polling
+      async () => {
+        console.error(`[scheduler] User ${this.userId}: Google auth revoked, clearing token`);
+        await db.update(users)
+          .set({ googleRefreshToken: null })
+          .where(eq(users.id, this.userId));
+        await this.stop();
+        broadcastToUser(this.userId, 'google_auth_required', 'Google Calendar access has been revoked. Please reconnect.');
+      },
     );
 
     this.pollerManager = manager;
@@ -138,8 +149,13 @@ export class UserScheduler {
     await manager.startAll();
     console.log(`[scheduler] User ${this.userId}: polling started`);
 
-    // Periodic reschedule every 5 minutes
+    // Periodic reschedule every 5 minutes (debounced: skip if reschedule ran within last 2 min)
     this.periodicTimer = setInterval(async () => {
+      const DEBOUNCE_MS = 2 * 60 * 1000;
+      if (Date.now() - this.lastRescheduleAt < DEBOUNCE_MS) {
+        console.log(`[scheduler] User ${this.userId}: periodic check skipped (recent reschedule)`);
+        return;
+      }
       try {
         const ops = await this.triggerReschedule('Periodic optimization');
         if (ops === 0) {
@@ -180,7 +196,9 @@ export class UserScheduler {
 
     this.isRescheduling = true;
     try {
-      return await this.doRescheduleAndApply(reason);
+      const result = await this.doRescheduleAndApply(reason);
+      this.lastRescheduleAt = Date.now();
+      return result;
     } finally {
       this.isRescheduling = false;
       if (this.pendingReschedule) {
@@ -297,18 +315,15 @@ export class UserScheduler {
       });
     }
 
-    // Determine default calendars
+    // Determine default calendars (PERF-M5: lookup from already-fetched enabledCalsList)
     const defaultHabitCalId = (userSettings as any).defaultHabitCalendarId || null;
     const defaultTaskCalId = (userSettings as any).defaultTaskCalendarId || null;
 
-    const habitCal = defaultHabitCalId ? await db.select().from(calendars).where(eq(calendars.id, defaultHabitCalId)) : [];
-    const taskCal = defaultTaskCalId ? await db.select().from(calendars).where(eq(calendars.id, defaultTaskCalId)) : [];
-
-    const habitCalRow = habitCal[0];
+    const habitCalRow = defaultHabitCalId ? enabledCalsList.find(c => c.id === defaultHabitCalId) : undefined;
     const habitGoogleCalId = (habitCalRow?.enabled && habitCalRow?.mode === 'writable')
       ? habitCalRow.googleCalendarId
       : 'primary';
-    const taskCalRow = taskCal[0];
+    const taskCalRow = defaultTaskCalId ? enabledCalsList.find(c => c.id === defaultTaskCalId) : undefined;
     const taskGoogleCalId = (taskCalRow?.enabled && taskCalRow?.mode === 'writable')
       ? taskCalRow.googleCalendarId
       : 'primary';
@@ -368,54 +383,71 @@ export class UserScheduler {
       }
     }
 
+    // PERF-C1: Build calendarId→googleCalendarId map from already-fetched enabledCals
+    const calIdToGoogleCalId = new Map<string, string>();
+    for (const cal of enabledCals) {
+      calIdToGoogleCalId.set(cal.id, cal.googleCalendarId);
+    }
+
     // Group and apply operations by Google Calendar
     const opsByGoogleCal = new Map<string, typeof result.operations>();
     for (const op of result.operations) {
       const isUuid = op.calendarId && op.calendarId !== 'primary';
-      const cal = isUuid ? await db.select().from(calendars).where(eq(calendars.id, op.calendarId!)) : [];
-      const googleCalId = cal[0]?.googleCalendarId || 'primary';
+      const googleCalId = isUuid ? (calIdToGoogleCalId.get(op.calendarId!) || 'primary') : 'primary';
       const existingOps = opsByGoogleCal.get(googleCalId) || [];
       existingOps.push(op);
       opsByGoogleCal.set(googleCalId, existingOps);
     }
 
+    // EDGE-H3: applyOperations now returns failed ops on 429/503
+    const failedOps: CalendarOperation[] = [];
     for (const [googleCalId, ops] of opsByGoogleCal) {
-      await calClient.applyOperations(googleCalId, ops);
+      const failed = await calClient.applyOperations(googleCalId, ops);
+      failedOps.push(...failed);
     }
 
-    // Persist to DB
+    // Remove failed ops from result.operations so we don't persist them
+    if (failedOps.length > 0) {
+      const failedSet = new Set(failedOps);
+      result.operations = result.operations.filter(op => !failedSet.has(op));
+      if (result.operations.length === 0) return 0;
+    }
+
+    // EDGE-C2: Persist to DB in a single transaction
     const nowTs = new Date().toISOString();
-    for (const op of result.operations) {
-      if (op.type === CalendarOpType.Create) {
-        await db.insert(scheduledEvents).values({
-          userId,
-          itemType: op.itemType,
-          itemId: op.itemId,
-          title: op.title,
-          googleEventId: op.googleEventId || null,
-          calendarId: op.calendarId || 'primary',
-          start: op.start,
-          end: op.end,
-          status: op.status,
-          alternativeSlotsCount: null,
-          createdAt: nowTs,
-          updatedAt: nowTs,
-        });
-      } else if (op.type === CalendarOpType.Update && op.eventId) {
-        await db.update(scheduledEvents)
-          .set({
+    await db.transaction(async (tx) => {
+      for (const op of result.operations) {
+        if (op.type === CalendarOpType.Create) {
+          await tx.insert(scheduledEvents).values({
+            userId,
+            itemType: op.itemType,
+            itemId: op.itemId,
             title: op.title,
+            googleEventId: op.googleEventId || null,
+            calendarId: op.calendarId || 'primary',
             start: op.start,
             end: op.end,
             status: op.status,
-            googleEventId: op.googleEventId || undefined,
+            alternativeSlotsCount: null,
+            createdAt: nowTs,
             updatedAt: nowTs,
-          })
-          .where(eq(scheduledEvents.id, op.eventId));
-      } else if (op.type === CalendarOpType.Delete && op.eventId) {
-        await db.delete(scheduledEvents).where(eq(scheduledEvents.id, op.eventId));
+          });
+        } else if (op.type === CalendarOpType.Update && op.eventId) {
+          await tx.update(scheduledEvents)
+            .set({
+              title: op.title,
+              start: op.start,
+              end: op.end,
+              status: op.status,
+              googleEventId: op.googleEventId || undefined,
+              updatedAt: nowTs,
+            })
+            .where(eq(scheduledEvents.id, op.eventId));
+        } else if (op.type === CalendarOpType.Delete && op.eventId) {
+          await tx.delete(scheduledEvents).where(eq(scheduledEvents.id, op.eventId));
+        }
       }
-    }
+    });
 
     if (manager) manager.markAllWritten();
     for (const op of result.operations) {
@@ -436,14 +468,35 @@ export class UserScheduler {
     const now = new Date().toISOString();
     let managedEventsMoved = false;
 
+    // PERF-C2: Batch-fetch all scheduledEvents and calendarEvents for this user
+    const allScheduled = await db.select().from(scheduledEvents)
+      .where(eq(scheduledEvents.userId, userId));
+    const scheduledByGoogleEventId = new Map<string, (typeof allScheduled)[0]>();
+    for (const row of allScheduled) {
+      if (row.googleEventId) scheduledByGoogleEventId.set(row.googleEventId, row);
+    }
+
+    const allCached = await db.select().from(calendarEvents)
+      .where(eq(calendarEvents.userId, userId));
+    const cachedByGoogleEventId = new Map<string, (typeof allCached)[0]>();
+    for (const row of allCached) {
+      if (row.googleEventId) cachedByGoogleEventId.set(row.googleEventId, row);
+    }
+
+    // PERF-C1 (polling): Build calendarId→googleCalendarId map
+    const userCals = await db.select().from(calendars).where(eq(calendars.userId, userId));
+    const calIdToGoogleCalIdPoll = new Map<string, string>();
+    for (const cal of userCals) {
+      calIdToGoogleCalIdPoll.set(cal.id, cal.googleCalendarId);
+    }
+
     for (const ev of polledEvents) {
       if (!ev.googleEventId) continue;
 
       if (ev.isManaged) {
         if (!ev.start || !ev.end) continue;
-        const localRows = await db.select().from(scheduledEvents)
-          .where(eq(scheduledEvents.googleEventId, ev.googleEventId));
-        const local = localRows[0];
+        // EDGE-M5: Use userId-scoped in-memory map instead of unscoped DB query
+        const local = scheduledByGoogleEventId.get(ev.googleEventId);
         if (!local || !local.start || !local.end) continue;
 
         const startDiff = Math.abs(new Date(local.start).getTime() - new Date(ev.start).getTime());
@@ -460,10 +513,7 @@ export class UserScheduler {
 
         if (local.googleEventId) {
           const calIsUuid = local.calendarId && local.calendarId !== 'primary';
-          const calRows = calIsUuid
-            ? await db.select().from(calendars).where(eq(calendars.id, local.calendarId!))
-            : [];
-          const googleCalId = calRows[0]?.googleCalendarId || 'primary';
+          const googleCalId = calIsUuid ? (calIdToGoogleCalIdPoll.get(local.calendarId!) || 'primary') : 'primary';
           const op: import('@cadence/shared').CalendarOperation = {
             type: CalendarOpType.Update,
             eventId: local.id,
@@ -495,10 +545,9 @@ export class UserScheduler {
         continue;
       }
 
-      const existing = await db.select().from(calendarEvents)
-        .where(eq(calendarEvents.googleEventId, ev.googleEventId));
+      const existingCached = cachedByGoogleEventId.get(ev.googleEventId);
 
-      if (existing.length > 0) {
+      if (existingCached) {
         await db.update(calendarEvents)
           .set({
             title: ev.title,
@@ -570,6 +619,8 @@ export class UserScheduler {
 export class SchedulerRegistry {
   private schedulers = new Map<string, UserScheduler>();
   private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // EDGE-M1: Prevent duplicate concurrent creations
+  private pendingCreations = new Map<string, Promise<UserScheduler>>();
 
   async getOrCreate(userId: string): Promise<UserScheduler> {
     // Cancel any pending idle timeout
@@ -582,6 +633,20 @@ export class SchedulerRegistry {
     const existing = this.schedulers.get(userId);
     if (existing) return existing;
 
+    // EDGE-M1: Return in-flight creation promise if one exists
+    const pending = this.pendingCreations.get(userId);
+    if (pending) return pending;
+
+    const creationPromise = this.createScheduler(userId);
+    this.pendingCreations.set(userId, creationPromise);
+    try {
+      return await creationPromise;
+    } finally {
+      this.pendingCreations.delete(userId);
+    }
+  }
+
+  private async createScheduler(userId: string): Promise<UserScheduler> {
     // Fetch user's Google refresh token
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     if (!user || !user.googleRefreshToken) {
@@ -646,12 +711,20 @@ export class SchedulerRegistry {
     const connected = usersWithTokens.filter(u => !!u.googleRefreshToken);
 
     console.log(`[scheduler] Starting schedulers for ${connected.length} connected user(s)`);
-    for (const user of connected) {
-      try {
-        await this.getOrCreate(user.id);
-      } catch (err) {
-        console.error(`[scheduler] Failed to start scheduler for user ${user.id}:`, err);
-      }
+
+    // PERF-H5: Concurrency-limited parallel boot (10 at a time)
+    const CONCURRENCY = 10;
+    for (let i = 0; i < connected.length; i += CONCURRENCY) {
+      const batch = connected.slice(i, i + CONCURRENCY);
+      await Promise.allSettled(
+        batch.map(async (user) => {
+          try {
+            await this.getOrCreate(user.id);
+          } catch (err) {
+            console.error(`[scheduler] Failed to start scheduler for user ${user.id}:`, err);
+          }
+        }),
+      );
     }
   }
 

@@ -646,11 +646,18 @@ router.get('/quality', async (req, res) => {
   }
 });
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // GET /api/schedule/:itemId/alternatives — find alternative time slots
 router.get('/:itemId/alternatives', async (req, res) => {
   try {
     const userId = req.userId;
     const { itemId } = req.params;
+
+    if (!UUID_REGEX.test(itemId)) {
+      sendError(res, 400, 'Invalid itemId format');
+      return;
+    }
 
     // Look up the item across habits, tasks, meetings (scoped to user)
     const [habitRows, taskRows, meetingRows] = await Promise.all([

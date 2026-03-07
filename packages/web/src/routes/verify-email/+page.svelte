@@ -15,6 +15,7 @@
   let verifyError = $state('');
   let resendCooldown = $state(0);
   let resendTimer: ReturnType<typeof setInterval> | undefined;
+  let redirectTimer: ReturnType<typeof setTimeout> | undefined;
 
   onMount(() => {
     if (token) {
@@ -22,6 +23,7 @@
     }
     return () => {
       if (resendTimer) clearInterval(resendTimer);
+      if (redirectTimer) clearTimeout(redirectTimer);
     };
   });
 
@@ -31,7 +33,7 @@
     try {
       await verifyEmail(token);
       verified = true;
-      setTimeout(() => goto('/onboarding'), 2000);
+      redirectTimer = setTimeout(() => goto('/onboarding'), 2000);
     } catch (err) {
       verifyError = err instanceof Error ? err.message : 'Verification failed.';
     } finally {

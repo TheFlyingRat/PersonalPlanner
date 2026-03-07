@@ -208,6 +208,15 @@ export const bookingRequestSchema = z.object({
   message: 'start must be before end',
 });
 
+export const linkBookingSchema = z.object({
+  start: z.string().datetime({ offset: true }),
+  end: z.string().datetime({ offset: true }),
+  name: z.string().max(200).optional(),
+  email: z.string().email().max(254).optional(),
+}).refine(data => new Date(data.start) < new Date(data.end), {
+  message: 'End must be after start',
+});
+
 export const updateSubtaskSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   completed: z.boolean().optional(),

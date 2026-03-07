@@ -2,6 +2,10 @@ import { POLL_INTERVAL_MS } from '@cadence/shared';
 import type { CalendarEvent } from '@cadence/shared';
 import { GoogleCalendarClient } from './calendar.js';
 
+function isGoogleApiError(err: unknown): err is { code: number; message?: string } {
+  return typeof err === 'object' && err !== null && 'code' in err;
+}
+
 /**
  * Polls Google Calendar at a fixed interval and invokes a callback when
  * external changes (not originating from our own writes) are detected.
@@ -20,6 +24,7 @@ export class CalendarPoller {
    *                         external modifications are detected.
    * @param getSyncToken     Load the persisted sync token (e.g. from DB).
    * @param saveSyncToken    Persist a new sync token after each successful poll.
+   * @param onAuthError      Called when a 401 error is detected (token revoked).
    */
   constructor(
     private client: GoogleCalendarClient,
@@ -27,6 +32,7 @@ export class CalendarPoller {
     private onChanges: (events: CalendarEvent[]) => Promise<void>,
     private getSyncToken: () => Promise<string | null>,
     private saveSyncToken: (token: string) => Promise<void>,
+    private onAuthError?: () => Promise<void>,
   ) {}
 
   /** Start the initial sync and begin the polling interval. */
@@ -92,6 +98,16 @@ export class CalendarPoller {
         await this.onChanges(externalChanges);
       }
     } catch (error) {
+      // EDGE-H4: Handle 401 (token revoked) by notifying the caller
+      if (isGoogleApiError(error) && error.code === 401) {
+        console.error('[poller] Google auth error (401) — token likely revoked');
+        this.stop();
+        if (this.onAuthError) {
+          await this.onAuthError();
+        }
+        return;
+      }
+
       console.error('[poller] Poll error:', error);
 
       // If the sync token has gone stale, clear it so the next poll does a

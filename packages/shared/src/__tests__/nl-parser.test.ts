@@ -61,8 +61,8 @@ describe('parseQuickAdd', () => {
       expect(result.duration).toBeUndefined();
     });
 
-    it('parses "Walk TTh 8am 1.5h"', () => {
-      const result = parseQuickAdd('Walk TTh 8am 1.5h') as ParsedHabit;
+    it('parses "Walk TuTh 8am 1.5h"', () => {
+      const result = parseQuickAdd('Walk TuTh 8am 1.5h') as ParsedHabit;
       expect(result).not.toBeNull();
       expect(result.type).toBe('habit');
       expect(result.name).toBe('Walk');
@@ -216,7 +216,7 @@ describe('parseQuickAdd', () => {
 
   describe('duration parsing', () => {
     it('handles fractional hours: 1.5h → 90', () => {
-      const result = parseQuickAdd('Walk TTh 8am 1.5h') as ParsedHabit;
+      const result = parseQuickAdd('Walk TuTh 8am 1.5h') as ParsedHabit;
       expect(result!.duration).toBe(90);
     });
 

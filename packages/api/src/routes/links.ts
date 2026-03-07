@@ -4,7 +4,7 @@ import { db } from '../db/pg-index.js';
 import { schedulingLinks, scheduledEvents, users } from '../db/pg-schema.js';
 import type { CreateLinkRequest, SchedulingLink, UserSettings } from '@cadence/shared';
 import { SchedulingHours } from '@cadence/shared';
-import { createLinkSchema, updateLinkSchema } from '../validation.js';
+import { createLinkSchema, updateLinkSchema, linkBookingSchema } from '../validation.js';
 import { sendValidationError, sendNotFound, sendError } from './helpers.js';
 
 const router = Router();
@@ -225,30 +225,15 @@ router.post('/:slug/book', async (req, res) => {
     return;
   }
 
-  const { start, end, name, email } = req.body as {
-    start?: string;
-    end?: string;
-    name?: string;
-    email?: string;
-  };
-
-  if (!start || !end) {
-    sendError(res, 400, 'Missing required fields: start, end');
+  const parsed = linkBookingSchema.safeParse(req.body);
+  if (!parsed.success) {
+    sendValidationError(res, parsed.error);
     return;
   }
 
+  const { start, end, name, email } = parsed.data;
   const startDate = new Date(start);
   const endDate = new Date(end);
-
-  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-    sendError(res, 400, 'Invalid date format for start or end');
-    return;
-  }
-
-  if (endDate <= startDate) {
-    sendError(res, 400, 'End must be after start');
-    return;
-  }
 
   // Validate that start is in the future
   if (startDate.getTime() <= Date.now()) {
@@ -261,27 +246,6 @@ router.post('/:slug/book', async (req, res) => {
   const configuredDurations: number[] = (link.durations as number[]) ?? [];
   if (!configuredDurations.includes(bookingDurationMin)) {
     sendError(res, 400, 'Invalid duration');
-    return;
-  }
-
-  // Validate name
-  if (name !== undefined && typeof name !== 'string') {
-    sendError(res, 400, 'Name must be a string');
-    return;
-  }
-  if (name !== undefined && name.length > 200) {
-    sendError(res, 400, 'Name must be 200 characters or fewer');
-    return;
-  }
-
-  // Validate email format if provided
-  if (email !== undefined && email !== '' && email.length > 254) {
-    sendError(res, 400, 'Email too long');
-    return;
-  }
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (email !== undefined && email !== '' && !emailRegex.test(email)) {
-    sendError(res, 400, 'Invalid email format');
     return;
   }
 

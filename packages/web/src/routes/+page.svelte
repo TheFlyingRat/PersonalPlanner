@@ -483,6 +483,19 @@
     closeDetail();
   }
 
+  async function moveEvent(event: CalEvent, deltaMinutes: number) {
+    if (!event.id || !event.startISO || !event.endISO) return;
+    closeContextMenu();
+    const startMs = new Date(event.startISO).getTime() + deltaMinutes * 60000;
+    const endMs = new Date(event.endISO).getTime() + deltaMinutes * 60000;
+    try {
+      await schedule.moveEvent(event.id, new Date(startMs).toISOString(), new Date(endMs).toISOString());
+    } catch {
+      error = 'Failed to move event.';
+      try { await fetchEvents(); } catch { /* fetchEvents sets its own error */ }
+    }
+  }
+
   // ============================================================
   // Drag-and-drop state
   // ============================================================
@@ -947,7 +960,7 @@
           <span class="quality-badge-value font-mono">{qualityScore.overall}</span>
         </button>
       {/if}
-      <button class="reschedule-btn" onclick={handleReschedule} disabled={rescheduling}>
+      <button class="reschedule-btn" onclick={handleReschedule} disabled={rescheduling} aria-busy={rescheduling}>
         <RefreshCw size={16} strokeWidth={1.5} class={rescheduling ? 'spinning' : ''} />
         {rescheduling ? 'Scheduling...' : 'Reschedule'}
       </button>
@@ -1036,6 +1049,7 @@
       bind:value={quickAddInput}
       onkeydown={handleQuickAddKeydown}
       placeholder="Quick add: 'Gym MWF 7am 1h' or 'Finish report by Friday 3h'"
+      aria-label="Quick add"
       disabled={quickAddSubmitting}
     />
     <button
@@ -1506,6 +1520,16 @@
           <Lock size={14} strokeWidth={1.5} />
           Lock
         {/if}
+      </button>
+    {/if}
+    {#if canDrag(contextMenu.event)}
+      <button class="ctx-item" role="menuitem" onclick={() => { moveEvent(contextMenu!.event, -15); }}>
+        <ChevronLeft size={14} strokeWidth={1.5} />
+        Move earlier (15 min)
+      </button>
+      <button class="ctx-item" role="menuitem" onclick={() => { moveEvent(contextMenu!.event, 15); }}>
+        <ChevronRight size={14} strokeWidth={1.5} />
+        Move later (15 min)
       </button>
     {/if}
     {#if canDelete(contextMenu.event)}
