@@ -48,7 +48,9 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Derive WebSocket origin from CORS_ORIGIN for CSP connectSrc
-const wsOrigin = process.env.CORS_ORIGIN?.replace(/^http/, 'ws') || 'ws://localhost:5173';
+const wsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((o) => o.trim().replace(/^http/, 'ws'));
 
 // Security headers — allow Geist font CDN
 // Note: SvelteKit static builds emit inline <script> and <style> tags,
@@ -61,7 +63,7 @@ app.use(helmet({
       fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'", wsOrigin, wsOrigin.replace('ws:', 'wss:')],
+      connectSrc: ["'self'", ...wsOrigins, ...wsOrigins.map((o) => o.replace('ws:', 'wss:'))],
     },
   },
 }));
