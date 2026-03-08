@@ -97,7 +97,7 @@ function enumerateDays(startDate: Date, endDate: Date, tz: string): Date[] {
   let current = startOfDayInTimezone(startDate, tz);
   const endMidnight = startOfDayInTimezone(endDate, tz);
   // Include end day
-  const endBound = new Date(endMidnight.getTime() + 86400000);
+  const endBound = nextDayInTimezone(endMidnight, tz);
   while (current < endBound) {
     days.push(new Date(current));
     current = nextDayInTimezone(current, tz);
@@ -124,9 +124,10 @@ function habitsToScheduleItems(
 
     // Prefer max duration; compress to min only when slot is tight
     const duration = habit.durationMax;
+    if (duration <= 0) continue; // Skip invalid duration
     const durationMin = habit.durationMin;
 
-    if (habit.frequency === Frequency.Daily) {
+    if (habit.frequency === Frequency.Daily || (habit.frequency as string) === 'custom') {
       const applicableDays = habit.frequencyConfig?.days ?? [
         'mon', 'tue', 'wed', 'thu', 'fri',
       ];
@@ -209,7 +210,8 @@ function habitsToScheduleItems(
           const dayAbbrev = getDayAbbrev(day, tz);
           if (dayAbbrev === config.monthWeekday) {
             const weekOfMonth = Math.ceil(localDay / 7);
-            isTargetDay = weekOfMonth === config.monthWeek;
+            const targetWeek = Math.min(5, Math.max(1, config.monthWeek)); // Clamp to 1-5
+            isTargetDay = weekOfMonth === targetWeek;
           }
         } else {
           // Default: schedule on the 1st of each month
@@ -341,6 +343,8 @@ function meetingsToScheduleItems(
   const days = precomputedDays ?? enumerateDays(scheduleStart, scheduleEnd, tz);
 
   for (const meeting of meetings) {
+    if (meeting.duration <= 0) continue; // Skip invalid duration
+
     if (meeting.frequency === Frequency.Daily) {
       for (const day of days) {
         // Skip weekends for meetings
@@ -410,7 +414,8 @@ function meetingsToScheduleItems(
           const dayAbbrev = getDayAbbrev(day, tz);
           if (dayAbbrev === meeting.frequencyConfig.monthWeekday) {
             const weekOfMonth = Math.ceil(localDay / 7);
-            isTargetDay = weekOfMonth === meeting.frequencyConfig.monthWeek;
+            const targetWeek = Math.min(5, Math.max(1, meeting.frequencyConfig.monthWeek)); // Clamp to 1-5
+            isTargetDay = weekOfMonth === targetWeek;
           }
         } else {
           isTargetDay = localDay === 1;
@@ -842,10 +847,14 @@ function placeFocusTime(
   for (const rule of focusRules) {
     // Calculate how much focus time is already placed this week
     const dayOfWeek = getDayOfWeekInTimezone(now, tz);
-    const weekStart = startOfDayInTimezone(
-      new Date(now.getTime() - dayOfWeek * 86400000), tz,
-    );
-    const weekEnd = new Date(weekStart.getTime() + 7 * 86400000);
+    let weekStart = startOfDayInTimezone(now, tz);
+    for (let i = 0; i < dayOfWeek; i++) {
+      weekStart = startOfDayInTimezone(new Date(weekStart.getTime() - 23 * 3600000), tz);
+    }
+    let weekEnd = weekStart;
+    for (let i = 0; i < 7; i++) {
+      weekEnd = nextDayInTimezone(weekEnd, tz);
+    }
 
     // Count all placed items except meetings toward focus time.
     // Habits, tasks, and focus blocks all contribute to deep work time.

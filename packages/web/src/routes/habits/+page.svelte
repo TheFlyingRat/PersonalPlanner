@@ -286,9 +286,9 @@
     }
 
     submitting = true;
-    const allSelected = arraysEqual(formDays, [...ALL_DAYS]);
-    const weekdaysSelected = arraysEqual(formDays, WEEKDAYS);
-    const mappedFrequency = (allSelected || weekdaysSelected) ? Frequency.Daily : Frequency.Custom;
+    // Engine treats Daily + frequencyConfig.days as "these specific days",
+    // so any day-of-week selection is Daily frequency with the days array.
+    const mappedFrequency = Frequency.Daily;
     const habitData = {
       name: formName,
       priority: formPriority,

@@ -7,7 +7,7 @@ import { createTaskSchema, updateTaskSchema, updateSubtaskSchema, upNextBodySche
 import { logActivity } from './activity.js';
 import { broadcastToUser } from '../ws.js';
 import { triggerReschedule } from '../polling-ref.js';
-import { sendValidationError, sendNotFound, sendError } from './helpers.js';
+import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 
 const router = Router();
 
@@ -58,6 +58,7 @@ router.post('/', async (req, res) => {
 // PUT /api/tasks/:id — update a task
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -99,6 +100,7 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/tasks/:id — delete task and scheduled events
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -118,6 +120,7 @@ router.delete('/:id', async (req, res) => {
 // POST /api/tasks/:id/complete — set status to 'completed'
 router.post('/:id/complete', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -138,6 +141,7 @@ router.post('/:id/complete', async (req, res) => {
 // POST /api/tasks/:id/up-next — toggle isUpNext
 router.post('/:id/up-next', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -166,6 +170,7 @@ router.post('/:id/up-next', async (req, res) => {
 // GET /api/tasks/:id/subtasks — list subtasks ordered by sortOrder
 router.get('/:id/subtasks', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
   if (existing.length === 0) {
     sendNotFound(res, 'Task');
@@ -183,6 +188,7 @@ router.get('/:id/subtasks', async (req, res) => {
 // POST /api/tasks/:id/subtasks — create a subtask
 router.post('/:id/subtasks', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
   if (existing.length === 0) {
     sendNotFound(res, 'Task');
@@ -219,6 +225,8 @@ router.post('/:id/subtasks', async (req, res) => {
 // PUT /api/tasks/:id/subtasks/:subtaskId — update a subtask
 router.put('/:id/subtasks/:subtaskId', async (req, res) => {
   const { id, subtaskId } = req.params;
+  if (!validateUUID(id, res)) return;
+  if (!validateUUID(subtaskId, res)) return;
   const existing = await db.select().from(subtasks).where(and(eq(subtasks.id, subtaskId), eq(subtasks.userId, req.userId)));
   if (existing.length === 0 || existing[0].taskId !== id) {
     sendNotFound(res, 'Subtask');
@@ -249,6 +257,8 @@ router.put('/:id/subtasks/:subtaskId', async (req, res) => {
 // DELETE /api/tasks/:id/subtasks/:subtaskId — delete a subtask
 router.delete('/:id/subtasks/:subtaskId', async (req, res) => {
   const { id, subtaskId } = req.params;
+  if (!validateUUID(id, res)) return;
+  if (!validateUUID(subtaskId, res)) return;
   const existing = await db.select().from(subtasks).where(and(eq(subtasks.id, subtaskId), eq(subtasks.userId, req.userId)));
   if (existing.length === 0 || existing[0].taskId !== id) {
     sendNotFound(res, 'Subtask');

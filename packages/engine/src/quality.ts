@@ -17,7 +17,7 @@ import { getFormatter } from './utils.js';
 function parseTimeToMinutes(hhmm: string): number {
   if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return 0;
   const [h, m] = hhmm.split(':').map(Number);
-  return h * 60 + m;
+  return Math.min(23, Math.max(0, h)) * 60 + Math.min(59, Math.max(0, m));
 }
 
 /**
@@ -133,7 +133,8 @@ function scoreIdealTime(
     const slot = placements.get(item.id)!;
     const idealMin = parseTimeToMinutes(item.idealTime);
     const slotMin = dateToMinutesSinceMidnight(slot.start, tz);
-    const diff = Math.abs(slotMin - idealMin);
+    const rawDiff = Math.abs(slotMin - idealMin);
+    const diff = Math.min(rawDiff, 1440 - rawDiff);
 
     // Linear scale: 0 diff = 100, 120+ min diff = 0
     const itemScore = Math.max(0, 100 - (diff / 120) * 100);
@@ -166,7 +167,7 @@ function scoreFocusTime(
     return { score: 100, weight: 0.2, label: 'Focus Time' };
   }
 
-  const targetDaily = activeRules.reduce((sum, r) => sum + r.dailyTargetMinutes, 0);
+  const targetDaily = activeRules.reduce((sum, r) => sum + (r.dailyTargetMinutes || 0), 0);
   if (targetDaily === 0) {
     return { score: 100, weight: 0.2, label: 'Focus Time' };
   }
@@ -201,9 +202,9 @@ function scoreBuffers(
     const slot = placements.get(meeting.id)!;
     let hasAdequateBuffer = true;
 
-    for (const other of placements.values()) {
-      if (other.start.getTime() === slot.start.getTime() && other.end.getTime() === slot.end.getTime()) {
-        continue; // same slot
+    for (const [otherId, other] of placements.entries()) {
+      if (otherId === meeting.id) {
+        continue; // same item
       }
 
       // Check gap before meeting

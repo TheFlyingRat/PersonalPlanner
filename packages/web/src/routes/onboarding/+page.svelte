@@ -100,7 +100,9 @@
       if (calendarConnected && currentStep < 2) {
         currentStep = 2;
         stepKey += 1;
-        // Pre-load calendars for the calendar selection step
+      }
+      // Auto-discover calendars when landing on or skipping to the calendar step
+      if (calendarConnected && currentStep === 2 && !calendarsLoaded) {
         loadCalendars();
       }
     } catch {
@@ -201,16 +203,17 @@
 
     if (currentStep === 4 && habitName.trim()) {
       try {
-        const freqMap: Record<string, Frequency> = {
-          daily: Frequency.Daily,
-          weekdays: Frequency.Custom,
-          '3x_week': Frequency.Custom,
+        const daysMap: Record<string, string[]> = {
+          daily: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+          weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'],
+          '3x_week': ['mon', 'wed', 'fri'],
         };
         await habitsApi.create({
           name: habitName.trim(),
           durationMin: habitDuration,
           durationMax: habitDuration,
-          frequency: freqMap[habitFrequency] ?? Frequency.Daily,
+          frequency: Frequency.Daily,
+          frequencyConfig: { days: daysMap[habitFrequency] ?? daysMap.weekdays },
           priority: 2,
           windowStart: '06:00',
           windowEnd: '12:00',
@@ -237,11 +240,21 @@
     }
   }
 
-  function skipOnboarding() {
+  async function completeOnboarding() {
+    try {
+      await settingsApi.completeOnboarding();
+    } catch {
+      // Continue to dashboard even if the API call fails
+    }
+  }
+
+  async function skipOnboarding() {
+    await completeOnboarding();
     goto('/');
   }
 
-  function goToDashboard() {
+  async function goToDashboard() {
+    await completeOnboarding();
     goto('/');
   }
 

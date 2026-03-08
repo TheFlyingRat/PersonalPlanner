@@ -56,7 +56,7 @@ export function buildTimeline(
   // Iterate day by day
   let current = startOfDayInTimezone(startDate, tz);
   const endMidnight = startOfDayInTimezone(endDate, tz);
-  const endBound = new Date(endMidnight.getTime() + 86400000);
+  const endBound = nextDayInTimezone(endMidnight, tz);
 
   while (current < endBound) {
     const dayOfWeek = getDayOfWeekInTimezone(current, tz); // 0=Sun, 6=Sat

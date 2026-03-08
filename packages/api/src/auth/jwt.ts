@@ -19,11 +19,11 @@ function getJwtRefreshSecret(): string {
 }
 
 export function signAccessToken(payload: JwtPayload): string {
-  return jwt.sign(payload, getJwtSecret(), { expiresIn: ACCESS_TOKEN_EXPIRY });
+  return jwt.sign(payload, getJwtSecret(), { algorithm: 'HS256', expiresIn: ACCESS_TOKEN_EXPIRY });
 }
 
 export function verifyAccessToken(token: string): JwtPayload {
-  return jwt.verify(token, getJwtSecret()) as JwtPayload;
+  return jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] }) as JwtPayload;
 }
 
 export function generateRefreshToken(): string {
@@ -66,7 +66,14 @@ export function getAccessTokenCookieName(): string {
 }
 
 export function clearAuthCookies(res: Response): void {
+  const isProduction = process.env.NODE_ENV === 'production';
   const cookieDomain = process.env.COOKIE_DOMAIN;
-  res.clearCookie('access_token', { path: '/', ...(cookieDomain ? { domain: cookieDomain } : {}) });
-  res.clearCookie('refresh_token', { path: '/api/auth', ...(cookieDomain ? { domain: cookieDomain } : {}) });
+  const commonOpts = {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax' as const,
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
+  };
+  res.clearCookie('access_token', { ...commonOpts, path: '/' });
+  res.clearCookie('refresh_token', { ...commonOpts, path: '/api/auth' });
 }

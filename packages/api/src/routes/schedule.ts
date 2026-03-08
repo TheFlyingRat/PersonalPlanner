@@ -13,6 +13,9 @@ import { sendValidationError, sendNotFound, sendError } from './helpers.js';
 
 const router = Router();
 
+// Per-user concurrency guard for local-only reschedule
+const localRescheduleLocks = new Map<string, Promise<void>>();
+
 /**
  * Record schedule changes from a reschedule run.
  * Compares operations against existing scheduled_events to determine what changed.
@@ -290,99 +293,119 @@ router.post('/reschedule', async (req, res) => {
   try {
     const userId = req.userId;
 
-    // Try the per-user scheduler (Google connected)
-    const scheduler = schedulerRegistry.get(userId);
-    if (scheduler) {
+    // Try the per-user scheduler (lazily starts if Google is connected)
+    try {
+      const scheduler = await schedulerRegistry.getOrCreate(userId);
       const ops = await scheduler.triggerReschedule('Manual reschedule');
       broadcastToUser(userId, 'schedule_updated', 'Manual reschedule');
       res.json({ message: 'Reschedule complete', operationsApplied: ops, unschedulable: [] });
       return;
+    } catch {
+      // getOrCreate throws if user has no Google connection — fall through to local-only
     }
 
-    // Google not connected — run local-only reschedule
-    const [allHabitsRaw, allTasksRaw, allMeetingsRaw, allFocusRulesRaw, bufRows] = await Promise.all([
-      db.select().from(habits).where(eq(habits.userId, userId)),
-      db.select().from(tasks).where(eq(tasks.userId, userId)),
-      db.select().from(smartMeetings).where(eq(smartMeetings.userId, userId)),
-      db.select().from(focusTimeRules).where(eq(focusTimeRules.userId, userId)),
-      db.select().from(bufferConfig).where(eq(bufferConfig.userId, userId)),
-    ]);
-
-    const allHabits = allHabitsRaw.map(toHabit);
-    const allTasks = allTasksRaw.map(toTask);
-    const allMeetings = allMeetingsRaw.map(toMeeting);
-    const allFocusRules = allFocusRulesRaw.map(toFocusRule);
-    const buf = bufRows.length > 0 ? toBufConfig(bufRows[0]) : {
-      id: 'default',
-      travelTimeMinutes: 15,
-      decompressionMinutes: 10,
-      breakBetweenItemsMinutes: 5,
-      applyDecompressionTo: DecompressionTarget.All,
-    };
-
-    const userSettings = await getUserSettings(userId);
-
-    const nowISO = new Date().toISOString();
-    const scheduledRows = await db.select().from(scheduledEvents)
-      .where(and(eq(scheduledEvents.userId, userId), gte(scheduledEvents.end, nowISO)));
-
-    const existingEvents: CalendarEvent[] = scheduledRows.map((row: any) => ({
-      id: row.id,
-      googleEventId: row.googleEventId || '',
-      title: row.title || '',
-      start: row.start,
-      end: row.end,
-      isManaged: true,
-      itemType: row.itemType as ItemType,
-      itemId: row.itemId,
-      status: (row.status || 'free') as EventStatus,
-    }));
-
-    const result = reschedule(allHabits, allTasks, allMeetings, allFocusRules, existingEvents, buf, userSettings);
-
-    // Build existing events map for change tracking
-    const existingEventsMap = new Map<string, { start: string; end: string; title: string; itemType: string; itemId: string }>();
-    for (const ev of existingEvents) {
-      existingEventsMap.set(ev.id, {
-        start: ev.start,
-        end: ev.end,
-        title: ev.title || '',
-        itemType: ev.itemType || '',
-        itemId: ev.itemId || '',
-      });
+    // Google not connected — run local-only reschedule with concurrency guard
+    const existingLock = localRescheduleLocks.get(userId);
+    if (existingLock) {
+      await existingLock;
     }
 
-    // Record changes before applying
-    await recordScheduleChanges(result.operations, existingEventsMap, userId);
+    const localReschedule = (async () => {
+      const [allHabitsRaw, allTasksRaw, allMeetingsRaw, allFocusRulesRaw, bufRows] = await Promise.all([
+        db.select().from(habits).where(eq(habits.userId, userId)),
+        db.select().from(tasks).where(eq(tasks.userId, userId)),
+        db.select().from(smartMeetings).where(eq(smartMeetings.userId, userId)),
+        db.select().from(focusTimeRules).where(eq(focusTimeRules.userId, userId)),
+        db.select().from(bufferConfig).where(eq(bufferConfig.userId, userId)),
+      ]);
 
-    for (const op of result.operations) {
-      const now = new Date().toISOString();
-      if (op.type === CalendarOpType.Create) {
-        await db.insert(scheduledEvents).values({
-          userId,
-          itemType: op.itemType,
-          itemId: op.itemId,
-          title: op.title,
-          googleEventId: null,
-          start: op.start,
-          end: op.end,
-          status: op.status,
-          alternativeSlotsCount: null,
-          createdAt: now,
-          updatedAt: now,
+      const allHabits = allHabitsRaw.map(toHabit);
+      const allTasks = allTasksRaw.map(toTask);
+      const allMeetings = allMeetingsRaw.map(toMeeting);
+      const allFocusRules = allFocusRulesRaw.map(toFocusRule);
+      const buf = bufRows.length > 0 ? toBufConfig(bufRows[0]) : {
+        id: 'default',
+        travelTimeMinutes: 15,
+        decompressionMinutes: 10,
+        breakBetweenItemsMinutes: 5,
+        applyDecompressionTo: DecompressionTarget.All,
+      };
+
+      const userSettings = await getUserSettings(userId);
+
+      const nowISO = new Date().toISOString();
+      const scheduledRows = await db.select().from(scheduledEvents)
+        .where(and(eq(scheduledEvents.userId, userId), gte(scheduledEvents.end, nowISO)));
+
+      const existingEvents: CalendarEvent[] = scheduledRows.map((row: any) => ({
+        id: row.id,
+        googleEventId: row.googleEventId || '',
+        title: row.title || '',
+        start: row.start,
+        end: row.end,
+        isManaged: true,
+        itemType: row.itemType as ItemType,
+        itemId: row.itemId,
+        status: (row.status || 'free') as EventStatus,
+      }));
+
+      const result = reschedule(allHabits, allTasks, allMeetings, allFocusRules, existingEvents, buf, userSettings);
+
+      // Build existing events map for change tracking
+      const existingEventsMap = new Map<string, { start: string; end: string; title: string; itemType: string; itemId: string }>();
+      for (const ev of existingEvents) {
+        existingEventsMap.set(ev.id, {
+          start: ev.start,
+          end: ev.end,
+          title: ev.title || '',
+          itemType: ev.itemType || '',
+          itemId: ev.itemId || '',
         });
-      } else if (op.type === CalendarOpType.Update && op.eventId) {
-        await db.update(scheduledEvents)
-          .set({ title: op.title, start: op.start, end: op.end, status: op.status, updatedAt: now })
-          .where(and(eq(scheduledEvents.id, op.eventId), eq(scheduledEvents.userId, userId)));
-      } else if (op.type === CalendarOpType.Delete && op.eventId) {
-        await db.delete(scheduledEvents)
-          .where(and(eq(scheduledEvents.id, op.eventId), eq(scheduledEvents.userId, userId)));
       }
-    }
 
-    broadcastToUser(userId, 'schedule_updated', 'Manual reschedule');
-    res.json({ message: 'Reschedule complete', operationsApplied: result.operations.length, unschedulable: result.unschedulable });
+      // Apply operations in a transaction, then record changes
+      await db.transaction(async (tx) => {
+        for (const op of result.operations) {
+          const now = new Date().toISOString();
+          if (op.type === CalendarOpType.Create) {
+            await tx.insert(scheduledEvents).values({
+              userId,
+              itemType: op.itemType,
+              itemId: op.itemId,
+              title: op.title,
+              googleEventId: null,
+              start: op.start,
+              end: op.end,
+              status: op.status,
+              alternativeSlotsCount: null,
+              createdAt: now,
+              updatedAt: now,
+            });
+          } else if (op.type === CalendarOpType.Update && op.eventId) {
+            await tx.update(scheduledEvents)
+              .set({ title: op.title, start: op.start, end: op.end, status: op.status, updatedAt: now })
+              .where(and(eq(scheduledEvents.id, op.eventId), eq(scheduledEvents.userId, userId)));
+          } else if (op.type === CalendarOpType.Delete && op.eventId) {
+            await tx.delete(scheduledEvents)
+              .where(and(eq(scheduledEvents.id, op.eventId), eq(scheduledEvents.userId, userId)));
+          }
+        }
+      });
+
+      // Record changes after successful DB persist
+      await recordScheduleChanges(result.operations, existingEventsMap, userId);
+
+      return result;
+    })();
+
+    localRescheduleLocks.set(userId, localReschedule.then(() => {}).catch(() => {}));
+    try {
+      const result = await localReschedule;
+      broadcastToUser(userId, 'schedule_updated', 'Manual reschedule');
+      res.json({ message: 'Reschedule complete', operationsApplied: result.operations.length, unschedulable: result.unschedulable });
+    } finally {
+      localRescheduleLocks.delete(userId);
+    }
   } catch (error: any) {
     console.error('Reschedule error:', error);
     sendError(res, 500, 'Reschedule failed');

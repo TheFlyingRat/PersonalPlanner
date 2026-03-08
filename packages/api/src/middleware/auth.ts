@@ -26,6 +26,10 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
   try {
     const payload = verifyAccessToken(token);
+    if (!payload.emailVerified) {
+      res.status(403).json({ error: 'Email not verified', code: 'EMAIL_NOT_VERIFIED' });
+      return;
+    }
     req.userId = payload.userId;
     req.userEmail = payload.email;
     req.userPlan = payload.plan;

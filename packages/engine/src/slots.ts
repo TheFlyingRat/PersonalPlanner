@@ -35,6 +35,7 @@ export function generateCandidateSlots(
 ): CandidateSlot[] {
   const candidates: CandidateSlot[] = [];
   const durationMs = item.duration * 60 * 1000;
+  if (durationMs <= 0) return candidates; // Prevent infinite loop on 0-duration items
   const stepMs = 15 * 60 * 1000; // 15-minute step for sliding window
   const bufferMs = item.skipBuffer ? 0 : bufferConfig.breakBetweenItemsMinutes * 60 * 1000;
 

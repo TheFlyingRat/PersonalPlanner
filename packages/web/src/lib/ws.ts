@@ -113,8 +113,9 @@ export function disconnect(): void {
 export function subscribeConnectionState(handler: ConnectionStateHandler): () => void {
   if (!browser) return () => {};
   connectionListeners.add(handler);
-  // Ensure a connection is initiated when someone is watching state
-  if (ws === null && currentState !== 'connected') {
+  // Ensure a connection is initiated when someone is watching state,
+  // but respect any pending reconnect backoff
+  if (ws === null && currentState !== 'connected' && !reconnectTimeout) {
     connect();
   }
   // Immediately emit current state

@@ -1,13 +1,13 @@
 import { Router } from 'express';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, like } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
-import { smartMeetings } from '../db/pg-schema.js';
+import { smartMeetings, scheduledEvents } from '../db/pg-schema.js';
 import type { CreateMeetingRequest, SmartMeeting } from '@cadence/shared';
 import { createMeetingSchema, updateMeetingSchema } from '../validation.js';
 import { logActivity } from './activity.js';
 import { broadcastToUser } from '../ws.js';
 import { triggerReschedule } from '../polling-ref.js';
-import { sendValidationError, sendNotFound } from './helpers.js';
+import { sendValidationError, sendNotFound, validateUUID } from './helpers.js';
 
 const router = Router();
 
@@ -55,6 +55,7 @@ router.post('/', async (req, res) => {
 // PUT /api/meetings/:id — update a meeting
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(smartMeetings).where(and(eq(smartMeetings.id, id), eq(smartMeetings.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -95,6 +96,7 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/meetings/:id — delete a meeting
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(smartMeetings).where(and(eq(smartMeetings.id, id), eq(smartMeetings.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -102,6 +104,10 @@ router.delete('/:id', async (req, res) => {
     return;
   }
 
+  // Delete scheduled events that use meetingId__dateStr format
+  await db.delete(scheduledEvents).where(
+    and(like(scheduledEvents.itemId, `${id}%`), eq(scheduledEvents.userId, req.userId))
+  );
   await db.delete(smartMeetings).where(and(eq(smartMeetings.id, id), eq(smartMeetings.userId, req.userId)));
   await logActivity(req.userId, 'delete', 'meeting', id, { name: existing[0].name });
   broadcastToUser(req.userId, 'schedule_updated', 'Meeting deleted');

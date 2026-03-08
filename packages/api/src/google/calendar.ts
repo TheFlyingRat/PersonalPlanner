@@ -251,6 +251,10 @@ export class GoogleCalendarClient {
           }
         }
       } catch (err) {
+        // EDGE-H4: On 401, token is revoked — throw specific error for caller
+        if (isGoogleApiError(err) && err.code === 401) {
+          throw new Error('GOOGLE_AUTH_REVOKED');
+        }
         // EDGE-H3: On 429/503, stop the batch and return remaining ops as failed
         if (isGoogleApiError(err) && (err.code === 429 || err.code === 503)) {
           console.warn(`[calendar] Rate limited (${err.code}) at op ${i}/${operations.length}, stopping batch`);

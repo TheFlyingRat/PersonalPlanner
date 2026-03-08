@@ -1,7 +1,6 @@
 <script lang="ts">
   import { pageTitle } from '$lib/brand';
-  import { schedule, habits as habitsApi, tasks as tasksApi, meetings as meetingsApi, settings as settingsApi, quickAdd } from '$lib/api';
-  import type { QuickAddResult } from '$lib/api';
+  import { schedule, habits as habitsApi, tasks as tasksApi, meetings as meetingsApi, settings as settingsApi } from '$lib/api';
   import type { ScheduleChange } from '@cadence/shared';
   import { ScheduleChangeType } from '@cadence/shared';
   import ChevronLeft from 'lucide-svelte/icons/chevron-left';
@@ -16,7 +15,7 @@
   import MapPin from 'lucide-svelte/icons/map-pin';
   import Clock from 'lucide-svelte/icons/clock';
   import CalendarDays from 'lucide-svelte/icons/calendar-days';
-  import Zap from 'lucide-svelte/icons/zap';
+
   import History from 'lucide-svelte/icons/history';
   import ArrowRight from 'lucide-svelte/icons/arrow-right';
   import Plus from 'lucide-svelte/icons/plus';
@@ -327,62 +326,79 @@
     { type: 'external', label: 'External' },
   ];
 
+  function mapApiEvents(apiEvents: any[]): CalEvent[] {
+    const mapped: CalEvent[] = [];
+    for (const raw of apiEvents) {
+      const ev = raw as { start?: string; end?: string; title?: string; itemType?: string; id?: string; itemId?: string; status?: string; location?: string; calendarColor?: string; calendarName?: string; itemColor?: string; isAllDay?: boolean };
+      if (!ev.start || !ev.end) continue;
+      const isAllDay = !!ev.isAllDay;
+      const startDate = new Date(ev.start);
+      const endDateEv = new Date(ev.end);
+      if (isNaN(startDate.getTime()) || isNaN(endDateEv.getTime())) continue;
+      const dayOfWeek = getDayInTz(startDate);
+      const dayIndex = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      const startHour = isAllDay ? 0 : getHourInTz(startDate);
+      const durationMs = endDateEv.getTime() - startDate.getTime();
+      const duration = isAllDay ? 24 : durationMs / (1000 * 60 * 60);
+      const type = ev.itemType || 'manual';
+      mapped.push({
+        dayIndex,
+        startHour,
+        duration,
+        title: ev.title || '(No title)',
+        type: type as CalEvent['type'],
+        calendarColor: ev.calendarColor,
+        calendarName: ev.calendarName,
+        itemColor: ev.itemColor,
+        id: ev.id,
+        itemId: ev.itemId,
+        startISO: ev.start,
+        endISO: ev.end,
+        status: ev.status,
+        location: ev.location,
+        isAllDay: !!isAllDay,
+      });
+    }
+    return mapped;
+  }
+
+  function fetchWeekBounds() {
+    const weekDates = getWeekDates(currentWeekStart);
+    const mon = weekDates[0];
+    const startMs = midnightInTz(mon.getFullYear(), mon.getMonth(), mon.getDate());
+    const sun = weekDates[6];
+    const nextDay = new Date(sun);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const endMs = midnightInTz(nextDay.getFullYear(), nextDay.getMonth(), nextDay.getDate());
+    return {
+      start: new Date(startMs).toISOString(),
+      end: new Date(endMs).toISOString(),
+    };
+  }
+
   async function fetchEvents() {
     loading = true;
     error = '';
     try {
-      const weekDates = getWeekDates(currentWeekStart);
-      // Compute week boundaries as UTC instants corresponding to midnight in the user's timezone
-      const mon = weekDates[0];
-      const startMs = midnightInTz(mon.getFullYear(), mon.getMonth(), mon.getDate());
-      const sun = weekDates[6];
-      // End of Sunday = midnight of the next day
-      const nextDay = new Date(sun);
-      nextDay.setDate(nextDay.getDate() + 1);
-      const endMs = midnightInTz(nextDay.getFullYear(), nextDay.getMonth(), nextDay.getDate());
-
-      const start = new Date(startMs).toISOString();
-      const end = new Date(endMs).toISOString();
-
+      const { start, end } = fetchWeekBounds();
       const apiEvents = await schedule.getEvents(start, end);
-      const mapped: CalEvent[] = [];
-      for (const raw of apiEvents) {
-        const ev = raw as { start?: string; end?: string; title?: string; itemType?: string; id?: string; itemId?: string; status?: string; location?: string; calendarColor?: string; calendarName?: string; itemColor?: string; isAllDay?: boolean };
-        if (!ev.start || !ev.end) continue;
-        const isAllDay = ev.isAllDay || (!ev.start.includes('T') && !ev.end.includes('T'));
-        const startDate = new Date(ev.start);
-        const endDateEv = new Date(ev.end);
-        if (isNaN(startDate.getTime()) || isNaN(endDateEv.getTime())) continue;
-        const dayOfWeek = getDayInTz(startDate);
-        const dayIndex = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        const startHour = isAllDay ? 0 : getHourInTz(startDate);
-        const durationMs = endDateEv.getTime() - startDate.getTime();
-        const duration = isAllDay ? 24 : durationMs / (1000 * 60 * 60);
-        const type = ev.itemType || 'manual';
-        mapped.push({
-          dayIndex,
-          startHour,
-          duration,
-          title: ev.title || '(No title)',
-          type: type as CalEvent['type'],
-          calendarColor: ev.calendarColor,
-          calendarName: ev.calendarName,
-          itemColor: ev.itemColor,
-          id: ev.id,
-          itemId: ev.itemId,
-          startISO: ev.start,
-          endISO: ev.end,
-          status: ev.status,
-          location: ev.location,
-          isAllDay: !!isAllDay,
-        });
-      }
-      events = mapped;
+      events = mapApiEvents(apiEvents);
     } catch (err) {
       error = `Failed to load events: ${err instanceof Error ? err.message : 'Unknown error'}`;
       events = [];
     } finally {
       loading = false;
+    }
+  }
+
+  /** Silent refresh — updates events in-place without showing the loading skeleton. */
+  async function refreshEventsSilently() {
+    try {
+      const { start, end } = fetchWeekBounds();
+      const apiEvents = await schedule.getEvents(start, end);
+      events = mapApiEvents(apiEvents);
+    } catch {
+      // Silent refresh failure is non-critical; the user already has stale data visible
     }
   }
 
@@ -664,7 +680,7 @@
   $effect(() => {
     const unsubscribe = subscribeWs((msg) => {
       if (msg.type === 'schedule_updated') {
-        fetchEvents();
+        refreshEventsSilently();
         wsToast = msg.reason || 'Schedule updated';
         if (wsToastTimeout) clearTimeout(wsToastTimeout);
         wsToastTimeout = setTimeout(() => { wsToast = ''; }, 3000);
@@ -702,50 +718,6 @@
     }
     if (rect.bottom > window.innerHeight) {
       menu.style.top = `${window.innerHeight - rect.height - 8}px`;
-    }
-  }
-
-  // Quick-add state
-  let quickAddInput = $state('');
-  let quickAddSubmitting = $state(false);
-  let quickAddToast = $state('');
-  let quickAddToastType = $state<'success' | 'partial' | 'error'>('success');
-
-  $effect(() => {
-    if (quickAddToast) {
-      const timer = setTimeout(() => { quickAddToast = ''; }, 4000);
-      return () => clearTimeout(timer);
-    }
-  });
-
-  async function handleQuickAdd() {
-    const input = quickAddInput.trim();
-    if (!input) return;
-    quickAddSubmitting = true;
-    quickAddToast = '';
-    try {
-      const result = await quickAdd.parse(input);
-      if (result.created) {
-        quickAddInput = '';
-        quickAddToast = `${result.type.charAt(0).toUpperCase() + result.type.slice(1)} "${result.parsed.name}" created`;
-        quickAddToastType = 'success';
-        await fetchEvents();
-      } else {
-        quickAddToast = `Parsed as ${result.type} — open the ${result.type}s page to fill in missing details`;
-        quickAddToastType = 'partial';
-      }
-    } catch (err) {
-      quickAddToast = err instanceof Error ? err.message : 'Failed to parse input';
-      quickAddToastType = 'error';
-    } finally {
-      quickAddSubmitting = false;
-    }
-  }
-
-  function handleQuickAddKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleQuickAdd();
     }
   }
 
@@ -1035,34 +1007,6 @@
           {/each}
         </ul>
       {/if}
-    </div>
-  {/if}
-
-  <!-- Quick Add Bar -->
-  <div class="quick-add-bar">
-    <div class="quick-add-icon">
-      <Zap size={16} strokeWidth={1.5} />
-    </div>
-    <input
-      type="text"
-      class="quick-add-input"
-      bind:value={quickAddInput}
-      onkeydown={handleQuickAddKeydown}
-      placeholder="Quick add: 'Gym MWF 7am 1h' or 'Finish report by Friday 3h'"
-      aria-label="Quick add"
-      disabled={quickAddSubmitting}
-    />
-    <button
-      class="quick-add-btn"
-      onclick={handleQuickAdd}
-      disabled={quickAddSubmitting || !quickAddInput.trim()}
-    >
-      {quickAddSubmitting ? 'Adding...' : 'Add'}
-    </button>
-  </div>
-  {#if quickAddToast}
-    <div class="quick-add-toast quick-add-toast--{quickAddToastType}" aria-live="polite">
-      {quickAddToast}
     </div>
   {/if}
 
@@ -2349,95 +2293,6 @@
     @keyframes toast-in {
       from { opacity: 0; transform: translateY(0.5rem); }
       to { opacity: 1; transform: translateY(0); }
-    }
-  }
-
-  .quick-add-bar {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem;
-    margin: 0 1rem 0.5rem;
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    transition: border-color var(--transition-fast);
-
-    &:focus-within {
-      border-color: var(--color-accent);
-    }
-  }
-
-  .quick-add-icon {
-    color: var(--color-text-muted);
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-  }
-
-  .quick-add-input {
-    flex: 1;
-    background: transparent;
-    border: none;
-    outline: none;
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
-
-    &::placeholder {
-      color: var(--color-text-muted);
-    }
-
-    &:disabled {
-      opacity: 0.6;
-    }
-  }
-
-  .quick-add-btn {
-    flex-shrink: 0;
-    padding: 0.25rem 0.75rem;
-    background: var(--color-accent);
-    color: var(--color-bg-primary);
-    border: none;
-    border-radius: var(--radius-sm);
-    font-size: 0.75rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: opacity var(--transition-fast);
-
-    &:hover:not(:disabled) {
-      opacity: 0.9;
-    }
-
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-  }
-
-  .quick-add-toast {
-    margin: 0 1rem 0.5rem;
-    padding: 0.375rem 0.75rem;
-    border-radius: var(--radius-sm);
-    font-size: 0.75rem;
-    font-family: var(--font-mono);
-
-    &--success {
-      background: var(--color-habit-bg);
-      border: 1px solid var(--color-habit-border);
-      color: var(--color-text-primary);
-    }
-
-    &--partial {
-      background: var(--color-task-bg);
-      border: 1px solid var(--color-task-border);
-      color: var(--color-text-primary);
-    }
-
-    &--error {
-      background: var(--color-bg-error);
-      border: 1px solid var(--color-border-error);
-      color: var(--color-text-error);
     }
   }
 

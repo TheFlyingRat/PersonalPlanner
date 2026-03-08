@@ -48,7 +48,7 @@ const app = createTestApp('habits', habitsRouter);
 
 function makeHabitRow(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'habit-1',
+    id: '00000000-0000-0000-0000-000000000001',
     name: 'Morning Run',
     priority: 2,
     windowStart: '06:00',
@@ -203,7 +203,7 @@ describe('PUT /api/habits/:id', () => {
     mockDb._mockWhere.mockResolvedValueOnce([]);
 
     const res = await request(app)
-      .put('/api/habits/nonexistent')
+      .put('/api/habits/00000000-0000-0000-0000-000000000099')
       .send({ name: 'Updated' });
 
     expect(res.status).toBe(404);
@@ -220,7 +220,7 @@ describe('PUT /api/habits/:id', () => {
     mockDb._mockReturning.mockResolvedValueOnce([updated]);
 
     const res = await request(app)
-      .put('/api/habits/habit-1')
+      .put('/api/habits/00000000-0000-0000-0000-000000000001')
       .send({ name: 'Evening Run' });
 
     expect(res.status).toBe(200);
@@ -235,7 +235,7 @@ describe('DELETE /api/habits/:id', () => {
     mockDb._mockWhere.mockResolvedValueOnce([]);
 
     const res = await request(app)
-      .delete('/api/habits/nonexistent');
+      .delete('/api/habits/00000000-0000-0000-0000-000000000099');
 
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Habit not found');
@@ -246,7 +246,7 @@ describe('DELETE /api/habits/:id', () => {
     mockDb._mockWhere.mockResolvedValueOnce([existing]);
 
     const res = await request(app)
-      .delete('/api/habits/habit-1');
+      .delete('/api/habits/00000000-0000-0000-0000-000000000001');
 
     expect(res.status).toBe(204);
   });

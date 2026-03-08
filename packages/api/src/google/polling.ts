@@ -87,7 +87,11 @@ export class CalendarPoller {
 
       const externalChanges = this.filterExternalChanges(result.events);
 
-      // Update our local snapshot
+      // Update our local snapshot (cap size to prevent memory leak)
+      const MAX_EVENTS_CACHE = 10000;
+      if (this.lastEventsById.size > MAX_EVENTS_CACHE) {
+        this.lastEventsById.clear();
+      }
       for (const event of result.events) {
         if (event.googleEventId) {
           this.lastEventsById.set(event.googleEventId, event);

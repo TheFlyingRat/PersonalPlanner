@@ -51,8 +51,21 @@ sw.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/src/')
   ) return;
 
-  // API calls and WebSocket upgrades: network only (no caching)
-  if (url.pathname.startsWith('/api') || url.pathname.startsWith('/ws')) return;
+  // API calls: network-only with offline fallback
+  if (url.pathname.startsWith('/api')) {
+    event.respondWith(
+      fetch(request).catch(() =>
+        new Response(JSON.stringify({ error: 'You are offline' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+    );
+    return;
+  }
+
+  // WebSocket upgrades: pass through
+  if (url.pathname.startsWith('/ws')) return;
 
   // App shell assets: cache-first
   if (APP_SHELL.includes(url.pathname)) {

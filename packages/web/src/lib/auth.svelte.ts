@@ -32,11 +32,13 @@ async function authRequest<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let message = `Auth error: ${res.status}`;
+    let code: string | undefined;
     try {
       const body = await res.json();
       message = body.error ?? body.message ?? message;
+      code = body.code;
     } catch (_e) { /* no JSON body */ }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, code);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -49,6 +51,12 @@ let authState = $state<AuthState>({
   isLoading: true,
 });
 
+function setAuth(user: User | null) {
+  authState.user = user;
+  authState.isAuthenticated = !!user;
+  authState.isLoading = false;
+}
+
 export function getAuthState(): AuthState {
   return authState;
 }
@@ -58,10 +66,10 @@ export async function checkAuth(): Promise<User | null> {
   try {
     authState.isLoading = true;
     const user = await authRequest<User>('/auth/me');
-    authState = { user, isAuthenticated: true, isLoading: false };
+    setAuth(user);
     return user;
   } catch {
-    authState = { user: null, isAuthenticated: false, isLoading: false };
+    setAuth(null);
     return null;
   }
 }
@@ -71,16 +79,16 @@ export async function login(email: string, password: string): Promise<User> {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   });
-  authState = { user: result.user, isAuthenticated: true, isLoading: false };
+  setAuth(result.user);
   return result.user;
 }
 
-export async function signup(name: string, email: string, password: string): Promise<{ user: User; requiresVerification: boolean }> {
+export async function signup(name: string, email: string, password: string, gdprConsent = true): Promise<{ user: User; requiresVerification: boolean }> {
   const result = await authRequest<{ user: User; requiresVerification: boolean }>('/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ name, email, password }),
+    body: JSON.stringify({ name, email, password, gdprConsent }),
   });
-  authState = { user: result.user, isAuthenticated: true, isLoading: false };
+  setAuth(result.user);
   return result;
 }
 
@@ -90,7 +98,7 @@ export async function logout(): Promise<void> {
   } catch {
     // Even if server call fails, clear local state
   }
-  authState = { user: null, isAuthenticated: false, isLoading: false };
+  setAuth(null);
   if (browser) {
     await goto('/login');
   }
@@ -99,21 +107,25 @@ export async function logout(): Promise<void> {
 export async function refreshToken(): Promise<boolean> {
   try {
     const result = await authRequest<{ user: User }>('/auth/refresh', { method: 'POST' });
-    authState = { user: result.user, isAuthenticated: true, isLoading: false };
+    setAuth(result.user);
     return true;
   } catch {
-    authState = { user: null, isAuthenticated: false, isLoading: false };
+    setAuth(null);
     return false;
   }
 }
 
-export async function googleAuth(): Promise<void> {
+export async function googleAuth(prompt?: 'select_account'): Promise<void> {
   if (browser) {
-    const res = await fetch(`${API_BASE}/auth/google`, { credentials: 'include' });
+    const params = prompt ? `?prompt=${prompt}` : '';
+    const res = await fetch(`${API_BASE}/auth/google${params}`, { credentials: 'include' });
     if (!res.ok) {
       throw new Error('Too many requests. Please try again in a few minutes.');
     }
     const { redirectUrl } = await res.json();
+    if (!redirectUrl || !redirectUrl.startsWith('https://accounts.google.com/')) {
+      throw new Error('Invalid OAuth redirect URL');
+    }
     window.location.href = redirectUrl;
   }
 }

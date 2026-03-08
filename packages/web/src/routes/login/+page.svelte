@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { login, googleAuth } from '$lib/auth.svelte';
+  import { ApiError } from '$lib/api';
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
   import GoogleLogo from '$lib/components/auth/GoogleLogo.svelte';
   import Mail from 'lucide-svelte/icons/mail';
@@ -26,6 +27,11 @@
   let loginError = $state(oauthErrors[page.url.searchParams.get('error') ?? ''] ?? '');
   let emailError = $state('');
   let passwordError = $state('');
+
+  // If redirected back because prompt=none failed, retry with account picker
+  if (page.url.searchParams.get('google_retry') === '1') {
+    googleAuth('select_account');
+  }
 
   async function handleSignIn(e: SubmitEvent) {
     e.preventDefault();
@@ -51,6 +57,11 @@
         await goto('/');
       }
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'GOOGLE_ACCOUNT') {
+        loginError = 'This account uses Google sign-in. Redirecting...';
+        googleAuth();
+        return;
+      }
       loginError = err instanceof Error ? err.message : 'Sign in failed. Please try again.';
     } finally {
       submitting = false;

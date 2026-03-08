@@ -16,8 +16,18 @@
   let showPassword = $state(false);
   let submitting = $state(false);
   let formError = $state('');
+  let tokenError = $state('');
   let success = $state(false);
   let redirectTimer: ReturnType<typeof setTimeout> | undefined;
+
+  $effect(() => {
+    const t = page.url.searchParams.get('token');
+    if (!t) {
+      tokenError = 'Invalid or missing reset token. Please request a new password reset link.';
+    } else {
+      tokenError = '';
+    }
+  });
 
   onDestroy(() => {
     if (redirectTimer) clearTimeout(redirectTimer);
@@ -84,6 +94,15 @@
     <div class="verify-content">
       <h1 class="auth-title">Password updated!</h1>
       <p class="auth-subtitle">Redirecting to sign in...</p>
+    </div>
+  {:else if tokenError}
+    <div class="verify-content">
+      <h1 class="auth-title">Invalid reset link</h1>
+      <p class="auth-subtitle">{tokenError}</p>
+      <div class="verify-actions">
+        <a href="/forgot-password" class="auth-btn-primary">Request new reset link</a>
+        <a href="/login" class="auth-link">Back to sign in</a>
+      </div>
     </div>
   {:else}
     <h1 class="auth-title">Set a new password</h1>

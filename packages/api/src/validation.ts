@@ -62,13 +62,13 @@ export const createMeetingSchema = z.object({
   name: z.string().min(1).max(200),
   priority: z.number().int().min(1).max(4).optional(),
   attendees: z.array(z.string().email()).max(50).optional(),
-  duration: z.number().int().positive(),
+  duration: z.number().int().positive().max(1440),
   frequency: z.enum(['daily', 'weekly', 'monthly', 'custom']),
   idealTime: z.string().regex(timeRegex, 'Must be HH:MM format'),
   windowStart: z.string().regex(timeRegex, 'Must be HH:MM format'),
   windowEnd: z.string().regex(timeRegex, 'Must be HH:MM format'),
-  location: z.string().optional(),
-  conferenceType: z.string().optional(),
+  location: z.string().max(500).optional(),
+  conferenceType: z.string().max(100).optional(),
   skipBuffer: z.boolean().optional(),
   calendarId: z.string().max(256).optional(),
   color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
@@ -85,9 +85,9 @@ export const createFocusSchema = z.object({
 });
 
 export const createBufferSchema = z.object({
-  travelTimeMinutes: z.number().int().min(0),
-  decompressionMinutes: z.number().int().min(0),
-  breakBetweenItemsMinutes: z.number().int().min(0),
+  travelTimeMinutes: z.number().int().min(0).max(480),
+  decompressionMinutes: z.number().int().min(0).max(480),
+  breakBetweenItemsMinutes: z.number().int().min(0).max(480),
   applyDecompressionTo: z.enum(['all', 'video_only']).optional(),
 });
 
@@ -130,7 +130,6 @@ export const updateTaskSchema = z.object({
   skipBuffer: z.boolean().optional(),
   calendarId: z.string().max(256).optional(),
   color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
-  remainingDuration: z.number().int().positive().optional(),
   status: z.enum(['open', 'done_scheduling', 'completed']).optional(),
   isUpNext: z.boolean().optional(),
 }).refine(
@@ -142,13 +141,13 @@ export const updateMeetingSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   priority: z.number().int().min(1).max(4).optional(),
   attendees: z.array(z.string().email()).max(50).optional(),
-  duration: z.number().int().positive().optional(),
+  duration: z.number().int().positive().max(1440).optional(),
   frequency: z.enum(['daily', 'weekly', 'monthly', 'custom']).optional(),
   idealTime: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
   windowStart: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
   windowEnd: z.string().regex(timeRegex, 'Must be HH:MM format').optional(),
-  location: z.string().optional(),
-  conferenceType: z.string().optional(),
+  location: z.string().max(500).optional(),
+  conferenceType: z.string().max(100).optional(),
   skipBuffer: z.boolean().optional(),
   calendarId: z.string().max(256).optional(),
   color: z.string().regex(hexColorRegex, 'Must be hex color #RRGGBB').optional(),
@@ -168,8 +167,8 @@ export const moveEventSchema = z.object({
 
 export const createLinkSchema = z.object({
   name: z.string().min(1).max(200),
-  slug: z.string().regex(/^[a-z0-9-]+$/, 'Slug must contain only lowercase letters, numbers, and hyphens'),
-  durations: z.array(z.number().int().positive()).min(1),
+  slug: z.string().regex(/^[a-z0-9-]+$/, 'Slug must contain only lowercase letters, numbers, and hyphens').max(100),
+  durations: z.array(z.number().int().positive().max(1440)).min(1).max(20),
   schedulingHours: z.enum(['working', 'personal', 'custom']).optional(),
   priority: z.number().int().min(1).max(4).optional(),
 });
@@ -211,8 +210,8 @@ export const bookingRequestSchema = z.object({
 export const linkBookingSchema = z.object({
   start: z.string().datetime({ offset: true }),
   end: z.string().datetime({ offset: true }),
-  name: z.string().max(200).optional(),
-  email: z.string().email().max(254).optional(),
+  name: z.string().min(1).max(200),
+  email: z.string().email().max(254),
 }).refine(data => new Date(data.start) < new Date(data.end), {
   message: 'End must be after start',
 });

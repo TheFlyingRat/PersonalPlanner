@@ -70,6 +70,14 @@ router.put('/', async (req, res) => {
   });
 });
 
+// POST /api/settings/onboarding/complete — mark onboarding as completed
+router.post('/onboarding/complete', async (req, res) => {
+  await db.update(users)
+    .set({ onboardingCompleted: true, updatedAt: new Date().toISOString() })
+    .where(eq(users.id, req.userId));
+  res.json({ onboardingCompleted: true });
+});
+
 // GET /api/settings/google/status — check if Google is connected
 router.get('/google/status', async (req, res) => {
   const userRows = await db.select().from(users).where(eq(users.id, req.userId));

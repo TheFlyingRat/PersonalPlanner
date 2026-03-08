@@ -27,6 +27,8 @@ import { CalendarMode } from '@cadence/shared';
 
 const API_BASE = PUBLIC_API_URL || '/api';
 
+let refreshPromise: Promise<boolean> | null = null;
+
 export interface RescheduleResult {
   message: string;
   operationsApplied: number;
@@ -41,6 +43,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -59,22 +62,38 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (!res.ok) {
     // 401 interceptor: try refresh, then redirect to login
     if (res.status === 401 && !path.startsWith('/auth/')) {
-      try {
-        const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
-          method: 'POST',
-          credentials: 'include',
-        });
-        if (refreshRes.ok) {
-          // Retry the original request
-          return request<T>(path, options);
-        }
-      } catch {
-        // refresh failed
+      if (!refreshPromise) {
+        refreshPromise = (async () => {
+          try {
+            const refreshRes = await fetch(`${API_BASE}/auth/refresh`, {
+              method: 'POST',
+              credentials: 'include',
+            });
+            return refreshRes.ok;
+          } catch {
+            return false;
+          } finally {
+            refreshPromise = null;
+          }
+        })();
       }
-      // Redirect to login if refresh failed
+      const refreshed = await refreshPromise;
+      if (refreshed) {
+        return request<T>(path, options);
+      }
       if (typeof window !== 'undefined') {
         window.location.href = '/login';
       }
+    }
+    // Handle 403 EMAIL_NOT_VERIFIED
+    if (res.status === 403) {
+      try {
+        const body = await res.json();
+        if (body.code === 'EMAIL_NOT_VERIFIED' && typeof window !== 'undefined') {
+          window.location.href = '/verify-email';
+          return undefined as T;
+        }
+      } catch { /* no JSON body */ }
     }
     let message = `API error: ${res.status}`;
     try {
@@ -303,6 +322,8 @@ export const settings = {
     request<void>('/settings/google/disconnect', { method: 'POST' }),
   getGoogleStatus: () =>
     request<{ connected: boolean }>('/auth/google/status'),
+  completeOnboarding: () =>
+    request<{ onboardingCompleted: boolean }>('/settings/onboarding/complete', { method: 'POST' }),
 };
 
 export interface QuickAddResult {
@@ -336,10 +357,10 @@ export const auth = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
-  signup: (name: string, email: string, password: string) =>
+  signup: (name: string, email: string, password: string, gdprConsent = true) =>
     request<{ user: { id: string; name: string; email: string; emailVerified: boolean; onboardingCompleted: boolean }; requiresVerification: boolean }>('/auth/signup', {
       method: 'POST',
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, email, password, gdprConsent }),
     }),
   logout: () =>
     request<void>('/auth/logout', { method: 'POST' }),
@@ -353,6 +374,9 @@ export const auth = {
       throw new ApiError('Failed to start Google auth', res.status);
     }
     const { redirectUrl } = await res.json();
+    if (!redirectUrl || !redirectUrl.startsWith('https://accounts.google.com/')) {
+      throw new ApiError('Invalid OAuth redirect URL', 400);
+    }
     window.location.href = redirectUrl;
   },
   verifyEmail: (token: string) =>

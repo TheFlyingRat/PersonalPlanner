@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { eq, and, gte, lte } from 'drizzle-orm';
+import rateLimit from 'express-rate-limit';
 import { db } from '../db/pg-index.js';
 import { schedulingLinks, scheduledEvents, calendarEvents, calendars, users } from '../db/pg-schema.js';
 import type { UserSettings, BookingSlot, BookingConfirmation, BookingLinkInfo } from '@cadence/shared';
@@ -8,6 +9,14 @@ import { bookingAvailabilitySchema, bookingRequestSchema } from '../validation.j
 import { sendValidationError, sendNotFound, sendError } from './helpers.js';
 
 const router = Router();
+
+const bookingAvailabilityLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many availability requests, please try again later.' },
+});
 
 function getHoursWindow(
   schedulingHours: SchedulingHours,
@@ -176,7 +185,7 @@ router.get('/:slug', async (req, res) => {
 });
 
 // GET /api/book/:slug/availability?date=YYYY-MM-DD&duration=30
-router.get('/:slug/availability', async (req, res) => {
+router.get('/:slug/availability', bookingAvailabilityLimiter, async (req, res) => {
   const { slug } = req.params;
   const linkRows = await db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, slug));
 

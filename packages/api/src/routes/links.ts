@@ -5,7 +5,7 @@ import { schedulingLinks, scheduledEvents, users } from '../db/pg-schema.js';
 import type { CreateLinkRequest, SchedulingLink, UserSettings } from '@cadence/shared';
 import { SchedulingHours } from '@cadence/shared';
 import { createLinkSchema, updateLinkSchema, linkBookingSchema } from '../validation.js';
-import { sendValidationError, sendNotFound, sendError } from './helpers.js';
+import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 
 const router = Router();
 
@@ -49,6 +49,7 @@ router.post('/', async (req, res) => {
 // PUT /api/links/:id — update a scheduling link
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(schedulingLinks).where(and(eq(schedulingLinks.id, id), eq(schedulingLinks.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -89,6 +90,7 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/links/:id — delete a scheduling link
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(schedulingLinks).where(and(eq(schedulingLinks.id, id), eq(schedulingLinks.userId, req.userId)));
 
   if (existing.length === 0) {

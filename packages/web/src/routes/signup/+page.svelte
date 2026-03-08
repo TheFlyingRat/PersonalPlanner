@@ -2,6 +2,7 @@
   import { pageTitle } from '$lib/brand';
   import { goto } from '$app/navigation';
   import { signup, googleAuth } from '$lib/auth.svelte';
+  import { ApiError } from '$lib/api';
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
   import GoogleLogo from '$lib/components/auth/GoogleLogo.svelte';
   import User from 'lucide-svelte/icons/user';
@@ -66,6 +67,11 @@
         await goto('/onboarding');
       }
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'GOOGLE_ACCOUNT') {
+        formError = 'This email uses Google sign-in. Redirecting...';
+        googleAuth();
+        return;
+      }
       formError = err instanceof Error ? err.message : 'Sign up failed. Please try again.';
     } finally {
       submitting = false;

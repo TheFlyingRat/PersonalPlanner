@@ -2,12 +2,18 @@
 // Intl.DateTimeFormat cache — avoids repeated allocations (PERF-M1)
 // ============================================================
 
+const MAX_FORMATTER_CACHE_SIZE = 500;
 const formatterCache = new Map<string, Intl.DateTimeFormat>();
 
 export function getFormatter(tz: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
   const key = tz + JSON.stringify(options);
   let fmt = formatterCache.get(key);
   if (!fmt) {
+    if (formatterCache.size >= MAX_FORMATTER_CACHE_SIZE) {
+      // Evict oldest entry (first inserted)
+      const firstKey = formatterCache.keys().next().value;
+      if (firstKey !== undefined) formatterCache.delete(firstKey);
+    }
     fmt = new Intl.DateTimeFormat('en-US', { ...options, timeZone: tz });
     formatterCache.set(key, fmt);
   }

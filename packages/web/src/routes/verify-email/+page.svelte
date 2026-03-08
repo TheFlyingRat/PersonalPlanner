@@ -10,6 +10,7 @@
 
   let email = $derived(page.url.searchParams.get('email') ?? '');
   let token = $derived(page.url.searchParams.get('token') ?? '');
+  let manualEmail = $state('');
   let verifying = $state(false);
   let verified = $state(false);
   let verifyError = $state('');
@@ -41,10 +42,12 @@
     }
   }
 
+  let resendTarget = $derived(email || manualEmail);
+
   async function resendEmail() {
-    if (resendCooldown > 0 || !email) return;
+    if (resendCooldown > 0 || !resendTarget) return;
     try {
-      await resendVerification(email);
+      await resendVerification(resendTarget);
       resendCooldown = 60;
       resendTimer = setInterval(() => {
         resendCooldown -= 1;
@@ -111,11 +114,27 @@
         <p class="verify-spam">Don't see it? Check your spam folder.</p>
       </div>
 
+      {#if !email}
+        <div class="auth-field">
+          <label for="manual-email">Enter your email to resend the verification link:</label>
+          <div class="auth-input-wrap">
+            <Mail size={18} class="auth-input-icon" />
+            <input
+              id="manual-email"
+              type="email"
+              placeholder="your@email.com"
+              bind:value={manualEmail}
+              autocomplete="email"
+            />
+          </div>
+        </div>
+      {/if}
+
       <div class="verify-actions">
         <button
           class="auth-btn-primary"
           onclick={resendEmail}
-          disabled={resendCooldown > 0 || !email}
+          disabled={resendCooldown > 0 || !resendTarget}
         >
           {#if resendCooldown > 0}
             Resend in {resendCooldown}s

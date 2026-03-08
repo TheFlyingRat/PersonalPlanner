@@ -18,6 +18,12 @@ const { mockDb } = vi.hoisted(() => {
       insert: vi.fn().mockReturnValue({ values: mockValues }),
       update: vi.fn().mockReturnValue({ set: mockSet }),
       delete: vi.fn().mockReturnValue({ where: mockDeleteWhere }),
+      transaction: vi.fn().mockImplementation(async (cb: any) => cb({
+        select: vi.fn().mockReturnValue({ from: mockFrom }),
+        insert: vi.fn().mockReturnValue({ values: mockValues }),
+        update: vi.fn().mockReturnValue({ set: mockSet }),
+        delete: vi.fn().mockReturnValue({ where: mockDeleteWhere }),
+      })),
       _mockWhere: mockWhere,
       _mockFrom: mockFrom,
       _mockValues: mockValues,

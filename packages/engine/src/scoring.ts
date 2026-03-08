@@ -14,7 +14,7 @@ function parseTimeToMinutes(hhmm: string): number {
     return 0;
   }
   const [h, m] = hhmm.split(':').map(Number);
-  return h * 60 + m;
+  return Math.min(23, Math.max(0, h)) * 60 + Math.min(59, Math.max(0, m));
 }
 
 /**
@@ -88,7 +88,8 @@ function scoreIdealTimeProximity(slot: CandidateSlot, item: ScheduleItem, tz?: s
   const idealMinutes = parseTimeToMinutes(item.idealTime);
   const slotMinutes = dateToMinutesSinceMidnight(slot.start, tz);
 
-  const diff = Math.abs(slotMinutes - idealMinutes);
+  const rawDiff = Math.abs(slotMinutes - idealMinutes);
+  const diff = Math.min(rawDiff, 1440 - rawDiff);
 
   // Gaussian decay: sigma = 75 min
   // On-target: 1.0, 30min off: 0.92, 60min off: 0.73, 2h off: 0.28

@@ -4,8 +4,8 @@
   import { page, navigating } from '$app/state';
   import { goto } from '$app/navigation';
   import { browser } from '$app/environment';
-  import { tick, onMount, onDestroy } from 'svelte';
-  import { subscribeConnectionState } from '$lib/ws';
+  import { tick, onMount, onDestroy, untrack } from 'svelte';
+  import { subscribeConnectionState, disconnect as disconnectWs } from '$lib/ws';
   import type { ConnectionState } from '$lib/ws';
   import WifiOff from 'lucide-svelte/icons/wifi-off';
   import Wifi from 'lucide-svelte/icons/wifi';
@@ -23,7 +23,10 @@
   import Menu from 'lucide-svelte/icons/menu';
   import X from 'lucide-svelte/icons/x';
   import Loader from 'lucide-svelte/icons/loader';
+  import LogOut from 'lucide-svelte/icons/log-out';
+  import ChevronUp from 'lucide-svelte/icons/chevron-up';
   import { search as searchApi } from '$lib/api';
+  import { logout, getAuthState } from '$lib/auth.svelte';
 
   let { children } = $props();
 
@@ -37,6 +40,8 @@
   let searchError = $state('');
   let selectedIndex = $state(-1);
   let isMac = $state(true);
+  let profileMenuOpen = $state(false);
+  let profileTriggerEl: HTMLButtonElement | undefined;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined;
   let searchAbortController: AbortController | undefined;
   let previousFocus: HTMLElement | null = null;
@@ -168,22 +173,32 @@
   });
 
   $effect(() => {
+    // Track isPublicRoute so the effect re-runs on navigation
+    if (isPublicRoute) {
+      disconnectWs();
+      return;
+    }
+
     const unsub = subscribeConnectionState((state) => {
-      const prevState = connectionState;
-      connectionState = state;
+      // untrack prevents Svelte 5 from tracking $state reads inside this
+      // synchronously-called handler, which would cause an infinite effect loop
+      untrack(() => {
+        const prevState = connectionState;
+        connectionState = state;
 
-      if (state === 'disconnected' || state === 'reconnecting') {
-        wasDisconnected = true;
-        showRecoveryToast = false;
-        if (recoveryToastTimer) clearTimeout(recoveryToastTimer);
-      }
+        if (state === 'disconnected' || state === 'reconnecting') {
+          wasDisconnected = true;
+          showRecoveryToast = false;
+          if (recoveryToastTimer) clearTimeout(recoveryToastTimer);
+        }
 
-      if (state === 'connected' && wasDisconnected && prevState !== 'connected') {
-        wasDisconnected = false;
-        showRecoveryToast = true;
-        if (recoveryToastTimer) clearTimeout(recoveryToastTimer);
-        recoveryToastTimer = setTimeout(() => { showRecoveryToast = false; }, 3000);
-      }
+        if (state === 'connected' && wasDisconnected && prevState !== 'connected') {
+          wasDisconnected = false;
+          showRecoveryToast = true;
+          if (recoveryToastTimer) clearTimeout(recoveryToastTimer);
+          recoveryToastTimer = setTimeout(() => { showRecoveryToast = false; }, 3000);
+        }
+      });
     });
     return () => unsub();
   });
@@ -254,6 +269,41 @@
     AUTH_ROUTES.some((r) => page.url.pathname.startsWith(r))
   );
   let isPublicRoute = $derived(isBookingRoute || isAuthRoute);
+
+  const auth = getAuthState();
+  let userFirstName = $derived(auth.user?.name?.split(' ')[0] ?? '');
+  let userInitials = $derived(
+    auth.user?.name
+      ?.split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2) ?? ''
+  );
+
+  function toggleProfileMenu() {
+    profileMenuOpen = !profileMenuOpen;
+  }
+
+  function closeProfileMenu() {
+    profileMenuOpen = false;
+  }
+
+  function handleProfileAction(action: 'settings' | 'logout') {
+    closeProfileMenu();
+    closeMobile();
+    if (action === 'settings') {
+      goto('/settings');
+    } else {
+      logout();
+    }
+  }
+
+  function handleProfileMenuKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      closeProfileMenu();
+    }
+  }
 </script>
 
 <svelte:window onkeydown={isPublicRoute ? undefined : handleGlobalKeydown} />
@@ -320,10 +370,8 @@
           <span>Searching...</span>
         </div>
       {:else if searchError}
-        <div class="search-error">{searchError}</div>
-      {:else if searchQuery.trim().length >= 2 && searchResults.length === 0}
-        <div class="search-empty">No results found</div>
-      {:else}
+        <div class="search-empty search-empty--error">{searchError}</div>
+      {:else if searchResults.length > 0}
         {#each searchResults as result, i (result.id)}
           {@const Icon = typeIcons[result.type] || Calendar}
           <button
@@ -338,6 +386,27 @@
             <span class="search-result-type">{result.type}</span>
           </button>
         {/each}
+      {:else}
+        <div class="search-hint">
+          {#if searchQuery.trim().length >= 2}
+            <span class="search-hint-text">no matches</span>
+          {:else}
+            <div class="search-hint-shortcuts">
+              <div class="search-hint-row">
+                <span class="search-hint-keys"><kbd>↑</kbd><kbd>↓</kbd></span>
+                <span class="search-hint-label">navigate</span>
+              </div>
+              <div class="search-hint-row">
+                <span class="search-hint-keys"><kbd>↵</kbd></span>
+                <span class="search-hint-label">open</span>
+              </div>
+              <div class="search-hint-row">
+                <span class="search-hint-keys"><kbd>esc</kbd></span>
+                <span class="search-hint-label">close</span>
+              </div>
+            </div>
+          {/if}
+        </div>
       {/if}
     </div>
   </div>
@@ -373,11 +442,24 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <aside class="sidebar" class:mobile-open={mobileOpen} aria-label="Application sidebar" onkeydown={handleSidebarKeydown}>
     <div class="sidebar-header">
-      {#if !collapsed}
-        <span class="sidebar-logo">C</span>
-        <span class="sidebar-brand">{BRAND.name}</span>
+      {#if collapsed}
+        <button
+          class="sidebar-logo sidebar-logo--btn"
+          onclick={toggleCollapsed}
+          aria-label="Expand sidebar"
+          title="Expand sidebar"
+        >C</button>
       {:else}
         <span class="sidebar-logo">C</span>
+        <span class="sidebar-brand">{BRAND.name}</span>
+        <button
+          class="collapse-btn"
+          onclick={toggleCollapsed}
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar"
+        >
+          <PanelLeftClose size={16} strokeWidth={1.5} />
+        </button>
       {/if}
     </div>
 
@@ -430,39 +512,52 @@
         </a>
       {/each}
 
-      <div class="sidebar-divider"></div>
-
-      <a
-        href="/settings"
-        onclick={closeMobile}
-        class="nav-item"
-        class:active={isActive('/settings')}
-        title={collapsed ? 'Settings' : undefined}
-        aria-label={collapsed ? 'Settings' : undefined}
-        aria-current={isActive('/settings') ? 'page' : undefined}
-      >
-        <Settings size={20} strokeWidth={1.5} />
-        {#if !collapsed}
-          <span class="nav-label">Settings</span>
-        {/if}
-      </a>
     </nav>
 
-    <div class="sidebar-footer">
+    <!-- Profile -->
+    <div class="profile-section">
       <button
-        class="collapse-btn"
-        onclick={toggleCollapsed}
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        class="profile-trigger"
+        bind:this={profileTriggerEl}
+        onclick={toggleProfileMenu}
+        aria-expanded={profileMenuOpen}
+        aria-haspopup="menu"
+        title={collapsed ? (auth.user?.name ?? 'Profile') : undefined}
       >
-        {#if collapsed}
-          <PanelLeftOpen size={20} strokeWidth={1.5} />
+        {#if auth.user?.avatarUrl}
+          <img class="profile-avatar" src={auth.user.avatarUrl} alt="" />
         {:else}
-          <PanelLeftClose size={20} strokeWidth={1.5} />
+          <span class="profile-avatar profile-avatar--initials">{userInitials}</span>
+        {/if}
+        {#if !collapsed}
+          <span class="profile-name">Hey, {userFirstName}</span>
+          <ChevronUp size={14} strokeWidth={1.5} class="profile-chevron" />
         {/if}
       </button>
     </div>
   </aside>
+
+  {#if profileMenuOpen}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div class="profile-menu-overlay" onkeydown={handleProfileMenuKeydown}>
+      <button class="profile-menu-backdrop" onclick={closeProfileMenu} aria-label="Close menu" tabindex="-1"></button>
+      <div
+        class="profile-menu"
+        role="menu"
+        style="left: {profileTriggerEl?.getBoundingClientRect().left ?? 0}px; bottom: {window.innerHeight - (profileTriggerEl?.getBoundingClientRect().top ?? 0) + 4}px;"
+      >
+        <button class="profile-menu-item" role="menuitem" onclick={() => handleProfileAction('settings')}>
+          <Settings size={16} strokeWidth={1.5} />
+          <span>Settings</span>
+        </button>
+        <div class="profile-menu-divider"></div>
+        <button class="profile-menu-item profile-menu-item--danger" role="menuitem" onclick={() => handleProfileAction('logout')}>
+          <LogOut size={16} strokeWidth={1.5} />
+          <span>Sign out</span>
+        </button>
+      </div>
+    </div>
+  {/if}
 
   <main id="main-content" class="main-content">
     {@render children()}
@@ -502,8 +597,35 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    padding: var(--space-4) var(--space-4);
+    padding: var(--space-3) var(--space-4);
     height: 56px;
+
+    .sidebar-collapsed & {
+      justify-content: center;
+      padding: var(--space-3);
+    }
+  }
+
+  .collapse-btn {
+    @include flex-center;
+    margin-left: auto;
+    padding: var(--space-1);
+    border: none;
+    background: none;
+    color: var(--color-text-tertiary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+    flex-shrink: 0;
+
+    &:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-text-secondary);
+    }
+
+    .sidebar-collapsed & {
+      display: none;
+    }
   }
 
   .sidebar-logo {
@@ -516,6 +638,16 @@
     font-weight: 700;
     font-size: 14px;
     flex-shrink: 0;
+
+    &--btn {
+      border: none;
+      cursor: pointer;
+      transition: opacity var(--transition-fast);
+
+      &:hover {
+        opacity: 0.85;
+      }
+    }
   }
 
   .sidebar-brand {
@@ -529,6 +661,10 @@
     height: 1px;
     background: var(--color-border);
     margin: var(--space-2) 0;
+
+    .sidebar-collapsed & {
+      margin: var(--space-1) var(--space-2);
+    }
   }
 
   .nav-search {
@@ -566,6 +702,11 @@
     flex: 1;
     @include flex-col;
     padding: var(--space-1) var(--space-2);
+
+    .sidebar-collapsed & {
+      align-items: center;
+      padding: var(--space-1) 0;
+    }
   }
 
   .nav-item {
@@ -594,32 +735,164 @@
       color: var(--color-accent);
       border-left-color: var(--color-accent);
     }
+
+    .sidebar-collapsed & {
+      @include flex-center;
+      width: 36px;
+      height: 36px;
+      min-height: 36px;
+      padding: 0;
+      border-left: none;
+      border-radius: var(--radius-md);
+    }
   }
 
   .nav-label {
     @include text-truncate;
   }
 
-  .sidebar-footer {
+  // ---- Profile Section ----
+
+  .profile-section {
+    position: relative;
     padding: var(--space-2);
     border-top: 1px solid var(--color-border);
+
+    .sidebar-collapsed & {
+      @include flex-center;
+      padding: var(--space-2) 0;
+    }
   }
 
-  .collapse-btn {
-    @include flex-center;
+  .profile-trigger {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
     width: 100%;
     padding: var(--space-2);
     border: none;
     background: none;
-    color: var(--color-text-tertiary);
     border-radius: var(--radius-md);
     cursor: pointer;
-    transition: background var(--transition-fast), color var(--transition-fast);
+    transition: background var(--transition-fast);
+    text-align: left;
+    overflow: hidden;
 
     &:hover {
       background: var(--color-surface-hover);
-      color: var(--color-text-secondary);
     }
+
+    .sidebar-collapsed & {
+      @include flex-center;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+    }
+  }
+
+  .profile-avatar {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    object-fit: cover;
+
+    .sidebar-collapsed & {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+    }
+
+    &--initials {
+      @include flex-center;
+      background: var(--color-accent);
+      color: var(--color-accent-text);
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+  }
+
+  .profile-name {
+    flex: 1;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--color-text);
+    @include text-truncate;
+  }
+
+  :global(.profile-chevron) {
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+    transition: transform var(--transition-fast);
+  }
+
+  .profile-trigger[aria-expanded='true'] :global(.profile-chevron) {
+    transform: rotate(180deg);
+  }
+
+  .profile-menu-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: $z-dropdown;
+    pointer-events: none;
+
+    > * {
+      pointer-events: auto;
+    }
+  }
+
+  .profile-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    background: transparent;
+    border: none;
+    cursor: default;
+  }
+
+  .profile-menu {
+    position: fixed;
+    min-width: 160px;
+    width: max-content;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.15));
+    padding: var(--space-1);
+    white-space: nowrap;
+  }
+
+  .profile-menu-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: none;
+    background: none;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    font-size: 0.8125rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+    white-space: nowrap;
+
+    &:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-text);
+    }
+
+    &--danger:hover {
+      color: var(--color-error, #ef4444);
+    }
+  }
+
+  .profile-menu-divider {
+    height: 1px;
+    background: var(--color-border);
+    margin: var(--space-1) 0;
   }
 
   // ---- Main Content ----
@@ -756,6 +1029,57 @@
     padding: var(--space-6);
     color: var(--color-text-tertiary);
     font-size: 0.875rem;
+
+    &--error {
+      color: var(--color-text-error);
+    }
+  }
+
+  .search-hint {
+    @include flex-center;
+    padding: var(--space-6) var(--space-4);
+  }
+
+  .search-hint-text {
+    font-size: 0.875rem;
+    font-family: $font-mono;
+    color: var(--color-text-tertiary);
+    letter-spacing: 0.05em;
+  }
+
+  .search-hint-shortcuts {
+    display: flex;
+    gap: var(--space-6);
+  }
+
+  .search-hint-row {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .search-hint-keys {
+    display: flex;
+    gap: 2px;
+
+    kbd {
+      font-family: $font-mono;
+      font-size: 0.6875rem;
+      padding: 2px 6px;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      color: var(--color-text-secondary);
+      background: var(--color-bg-secondary, transparent);
+      line-height: 1.4;
+    }
+  }
+
+  .search-hint-label {
+    font-size: 0.6875rem;
+    font-family: $font-mono;
+    color: var(--color-text-tertiary);
+    letter-spacing: 0.03em;
   }
 
   .search-result {
@@ -860,12 +1184,6 @@
   }
 
   // Search error state
-  .search-error {
-    @include flex-center;
-    padding: var(--space-6);
-    color: var(--color-danger, #ef4444);
-    font-size: 0.875rem;
-  }
 
   // Selected search result (arrow key nav)
   .search-result.selected {

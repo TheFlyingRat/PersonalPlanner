@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { like, and, eq } from 'drizzle-orm';
+import { ilike, and, eq } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
 import { habits, tasks, smartMeetings, calendarEvents } from '../db/pg-schema.js';
 import { sendError } from './helpers.js';
@@ -23,10 +23,10 @@ router.get('/', async (req, res) => {
   const userId = req.userId;
 
   const [habitResults, taskResults, meetingResults, eventResults] = await Promise.all([
-    db.select().from(habits).where(and(eq(habits.userId, userId), like(habits.name, pattern))),
-    db.select().from(tasks).where(and(eq(tasks.userId, userId), like(tasks.name, pattern))),
-    db.select().from(smartMeetings).where(and(eq(smartMeetings.userId, userId), like(smartMeetings.name, pattern))),
-    db.select().from(calendarEvents).where(and(eq(calendarEvents.userId, userId), like(calendarEvents.title, pattern))),
+    db.select().from(habits).where(and(eq(habits.userId, userId), ilike(habits.name, pattern))),
+    db.select().from(tasks).where(and(eq(tasks.userId, userId), ilike(tasks.name, pattern))),
+    db.select().from(smartMeetings).where(and(eq(smartMeetings.userId, userId), ilike(smartMeetings.name, pattern))),
+    db.select().from(calendarEvents).where(and(eq(calendarEvents.userId, userId), ilike(calendarEvents.title, pattern))),
   ]);
 
   res.json({

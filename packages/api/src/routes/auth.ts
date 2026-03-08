@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, and, gt, sql } from 'drizzle-orm';
+import { eq, and, gt, ne, sql } from 'drizzle-orm';
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { db, pool as getPool } from '../db/pg-index.js';
@@ -119,6 +119,7 @@ async function createSession(
     userId: user.id,
     email: user.email,
     plan: user.plan,
+    emailVerified: !!user.emailVerified,
   });
 
   const refreshToken = generateRefreshToken();
@@ -162,7 +163,11 @@ router.post('/signup', signupLimiter, async (req, res) => {
   // Check if email already exists
   const existing = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
   if (existing.length > 0) {
-    sendError(res, 409, 'An account with this email already exists');
+    if (existing[0].googleId) {
+      res.status(409).json({ error: 'An account with this email uses Google sign-in.', code: 'GOOGLE_ACCOUNT' });
+    } else {
+      sendError(res, 409, 'An account with this email already exists');
+    }
     return;
   }
 
@@ -216,8 +221,19 @@ router.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = parsed.data;
 
   const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
-  if (!user || !user.passwordHash) {
+  if (!user) {
     // Run bcrypt against a dummy hash to equalize response timing (prevent timing oracle)
+    await verifyPassword(password, '$2b$12$000000000000000000000uGbOQPJ9K7.1JCJfUnpDBqkEGfjXbkm');
+    sendError(res, 401, 'Invalid email or password');
+    return;
+  }
+
+  if (!user.passwordHash && user.googleId) {
+    res.status(409).json({ error: 'This account uses Google sign-in.', code: 'GOOGLE_ACCOUNT' });
+    return;
+  }
+
+  if (!user.passwordHash) {
     await verifyPassword(password, '$2b$12$000000000000000000000uGbOQPJ9K7.1JCJfUnpDBqkEGfjXbkm');
     sendError(res, 401, 'Invalid email or password');
     return;
@@ -459,7 +475,7 @@ setInterval(async () => {
 }, 60_000);
 
 // GET /api/auth/google — initiate unified OAuth
-router.get('/google', async (_req, res) => {
+router.get('/google', async (req, res) => {
   await ensureOAuthStatesTable();
   const oauth2Client = createOAuth2Client();
   const state = randomBytes(16).toString('hex');
@@ -472,9 +488,12 @@ router.get('/google', async (_req, res) => {
     [stateHash, expiresAt],
   );
 
+  // Use prompt=none for silent sign-in; fall back to select_account on retry
+  const promptParam = req.query.prompt === 'select_account' ? 'select_account' : 'none';
+
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
-    prompt: 'consent',
+    prompt: promptParam,
     scope: [
       'openid',
       'email',
@@ -493,6 +512,18 @@ router.get('/google/callback', async (req, res) => {
   const code = req.query.code as string;
   const state = req.query.state as string | undefined;
   const frontendOrigin = process.env.FRONTEND_URL || process.env.CORS_ORIGIN?.split(',')[0] || 'http://localhost:5173';
+
+  // If Google returned an error (e.g. prompt=none failed), retry with select_account
+  const oauthError = req.query.error as string | undefined;
+  if (oauthError) {
+    if (oauthError === 'interaction_required' || oauthError === 'consent_required' || oauthError === 'login_required') {
+      res.redirect(`${frontendOrigin}/login?google_retry=1`);
+      return;
+    }
+    console.warn('[auth] OAuth callback error:', oauthError);
+    res.redirect(`${frontendOrigin}/login?error=auth_failed`);
+    return;
+  }
 
   if (!code) {
     console.warn('[auth] OAuth callback missing code parameter');
@@ -592,6 +623,13 @@ router.get('/google/callback', async (req, res) => {
       getClientIp(req),
     );
     setAuthCookies(res, accessToken, refreshToken);
+
+    // Start the user's scheduler now that Google is connected
+    if (user.googleRefreshToken) {
+      schedulerRegistry.getOrCreate(user.id).catch((err) => {
+        console.error('[auth] Failed to start scheduler after Google OAuth:', err);
+      });
+    }
 
     // Redirect based on onboarding status
     if (!user.onboardingCompleted) {
@@ -863,15 +901,12 @@ router.delete('/sessions', requireAuth, async (req, res) => {
 
   const currentHash = hashToken(currentRefreshToken);
 
-  // Get all sessions for this user except current
-  const allSessions = await db.select().from(sessions).where(eq(sessions.userId, userId));
-  const otherSessions = allSessions.filter(s => s.refreshTokenHash !== currentHash);
+  // Delete all sessions for this user except current in a single query
+  await db.delete(sessions).where(
+    and(eq(sessions.userId, userId), ne(sessions.refreshTokenHash, currentHash))
+  );
 
-  for (const s of otherSessions) {
-    await db.delete(sessions).where(eq(sessions.id, s.id));
-  }
-
-  res.json({ success: true, message: `${otherSessions.length} other session(s) revoked` });
+  res.json({ success: true, message: 'Other sessions revoked' });
 });
 
 // ============================================================
@@ -909,6 +944,18 @@ router.post('/change-password', requireAuth, changePasswordLimiter, async (req, 
   await db.update(users)
     .set({ passwordHash: newHash, updatedAt: new Date().toISOString() })
     .where(eq(users.id, userId));
+
+  // Revoke all other sessions (keep current one)
+  const currentRefreshToken = req.cookies?.refresh_token;
+  if (currentRefreshToken) {
+    const currentHash = hashToken(currentRefreshToken);
+    await db.delete(sessions).where(
+      and(eq(sessions.userId, userId), ne(sessions.refreshTokenHash, currentHash))
+    );
+  } else {
+    // No current token — revoke all sessions
+    await db.delete(sessions).where(eq(sessions.userId, userId));
+  }
 
   res.json({ success: true, message: 'Password changed successfully' });
 });

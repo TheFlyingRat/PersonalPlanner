@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { db } from './db/pg-index.js';
 import {
   users,
@@ -108,6 +108,19 @@ export class UserScheduler {
   private pendingReschedule: { reason: string } | null = null;
   private started = false;
   private lastRescheduleAt = 0;
+  private operationLock: Promise<void> = Promise.resolve();
+
+  private async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const prev = this.operationLock;
+    this.operationLock = new Promise(r => { release = r; });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release!();
+    }
+  }
 
   constructor(userId: string, oauth2Client: OAuth2Client) {
     this.userId = userId;
@@ -130,7 +143,7 @@ export class UserScheduler {
     const manager = new CalendarPollerManager(
       this.calClient,
       async (calendarId, polledEvents) => {
-        await this.handlePolledEvents(calendarId, polledEvents, manager);
+        await this.withLock(() => this.handlePolledEvents(calendarId, polledEvents, manager));
       },
       this.userId,
       // EDGE-H4: Handle Google token revocation during polling
@@ -196,7 +209,7 @@ export class UserScheduler {
 
     this.isRescheduling = true;
     try {
-      const result = await this.doRescheduleAndApply(reason);
+      const result = await this.withLock(() => this.doRescheduleAndApply(reason));
       this.lastRescheduleAt = Date.now();
       return result;
     } finally {
@@ -344,7 +357,7 @@ export class UserScheduler {
 
     if (result.operations.length === 0) return 0;
 
-    // Record schedule changes
+    // Build existing events map for change tracking (used after apply)
     const existingEventsMap = new Map<string, { start: string; end: string; title: string; itemType: string; itemId: string }>();
     for (const ev of existingEvents) {
       if (ev.isManaged) {
@@ -357,7 +370,6 @@ export class UserScheduler {
         });
       }
     }
-    await recordScheduleChanges(result.operations, existingEventsMap, userId);
 
     // Habit notifications map
     const habitNotificationsMap = new Map<string, boolean>();
@@ -413,25 +425,45 @@ export class UserScheduler {
       if (result.operations.length === 0) return 0;
     }
 
+    // Record schedule changes AFTER successful apply (not before)
+    await recordScheduleChanges(result.operations, existingEventsMap, userId);
+
     // EDGE-C2: Persist to DB in a single transaction
     const nowTs = new Date().toISOString();
     await db.transaction(async (tx) => {
       for (const op of result.operations) {
         if (op.type === CalendarOpType.Create) {
-          await tx.insert(scheduledEvents).values({
-            userId,
-            itemType: op.itemType,
-            itemId: op.itemId,
-            title: op.title,
-            googleEventId: op.googleEventId || null,
-            calendarId: op.calendarId || 'primary',
-            start: op.start,
-            end: op.end,
-            status: op.status,
-            alternativeSlotsCount: null,
-            createdAt: nowTs,
-            updatedAt: nowTs,
-          });
+          // Check for existing row with same itemId to prevent duplicates
+          const existing = await tx.select({ id: scheduledEvents.id }).from(scheduledEvents)
+            .where(and(eq(scheduledEvents.itemId, op.itemId), eq(scheduledEvents.userId, userId)))
+            .limit(1);
+          if (existing.length > 0) {
+            // Convert to update instead of creating duplicate
+            await tx.update(scheduledEvents).set({
+              title: op.title,
+              googleEventId: op.googleEventId || null,
+              calendarId: op.calendarId || 'primary',
+              start: op.start,
+              end: op.end,
+              status: op.status,
+              updatedAt: nowTs,
+            }).where(eq(scheduledEvents.id, existing[0].id));
+          } else {
+            await tx.insert(scheduledEvents).values({
+              userId,
+              itemType: op.itemType,
+              itemId: op.itemId,
+              title: op.title,
+              googleEventId: op.googleEventId || null,
+              calendarId: op.calendarId || 'primary',
+              start: op.start,
+              end: op.end,
+              status: op.status,
+              alternativeSlotsCount: null,
+              createdAt: nowTs,
+              updatedAt: nowTs,
+            });
+          }
         } else if (op.type === CalendarOpType.Update && op.eventId) {
           await tx.update(scheduledEvents)
             .set({
@@ -467,6 +499,7 @@ export class UserScheduler {
     const calClient = this.calClient;
     const now = new Date().toISOString();
     let managedEventsMoved = false;
+    let externalChanged = false;
 
     // PERF-C2: Batch-fetch all scheduledEvents and calendarEvents for this user
     const allScheduled = await db.select().from(scheduledEvents)
@@ -540,26 +573,44 @@ export class UserScheduler {
 
       // Handle cancelled/deleted events
       if (!ev.start || !ev.end || !ev.title) {
-        await db.delete(calendarEvents)
-          .where(eq(calendarEvents.googleEventId, ev.googleEventId));
+        if (cachedByGoogleEventId.has(ev.googleEventId)) {
+          externalChanged = true;
+          await db.delete(calendarEvents)
+            .where(eq(calendarEvents.googleEventId, ev.googleEventId));
+        }
         continue;
       }
 
       const existingCached = cachedByGoogleEventId.get(ev.googleEventId);
 
       if (existingCached) {
-        await db.update(calendarEvents)
-          .set({
-            title: ev.title,
-            start: ev.start,
-            end: ev.end,
-            status: ev.status || 'busy',
-            location: ev.location || null,
-            isAllDay: !ev.start.includes('T'),
-            updatedAt: now,
-          })
-          .where(eq(calendarEvents.googleEventId, ev.googleEventId));
+        const newStatus = ev.status || 'busy';
+        const newLocation = ev.location || null;
+        const newIsAllDay = !ev.start.includes('T');
+        const changed =
+          existingCached.title !== ev.title ||
+          existingCached.start !== ev.start ||
+          existingCached.end !== ev.end ||
+          existingCached.status !== newStatus ||
+          existingCached.location !== newLocation ||
+          existingCached.isAllDay !== newIsAllDay;
+
+        if (changed) {
+          externalChanged = true;
+          await db.update(calendarEvents)
+            .set({
+              title: ev.title,
+              start: ev.start,
+              end: ev.end,
+              status: newStatus,
+              location: newLocation,
+              isAllDay: newIsAllDay,
+              updatedAt: now,
+            })
+            .where(eq(calendarEvents.googleEventId, ev.googleEventId));
+        }
       } else {
+        externalChanged = true;
         await db.insert(calendarEvents).values({
           userId,
           calendarId,
@@ -581,14 +632,14 @@ export class UserScheduler {
       await this.triggerReschedule('Managed event moved on Google Calendar');
     }
 
-    const externalOnly = polledEvents.filter((ev) => !ev.isManaged);
-    if (externalOnly.length > 0) {
+    if (externalChanged) {
       broadcastToUser(userId, 'schedule_updated', 'External calendar events changed');
 
       const managedEvents = (await db.select().from(scheduledEvents)
         .where(eq(scheduledEvents.userId, userId)))
         .filter((r: any) => r.start && r.end);
 
+      const externalOnly = polledEvents.filter((ev) => !ev.isManaged);
       const changedTimed = externalOnly.filter(
         (ev) => ev.start && ev.end && ev.start.includes('T'),
       );

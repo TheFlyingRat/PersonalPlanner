@@ -7,7 +7,7 @@ import { createHabitSchema, updateHabitSchema, lockBodySchema } from '../validat
 import { logActivity } from './activity.js';
 import { broadcastToUser } from '../ws.js';
 import { triggerReschedule } from '../polling-ref.js';
-import { sendValidationError, sendNotFound, sendError } from './helpers.js';
+import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 
 const router = Router();
 
@@ -69,6 +69,7 @@ router.post('/', async (req, res) => {
 // PUT /api/habits/:id — update a habit
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -128,6 +129,7 @@ router.put('/:id', async (req, res) => {
 // DELETE /api/habits/:id — delete habit and its scheduled events
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -147,6 +149,7 @@ router.delete('/:id', async (req, res) => {
 // POST /api/habits/:id/lock — toggle locked field
 router.post('/:id/lock', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
 
   if (existing.length === 0) {
@@ -175,6 +178,7 @@ router.post('/:id/lock', async (req, res) => {
 // GET /api/habits/:id/completions — list completions for a habit
 router.get('/:id/completions', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
   if (existing.length === 0) {
     sendNotFound(res, 'Habit');
@@ -198,6 +202,7 @@ router.get('/:id/completions', async (req, res) => {
 // POST /api/habits/:id/completions — record a completion
 router.post('/:id/completions', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
   if (existing.length === 0) {
     sendNotFound(res, 'Habit');
@@ -233,6 +238,7 @@ router.post('/:id/completions', async (req, res) => {
 // GET /api/habits/:id/streak — compute current streak
 router.get('/:id/streak', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
   const existing = await db.select().from(habits).where(and(eq(habits.id, id), eq(habits.userId, req.userId)));
   if (existing.length === 0) {
     sendNotFound(res, 'Habit');
