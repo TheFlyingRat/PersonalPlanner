@@ -29,6 +29,7 @@ import { CalendarMode } from '@cadence/shared';
 const API_BASE = PUBLIC_API_URL || '/api';
 
 let refreshPromise: Promise<boolean> | null = null;
+const retriedPaths = new Set<string>();
 
 export interface RescheduleResult {
   message: string;
@@ -62,7 +63,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     // 401 interceptor: try refresh, then redirect to login
-    if (res.status === 401 && !path.startsWith('/auth/') && !(options as any)?._retried) {
+    if (res.status === 401 && !path.startsWith('/auth/') && !retriedPaths.has(path)) {
       if (!refreshPromise) {
         refreshPromise = (async () => {
           try {
@@ -80,14 +81,21 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       }
       const refreshed = await refreshPromise;
       if (refreshed) {
-        return request<T>(path, { ...options, _retried: true } as any);
+        retriedPaths.add(path);
+        try {
+          return await request<T>(path, options);
+        } finally {
+          retriedPaths.delete(path);
+        }
       }
+      // goto used here because clearing auth state requires auth.svelte.ts (circular dep)
+      // and the layout's reactive redirect depends on auth state being cleared first
       if (typeof window !== 'undefined') {
         goto('/login');
-        throw new ApiError('Session expired', 401);
       }
+      throw new ApiError('Session expired', 401);
     }
-    // Handle 403 EMAIL_NOT_VERIFIED
+    // Redirect for unverified email — goto kept here to avoid breaking auth flows
     if (res.status === 403) {
       try {
         const body = await res.json();

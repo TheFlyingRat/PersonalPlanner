@@ -32,7 +32,7 @@ import {
   deleteAccountSchema,
 } from '../validation.js';
 import type { AuthUser } from '@cadence/shared/auth-types';
-import { sendValidationError, sendNotFound, sendError } from './helpers.js';
+import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 
 const router = Router();
 
@@ -877,6 +877,7 @@ router.get('/sessions', requireAuth, async (req, res) => {
 
 router.delete('/sessions/:id', requireAuth, async (req, res) => {
   const sessionId = req.params.id as string;
+  if (!validateUUID(sessionId, res)) return;
   const userId = req.userId;
 
   const [session] = await db.select().from(sessions).where(

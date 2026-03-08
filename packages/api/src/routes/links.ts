@@ -6,6 +6,7 @@ import type { CreateLinkRequest, SchedulingLink, UserSettings } from '@cadence/s
 import { SchedulingHours } from '@cadence/shared';
 import { createLinkSchema, updateLinkSchema, linkBookingSchema } from '../validation.js';
 import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
+import { DEFAULT_USER_SETTINGS, getHoursWindow } from './defaults.js';
 
 const router = Router();
 
@@ -128,12 +129,7 @@ router.get('/:slug/slots', async (req, res) => {
   const userRows = await db.select().from(users).where(eq(users.id, req.userId));
   const userSettings: UserSettings = userRows.length > 0 && userRows[0].settings && typeof userRows[0].settings === 'object'
     ? userRows[0].settings as UserSettings
-    : {
-        workingHours: { start: '09:00', end: '17:00' },
-        personalHours: { start: '07:00', end: '22:00' },
-        timezone: 'America/New_York',
-        schedulingWindowDays: 14,
-      };
+    : DEFAULT_USER_SETTINGS;
 
   // Determine the scheduling hours window
   const hoursWindow = getHoursWindow(schedulingHours, userSettings);
@@ -338,22 +334,6 @@ function toLink(row: typeof schedulingLinks.$inferSelect): SchedulingLink {
     createdAt: row.createdAt ?? '',
     updatedAt: row.updatedAt ?? '',
   };
-}
-
-function getHoursWindow(
-  schedulingHours: SchedulingHours,
-  userSettings: UserSettings,
-): { start: string; end: string } {
-  switch (schedulingHours) {
-    case SchedulingHours.Working:
-      return userSettings.workingHours;
-    case SchedulingHours.Personal:
-      return userSettings.personalHours;
-    case SchedulingHours.Custom:
-      return userSettings.personalHours;
-    default:
-      return userSettings.workingHours;
-  }
 }
 
 export default router;

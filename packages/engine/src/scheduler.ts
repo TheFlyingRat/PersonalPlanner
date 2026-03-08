@@ -246,6 +246,41 @@ function habitsToScheduleItems(
   return items;
 }
 
+function computeChunks(
+  remaining: number,
+  chunkMin: number,
+  chunkMax: number,
+): { numChunks: number; chunkSize: number } {
+  const initialChunkSize = Math.min(chunkMax, remaining);
+  let numChunks = Math.ceil(remaining / initialChunkSize);
+
+  if (numChunks > 1) {
+    const lastChunkSize = remaining - (numChunks - 1) * initialChunkSize;
+    if (lastChunkSize < chunkMin) {
+      numChunks = numChunks - 1;
+    }
+  }
+
+  let chunkSize = Math.ceil(remaining / numChunks);
+  if (chunkSize > chunkMax) {
+    chunkSize = chunkMax;
+    numChunks = Math.ceil(remaining / chunkSize);
+    if (numChunks > 1) {
+      const lastChunk = remaining - (numChunks - 1) * chunkSize;
+      if (lastChunk > 0 && lastChunk < chunkMin) {
+        const reducedChunks = numChunks - 1;
+        const reducedSize = Math.ceil(remaining / reducedChunks);
+        if (reducedSize <= chunkMax) {
+          numChunks = reducedChunks;
+          chunkSize = reducedSize;
+        }
+      }
+    }
+  }
+
+  return { numChunks, chunkSize };
+}
+
 /**
  * Convert Tasks into ScheduleItems (chunked).
  */
@@ -267,21 +302,7 @@ function tasksToScheduleItems(
     const remaining = task.remainingDuration;
     if (remaining <= 0) continue;
 
-    // Determine chunk size (prefer chunkMax, but don't exceed remaining)
-    const chunkSize = Math.min(task.chunkMax, remaining);
-    let numChunks = Math.ceil(remaining / chunkSize);
-
-    // Fix: ensure no chunk is smaller than chunkMin.
-    // If the last chunk would be < chunkMin, reduce numChunks by 1 so the
-    // remaining time is distributed into fewer (slightly larger) chunks.
-    // If reducing would make chunks exceed chunkMax, keep the reduced count
-    // anyway — one slightly oversized chunk is better than one undersized chunk.
-    if (numChunks > 1) {
-      const lastChunkSize = remaining - (numChunks - 1) * chunkSize;
-      if (lastChunkSize < task.chunkMin) {
-        numChunks = numChunks - 1;
-      }
-    }
+    const { numChunks, chunkSize: effectiveChunkSize } = computeChunks(remaining, task.chunkMin, task.chunkMax);
 
     const earliest = new Date(task.earliestStart);
     const due = task.dueDate ? new Date(task.dueDate) : null;
@@ -300,30 +321,6 @@ function tasksToScheduleItems(
 
     // Override priority if isUpNext
     const priority = task.isUpNext ? Priority.Critical : task.priority;
-
-    // Compute the actual chunk size for each chunk. When numChunks was reduced,
-    // divide remaining evenly (ceiling) so that all chunks are >= chunkMin.
-    let effectiveChunkSize = Math.ceil(remaining / numChunks);
-    if (effectiveChunkSize > task.chunkMax) {
-      effectiveChunkSize = task.chunkMax;
-      numChunks = Math.ceil(remaining / effectiveChunkSize);
-      // Re-check: last chunk may now be below chunkMin after re-clamping.
-      // Reduce chunk count to absorb the small remainder. If the resulting
-      // chunk size still fits within chunkMax, use it. Otherwise accept the
-      // runt — exceeding chunkMax would be worse.
-      if (numChunks > 1) {
-        const lastChunk = remaining - (numChunks - 1) * effectiveChunkSize;
-        if (lastChunk > 0 && lastChunk < task.chunkMin) {
-          const reducedChunks = numChunks - 1;
-          const reducedSize = Math.ceil(remaining / reducedChunks);
-          if (reducedSize <= task.chunkMax) {
-            numChunks = reducedChunks;
-            effectiveChunkSize = reducedSize;
-          }
-          // else: accept the undersized last chunk — can't fix without exceeding chunkMax
-        }
-      }
-    }
 
     for (let i = 0; i < numChunks; i++) {
       const thisChunkSize = Math.min(effectiveChunkSize, remaining - i * effectiveChunkSize);
@@ -516,8 +513,9 @@ interface CircularDependencyError {
   message: string;
 }
 
-function detectCircularDependencies(habits: Habit[]): CircularDependencyError[] {
+function detectCircularDependencies(habits: Habit[]): { errors: CircularDependencyError[]; cyclicIds: Set<string> } {
   const errors: CircularDependencyError[] = [];
+  const cyclicIds = new Set<string>();
   const visited = new Set<string>();
   const inStack = new Set<string>();
   const reported = new Set<string>();
@@ -536,6 +534,7 @@ function detectCircularDependencies(habits: Habit[]): CircularDependencyError[] 
     const habit = habitMap.get(id);
     if (habit?.dependsOn) {
       if (dfs(habit.dependsOn)) {
+        cyclicIds.add(id);
         if (!reported.has(id)) {
           reported.add(id);
           errors.push({
@@ -553,7 +552,7 @@ function detectCircularDependencies(habits: Habit[]): CircularDependencyError[] 
   for (const habit of habits) {
     dfs(habit.id);
   }
-  return errors;
+  return { errors, cyclicIds };
 }
 
 // ============================================================
@@ -574,33 +573,7 @@ export function reschedule(
   const tz = userSettings.timezone || 'UTC';
 
   // 0. Detect circular dependencies in habits
-  const circularErrors = detectCircularDependencies(habits);
-  const circularHabitIds = new Set<string>();
-  // PERF-M4: Pre-build habit map for O(1) lookup
-  const habitLookup = new Map<string, Habit>();
-  for (const h of habits) {
-    habitLookup.set(h.id, h);
-  }
-  if (circularErrors.length > 0) {
-    // Collect IDs of habits that are part of a cycle
-    for (const habit of habits) {
-      if (habit.dependsOn) {
-        // Check if this habit's dependency chain forms a cycle
-        const seen = new Set<string>();
-        let current: string | null = habit.id;
-        let isCyclic = false;
-        while (current) {
-          if (seen.has(current)) { isCyclic = true; break; }
-          seen.add(current);
-          const h = habitLookup.get(current);
-          current = h?.dependsOn ?? null;
-        }
-        if (isCyclic) {
-          circularHabitIds.add(habit.id);
-        }
-      }
-    }
-  }
+  const { errors: circularErrors, cyclicIds: circularHabitIds } = detectCircularDependencies(habits);
 
   // 1. Define the scheduling window (timezone-aware day advancement)
   const safeDays = Math.min(userSettings.schedulingWindowDays || 14, 90);
@@ -726,7 +699,8 @@ export function reschedule(
   for (const [itemId, slot] of lockedPlacements) {
     placements.set(itemId, slot);
     // Index by day
-    const dayKey = `${getDatePartsInTimezone(slot.start, tz).year}-${getDatePartsInTimezone(slot.start, tz).month}-${getDatePartsInTimezone(slot.start, tz).day}`;
+    const { year, month, day } = getDatePartsInTimezone(slot.start, tz);
+    const dayKey = `${year}-${month}-${day}`;
     const daySlots = placementsByDay.get(dayKey);
     if (daySlots) {
       daySlots.push(slot);

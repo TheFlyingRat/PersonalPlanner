@@ -9,27 +9,7 @@ import {
   QualityComponent,
   TimeSlot,
 } from '@cadence/shared';
-import { getFormatter } from './utils.js';
-
-/**
- * Parse "HH:MM" into minutes since midnight.
- */
-function parseTimeToMinutes(hhmm: string): number {
-  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return 0;
-  const [h, m] = hhmm.split(':').map(Number);
-  return Math.min(23, Math.max(0, h)) * 60 + Math.min(59, Math.max(0, m));
-}
-
-/**
- * Get minutes-since-midnight from a Date in a specific timezone.
- */
-function dateToMinutesSinceMidnight(d: Date, tz: string): number {
-  const fmt = getFormatter(tz, { hour: 'numeric', minute: 'numeric', hour12: false });
-  const parts = fmt.formatToParts(d);
-  const h = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0');
-  const m = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0');
-  return (h === 24 ? 0 : h) * 60 + m;
-}
+import { parseTimeToMinutes, dateToMinutesSinceMidnight } from './utils.js';
 
 /**
  * Calculate a schedule quality score from placed items and context.
@@ -215,7 +195,7 @@ function scoreBuffers(
       // Check gap before meeting
       if (other.end.getTime() <= slot.start.getTime()) {
         const gap = slot.start.getTime() - other.end.getTime();
-        if (gap >= 0 && gap < requiredBufferMs) {
+        if (gap < requiredBufferMs) {
           hasAdequateBuffer = false;
           break;
         }
@@ -224,7 +204,7 @@ function scoreBuffers(
       // Check gap after meeting
       if (slot.end.getTime() <= other.start.getTime()) {
         const gap = other.start.getTime() - slot.end.getTime();
-        if (gap >= 0 && gap < requiredBufferMs) {
+        if (gap < requiredBufferMs) {
           hasAdequateBuffer = false;
           break;
         }

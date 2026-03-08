@@ -7,15 +7,9 @@ import { userSettingsSchema } from '../validation.js';
 import { sendValidationError, sendNotFound } from './helpers.js';
 import { createOAuth2Client } from '../google/index.js';
 import { decrypt } from '../crypto.js';
+import { DEFAULT_USER_SETTINGS } from './defaults.js';
 
 const router = Router();
-
-const defaultSettings: UserSettings = {
-  workingHours: { start: '09:00', end: '17:00' },
-  personalHours: { start: '07:00', end: '22:00' },
-  timezone: 'America/New_York',
-  schedulingWindowDays: 14,
-};
 
 // GET /api/settings — return user settings
 router.get('/', async (req, res) => {
@@ -28,7 +22,7 @@ router.get('/', async (req, res) => {
   const user = userRows[0];
   const settings: UserSettings = user.settings && typeof user.settings === 'object'
     ? user.settings as UserSettings
-    : defaultSettings;
+    : DEFAULT_USER_SETTINGS;
 
   res.json({
     id: user.id,
@@ -45,35 +39,27 @@ router.put('/', async (req, res) => {
     return;
   }
 
-  const result = await db.transaction(async (tx) => {
-    const userRows = await tx.select().from(users).where(eq(users.id, req.userId)).for('update');
-    if (userRows.length === 0) {
-      return null;
-    }
-
-    const user = userRows[0];
-    const currentSettings: UserSettings = user.settings && typeof user.settings === 'object'
-      ? user.settings as UserSettings
-      : defaultSettings;
-
-    const updatedSettings: UserSettings = {
-      ...currentSettings,
-      ...parsed.data,
-    };
-
-    await tx.update(users)
-      .set({ settings: updatedSettings, updatedAt: new Date().toISOString() })
-      .where(eq(users.id, req.userId));
-
-    return { id: user.id, settings: updatedSettings, createdAt: user.createdAt ?? '' };
-  });
-
-  if (!result) {
+  const userRows = await db.select().from(users).where(eq(users.id, req.userId));
+  if (userRows.length === 0) {
     sendNotFound(res, 'User');
     return;
   }
 
-  res.json(result);
+  const user = userRows[0];
+  const currentSettings: UserSettings = user.settings && typeof user.settings === 'object'
+    ? user.settings as UserSettings
+    : DEFAULT_USER_SETTINGS;
+
+  const updatedSettings: UserSettings = {
+    ...currentSettings,
+    ...parsed.data,
+  };
+
+  await db.update(users)
+    .set({ settings: updatedSettings, updatedAt: new Date().toISOString() })
+    .where(eq(users.id, req.userId));
+
+  res.json({ id: user.id, settings: updatedSettings, createdAt: user.createdAt ?? '' });
 });
 
 // POST /api/settings/onboarding/complete — mark onboarding as completed

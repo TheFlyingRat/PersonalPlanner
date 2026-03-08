@@ -11,6 +11,7 @@ import { broadcastToUser } from '../ws.js';
 import { moveEventSchema, scheduleChangesQuerySchema } from '../validation.js';
 import { schedulerRegistry } from '../scheduler-registry.js';
 import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
+import { DEFAULT_USER_SETTINGS } from './defaults.js';
 
 const router = Router();
 
@@ -278,12 +279,7 @@ async function getUserSettings(userId: string): Promise<UserSettings> {
   if (settingsRaw && typeof settingsRaw === 'object') {
     return settingsRaw as UserSettings;
   }
-  return {
-    workingHours: { start: '09:00', end: '17:00' },
-    personalHours: { start: '07:00', end: '22:00' },
-    timezone: 'America/New_York',
-    schedulingWindowDays: 14,
-  };
+  return DEFAULT_USER_SETTINGS;
 }
 
 // POST /api/schedule/reschedule — run the scheduling engine

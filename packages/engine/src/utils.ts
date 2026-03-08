@@ -105,10 +105,6 @@ export function setTimeInTimezone(date: Date, hours: number, minutes: number, tz
     const adjParts = formatter.formatToParts(adjusted);
     const adjGet = (type: string) => parseInt(adjParts.find(p => p.type === type)?.value ?? '0');
     const adjHour = adjGet('hour') === 24 ? 0 : adjGet('hour');
-    if (adjHour !== hours) {
-      // Target hour doesn't exist (spring-forward gap) — return the post-gap time
-      return adjusted;
-    }
     return adjusted;
   }
 
@@ -157,6 +153,23 @@ export function getDatePartsInTimezone(date: Date, tz: string): { year: number; 
  * Format a Date as "YYYY-MM-DD" in a specific timezone.
  * Unlike toISOString().slice(0,10), this returns the correct local date.
  */
+export function parseTimeToMinutes(hhmm: string): number {
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return 0;
+  const [h, m] = hhmm.split(':').map(Number);
+  return Math.min(23, Math.max(0, h)) * 60 + Math.min(59, Math.max(0, m));
+}
+
+export function dateToMinutesSinceMidnight(d: Date, tz?: string): number {
+  if (tz) {
+    const fmt = getFormatter(tz, { hour: 'numeric', minute: 'numeric', hour12: false });
+    const parts = fmt.formatToParts(d);
+    const h = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0');
+    const m = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0');
+    return (h === 24 ? 0 : h) * 60 + m;
+  }
+  return d.getHours() * 60 + d.getMinutes();
+}
+
 export function toLocalDateStr(date: Date, tz: string): string {
   const { year, month, day } = getDatePartsInTimezone(date, tz);
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;

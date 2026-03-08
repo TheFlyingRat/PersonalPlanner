@@ -7,6 +7,7 @@ import type { UserSettings, BookingSlot, BookingConfirmation, BookingLinkInfo } 
 import { SchedulingHours } from '@cadence/shared';
 import { bookingAvailabilitySchema, bookingRequestSchema } from '../validation.js';
 import { sendValidationError, sendNotFound, sendError } from './helpers.js';
+import { DEFAULT_USER_SETTINGS, getHoursWindow } from './defaults.js';
 
 const router = Router();
 
@@ -18,33 +19,12 @@ const bookingAvailabilityLimiter = rateLimit({
   message: { error: 'Too many availability requests, please try again later.' },
 });
 
-function getHoursWindow(
-  schedulingHours: SchedulingHours,
-  userSettings: UserSettings,
-): { start: string; end: string } {
-  switch (schedulingHours) {
-    case SchedulingHours.Working:
-      return userSettings.workingHours;
-    case SchedulingHours.Personal:
-      return userSettings.personalHours;
-    case SchedulingHours.Custom:
-      return userSettings.personalHours;
-    default:
-      return userSettings.workingHours;
-  }
-}
-
 async function getUserSettingsForLink(linkUserId: string): Promise<UserSettings> {
   const userRows = await db.select().from(users).where(eq(users.id, linkUserId));
   if (userRows.length > 0 && userRows[0].settings && typeof userRows[0].settings === 'object') {
     return userRows[0].settings as UserSettings;
   }
-  return {
-    workingHours: { start: '09:00', end: '17:00' },
-    personalHours: { start: '07:00', end: '22:00' },
-    timezone: 'America/New_York',
-    schedulingWindowDays: 14,
-  };
+  return DEFAULT_USER_SETTINGS;
 }
 
 async function getOccupiedIntervals(linkUserId: string, dayStart: string, dayEnd: string): Promise<Array<{ start: number; end: number }>> {

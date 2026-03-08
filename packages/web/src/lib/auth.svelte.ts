@@ -2,7 +2,7 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { PUBLIC_API_URL } from '$env/static/public';
-import { ApiError } from '$lib/api';
+import { auth as authApi } from '$lib/api';
 
 export interface User {
   id: string;
@@ -17,31 +17,6 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
-}
-
-const API_BASE = PUBLIC_API_URL || '/api';
-
-async function authRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-    credentials: 'include',
-  });
-  if (!res.ok) {
-    let message = `Auth error: ${res.status}`;
-    let code: string | undefined;
-    try {
-      const body = await res.json();
-      message = body.error ?? body.message ?? message;
-      code = body.code;
-    } catch (_e) { /* no JSON body */ }
-    throw new ApiError(message, res.status, code);
-  }
-  if (res.status === 204) return undefined as T;
-  return res.json();
 }
 
 // Module-level reactive state
@@ -65,9 +40,9 @@ export async function checkAuth(): Promise<User | null> {
   if (!browser) return null;
   try {
     authState.isLoading = true;
-    const result = await authRequest<{ user: User }>('/auth/me');
-    setAuth(result.user);
-    return result.user;
+    const result = await authApi.me();
+    setAuth(result.user as User);
+    return result.user as User;
   } catch {
     setAuth(null);
     return null;
@@ -75,26 +50,20 @@ export async function checkAuth(): Promise<User | null> {
 }
 
 export async function login(email: string, password: string): Promise<User> {
-  const result = await authRequest<{ user: User }>('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password }),
-  });
-  setAuth(result.user);
-  return result.user;
+  const result = await authApi.login(email, password);
+  setAuth(result.user as User);
+  return result.user as User;
 }
 
 export async function signup(name: string, email: string, password: string, gdprConsent = true): Promise<{ user: User; requiresVerification: boolean }> {
-  const result = await authRequest<{ user: User; requiresVerification: boolean }>('/auth/signup', {
-    method: 'POST',
-    body: JSON.stringify({ name, email, password, gdprConsent }),
-  });
-  setAuth(result.user);
-  return result;
+  const result = await authApi.signup(name, email, password, gdprConsent);
+  setAuth(result.user as User);
+  return result as { user: User; requiresVerification: boolean };
 }
 
 export async function logout(): Promise<void> {
   try {
-    await authRequest<void>('/auth/logout', { method: 'POST' });
+    await authApi.logout();
   } catch {
     // Even if server call fails, clear local state
   }
@@ -104,10 +73,11 @@ export async function logout(): Promise<void> {
   }
 }
 
+// Calls /auth/refresh then /auth/me — two round trips required because
+// the refresh endpoint returns only a success flag, not the user object.
 export async function refreshToken(): Promise<boolean> {
   try {
-    await authRequest<{ success: boolean }>('/auth/refresh', { method: 'POST' });
-    // Refresh succeeded — re-fetch user profile with new access token
+    await authApi.refresh();
     await checkAuth();
     return true;
   } catch {
@@ -118,6 +88,7 @@ export async function refreshToken(): Promise<boolean> {
 
 export async function googleAuth(prompt?: 'select_account'): Promise<void> {
   if (browser) {
+    const API_BASE = PUBLIC_API_URL || '/api';
     const params = prompt ? `?prompt=${prompt}` : '';
     const res = await fetch(`${API_BASE}/auth/google${params}`, { credentials: 'include' });
     if (!res.ok) {
@@ -132,28 +103,17 @@ export async function googleAuth(prompt?: 'select_account'): Promise<void> {
 }
 
 export async function verifyEmail(token: string): Promise<void> {
-  await authRequest<void>(`/auth/verify-email?token=${encodeURIComponent(token)}`, {
-    method: 'GET',
-  });
+  await authApi.verifyEmail(token);
 }
 
 export async function resendVerification(email: string): Promise<void> {
-  await authRequest<void>('/auth/resend-verification-email', {
-    method: 'POST',
-    body: JSON.stringify({ email }),
-  });
+  await authApi.resendVerification(email);
 }
 
 export async function forgotPassword(email: string): Promise<void> {
-  await authRequest<void>('/auth/forgot-password', {
-    method: 'POST',
-    body: JSON.stringify({ email }),
-  });
+  await authApi.forgotPassword(email);
 }
 
 export async function resetPassword(token: string, password: string): Promise<void> {
-  await authRequest<void>('/auth/reset-password', {
-    method: 'POST',
-    body: JSON.stringify({ token, password }),
-  });
+  await authApi.resetPassword(token, password);
 }

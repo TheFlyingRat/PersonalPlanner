@@ -4,32 +4,7 @@ import {
   TimeSlot,
   BufferConfig,
 } from '@cadence/shared';
-import { isSameDay, getDatePartsInTimezone, getFormatter } from './utils.js';
-
-/**
- * Parse "HH:MM" into minutes since midnight.
- */
-function parseTimeToMinutes(hhmm: string): number {
-  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) {
-    return 0;
-  }
-  const [h, m] = hhmm.split(':').map(Number);
-  return Math.min(23, Math.max(0, h)) * 60 + Math.min(59, Math.max(0, m));
-}
-
-/**
- * Get minutes-since-midnight from a Date in a specific timezone.
- */
-function dateToMinutesSinceMidnight(d: Date, tz?: string): number {
-  if (tz) {
-    const fmt = getFormatter(tz, { hour: 'numeric', minute: 'numeric', hour12: false });
-    const parts = fmt.formatToParts(d);
-    const h = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0');
-    const m = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0');
-    return (h === 24 ? 0 : h) * 60 + m;
-  }
-  return d.getHours() * 60 + d.getMinutes();
-}
+import { isSameDay, getDatePartsInTimezone, getFormatter, parseTimeToMinutes, dateToMinutesSinceMidnight } from './utils.js';
 
 /**
  * Score a candidate slot for a given schedule item.

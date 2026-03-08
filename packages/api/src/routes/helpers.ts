@@ -1,5 +1,5 @@
 import { type Response } from 'express';
-import { type ZodSchema, type ZodError } from 'zod/v4';
+import { type ZodError } from 'zod/v4';
 
 export function sendValidationError(res: Response, error: ZodError) {
   return res.status(400).json({ error: 'Validation failed', details: error.issues });
@@ -21,10 +21,4 @@ export function validateUUID(id: string, res: Response): boolean {
     return false;
   }
   return true;
-}
-
-export function parseBody<T>(schema: ZodSchema<T>, body: unknown): { success: true; data: T } | { success: false; error: ZodError } {
-  const result = schema.safeParse(body);
-  if (!result.success) return { success: false, error: result.error };
-  return { success: true, data: result.data };
 }

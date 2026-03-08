@@ -25,9 +25,6 @@ if (process.env.NODE_ENV === 'production') {
   if (!process.env.ENCRYPTION_KEY) {
     throw new Error('ENCRYPTION_KEY must be set in production');
   }
-  if (!process.env.TRUST_PROXY) {
-    console.warn('WARNING: TRUST_PROXY is not set in production. Rate limiting may not work correctly behind a reverse proxy.');
-  }
   if (!process.env.COOKIE_DOMAIN) {
     console.warn('WARNING: COOKIE_DOMAIN is not set in production. Cross-subdomain cookies will not work.');
   }
@@ -61,7 +58,7 @@ import bookingRouter from './routes/booking.js';
 import quickAddRouter from './routes/quick-add.js';
 
 const app = express();
-app.set('trust proxy', process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY, 10) : 1);
+app.set('trust proxy', process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY, 10) : 0);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Derive WebSocket origin from CORS_ORIGIN for CSP connectSrc
