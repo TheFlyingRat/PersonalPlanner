@@ -44,6 +44,7 @@ services:
       - SMTP_USER=${SMTP_USER:-}
       - SMTP_PASS=${SMTP_PASS:-}
       - SMTP_FROM=${SMTP_FROM:-}
+      - WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL:-}
       - NODE_ENV=${NODE_ENV:-production}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
