@@ -32,10 +32,13 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       return;
     }
 
-    // Enforce GDPR consent for non-auth API routes (allow auth/* for onboarding/consent flow)
+    // Enforce GDPR consent for non-auth API routes
+    // Exempt auth/*, calendars/*, settings/* so onboarding can complete before consent
     // Tokens issued before this field was added default to consented (hasGdprConsent === undefined → true)
-    const isAuthRoute = req.originalUrl.startsWith('/api/auth/') || req.originalUrl === '/api/auth';
-    if (payload.hasGdprConsent === false && !isAuthRoute) {
+    const url = req.originalUrl;
+    const isExemptRoute = url.startsWith('/api/auth/') || url === '/api/auth'
+      || url.startsWith('/api/calendars') || url.startsWith('/api/settings');
+    if (payload.hasGdprConsent === false && !isExemptRoute) {
       res.status(403).json({ error: 'GDPR consent required', code: 'GDPR_CONSENT_REQUIRED' });
       return;
     }
