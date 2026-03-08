@@ -271,8 +271,12 @@ export class UserScheduler {
       ...allFocusRules.map(f => f.id),
     ]);
 
-    // Load existing managed events (future only), scoped to user
-    const nowISO = new Date().toISOString();
+    // Load existing managed events (today + future), scoped to user
+    // Use start-of-today (not "now") so events that ended earlier today are still
+    // included — the engine needs them in existingManagedEvents to generate Update
+    // ops instead of Create ops, preventing orphaned Google Calendar events.
+    // Subtract 24h from now as a timezone-safe way to include all of today's events.
+    const todayCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const rawRows = await db.select().from(scheduledEvents)
       .where(eq(scheduledEvents.userId, userId));
 
@@ -293,7 +297,7 @@ export class UserScheduler {
     }
 
     const futureRows = rawRows
-      .filter(r => r.end && r.end >= nowISO)
+      .filter(r => r.end && r.end >= todayCutoff)
       .filter(r => !orphanIds.includes(r.id));
 
     // Deduplicate by itemId
@@ -462,14 +466,28 @@ export class UserScheduler {
 
     // EDGE-C2: Persist to DB in a single transaction, then record changes
     const nowTs = new Date().toISOString();
+    // Collect orphaned Google Calendar event IDs to delete after the transaction
+    const orphanedGoogleEventIds: { googleEventId: string; calendarId: string }[] = [];
     await db.transaction(async (tx) => {
       for (const op of result.operations) {
         if (op.type === CalendarOpType.Create) {
           // Check for existing row with same itemId to prevent duplicates
-          const existing = await tx.select({ id: scheduledEvents.id }).from(scheduledEvents)
+          const existing = await tx.select({
+            id: scheduledEvents.id,
+            googleEventId: scheduledEvents.googleEventId,
+            calendarId: scheduledEvents.calendarId,
+          }).from(scheduledEvents)
             .where(and(eq(scheduledEvents.itemId, op.itemId), eq(scheduledEvents.userId, userId)))
             .limit(1);
           if (existing.length > 0) {
+            // Track old Google Calendar event for deletion if the ID changed
+            const oldGoogleId = existing[0].googleEventId;
+            if (oldGoogleId && oldGoogleId !== (op.googleEventId || null)) {
+              orphanedGoogleEventIds.push({
+                googleEventId: oldGoogleId,
+                calendarId: existing[0].calendarId || 'primary',
+              });
+            }
             // Convert to update instead of creating duplicate
             await tx.update(scheduledEvents).set({
               title: op.title,
@@ -512,6 +530,30 @@ export class UserScheduler {
         }
       }
     });
+
+    // Delete orphaned Google Calendar events (old events replaced by dedup)
+    if (orphanedGoogleEventIds.length > 0) {
+      console.log(`[scheduler] User ${userId}: cleaning up ${orphanedGoogleEventIds.length} orphaned Google Calendar event(s)`);
+      for (const { googleEventId, calendarId: calId } of orphanedGoogleEventIds) {
+        try {
+          const isUuid = calId && calId !== 'primary';
+          const googleCalId = isUuid ? (calIdToGoogleCalId.get(calId) || 'primary') : 'primary';
+          await calClient.applyOperations(googleCalId, [{
+            type: CalendarOpType.Delete,
+            googleEventId,
+            itemType: ItemType.Habit,
+            itemId: '',
+            title: '',
+            start: '',
+            end: '',
+            status: EventStatus.Free,
+            extendedProperties: {},
+          }]);
+        } catch (err) {
+          console.warn(`[scheduler] User ${userId}: failed to delete orphaned Google event ${googleEventId}:`, err);
+        }
+      }
+    }
 
     // Record schedule changes AFTER successful DB persist
     await recordScheduleChanges(result.operations, existingEventsMap, userId);

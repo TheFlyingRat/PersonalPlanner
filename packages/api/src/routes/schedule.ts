@@ -823,22 +823,22 @@ router.delete('/managed-events', async (req, res) => {
     let googleDeleted = 0;
 
     if (calClient) {
-      // Delete from all enabled writable calendars
+      // Delete from all enabled writable calendars + primary, in parallel
       const enabledCals = await db.select().from(calendars)
         .where(and(eq(calendars.userId, userId), eq(calendars.enabled, true)));
 
-      for (const cal of enabledCals) {
-        const count = await calClient.deleteAllManagedEvents(cal.googleCalendarId);
-        googleDeleted += count;
-      }
+      // Deduplicate: 'primary' may already be in the enabled list
+      const googleCalIds = new Set(enabledCals.map(c => c.googleCalendarId));
+      googleCalIds.add('primary');
 
-      // Also delete from primary calendar
-      const primaryCount = await calClient.deleteAllManagedEvents('primary');
-      googleDeleted += primaryCount;
+      const results = await Promise.all(
+        [...googleCalIds].map(calId => calClient.deleteAllManagedEvents(calId))
+      );
+      googleDeleted = results.reduce((sum, count) => sum + count, 0);
     }
 
     // Clear all local scheduled events for this user
-    const localRows = await db.select().from(scheduledEvents).where(eq(scheduledEvents.userId, userId));
+    const localRows = await db.select({ id: scheduledEvents.id }).from(scheduledEvents).where(eq(scheduledEvents.userId, userId));
     const localCount = localRows.length;
     await db.delete(scheduledEvents).where(eq(scheduledEvents.userId, userId));
 

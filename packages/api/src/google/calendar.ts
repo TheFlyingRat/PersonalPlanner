@@ -284,6 +284,9 @@ export class GoogleCalendarClient {
     const timeMax = new Date();
     timeMax.setDate(timeMax.getDate() + 365);
 
+    // Collect all Cadence event IDs first, then delete in parallel batches
+    const cadenceEventIds: string[] = [];
+
     do {
       const response = await this.calendar.events.list({
         calendarId,
@@ -291,6 +294,8 @@ export class GoogleCalendarClient {
         singleEvents: true,
         timeMin: timeMin.toISOString(),
         timeMax: timeMax.toISOString(),
+        // Only fetch fields we need (saves bandwidth)
+        fields: 'nextPageToken,items(id,extendedProperties)',
         ...(pageToken ? { pageToken } : {}),
       });
 
@@ -298,22 +303,33 @@ export class GoogleCalendarClient {
       for (const item of items) {
         const privateProps = item.extendedProperties?.private ?? {};
         const isCadence = Boolean(privateProps[EXTENDED_PROPS.cadenceId] || privateProps[EXTENDED_PROPS.itemType]);
-
         if (isCadence && item.id) {
-          try {
-            await this.calendar.events.delete({ calendarId, eventId: item.id });
-            deleted++;
-          } catch (err: unknown) {
-            if (isGoogleApiError(err) && (err.code === 404 || err.code === 410)) {
-              continue;
-            }
-            console.error(`[calendar] Failed to delete managed event ${item.id}:`, err);
-          }
+          cadenceEventIds.push(item.id);
         }
       }
 
       pageToken = response.data.nextPageToken ?? undefined;
     } while (pageToken);
+
+    // Delete in parallel batches of 10 (Google Calendar API rate limit safe)
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < cadenceEventIds.length; i += BATCH_SIZE) {
+      const batch = cadenceEventIds.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(eventId =>
+          this.calendar.events.delete({ calendarId, eventId })
+            .then(() => true)
+            .catch((err: unknown) => {
+              if (isGoogleApiError(err) && (err.code === 404 || err.code === 410)) {
+                return false; // Already gone
+              }
+              console.error(`[calendar] Failed to delete managed event ${eventId}:`, err);
+              return false;
+            })
+        )
+      );
+      deleted += results.filter(r => r.status === 'fulfilled' && r.value).length;
+    }
 
     return deleted;
   }

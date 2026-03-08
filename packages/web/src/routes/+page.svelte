@@ -525,6 +525,7 @@
     originalDayIndex: number;
     originalStartHour: number;
   } | null>(null);
+  let justDragged = $state(false);
 
   let timeGridEl: HTMLDivElement | undefined = $state();
 
@@ -556,7 +557,9 @@
     e.preventDefault();
 
     const gridRect = timeGridEl.getBoundingClientRect();
-    const y = e.clientY - gridRect.top + (scrollContainer?.scrollTop ?? 0) - dragState.offsetY;
+    // gridRect.top already accounts for scroll (it's viewport-relative and the
+    // grid moves upward inside the scroll container), so no scrollTop needed.
+    const y = e.clientY - gridRect.top - dragState.offsetY;
     const x = e.clientX - gridRect.left;
 
     // Note: CSS grid uses 64px for time-labels-col; 56px accounts for padding.
@@ -581,11 +584,14 @@
     const { event, currentDayIndex, currentStartHour, originalDayIndex, originalStartHour } = dragState;
     dragState = null;
 
-    // If position unchanged, treat as click
+    // If position unchanged, let the onclick handler open the sidebar
     if (currentDayIndex === originalDayIndex && Math.abs(currentStartHour - originalStartHour) < 0.25) {
-      handleEventClick(event);
       return;
     }
+
+    // Suppress the onclick that fires after pointerup
+    justDragged = true;
+    requestAnimationFrame(() => { justDragged = false; });
 
     if (!event.id) return;
 
@@ -1152,7 +1158,7 @@
                     --ev-border: {evBorder};
                   "
                   aria-label="{formatHourAmPm(event.startHour)} - {formatHourAmPm(event.startHour + event.duration)}: {event.title}{hasConflict ? ' (conflict)' : ''}"
-                  onclick={() => { if (!dragState) handleEventClick(event); }}
+                  onclick={() => { if (!dragState && !justDragged) handleEventClick(event); }}
                   oncontextmenu={(e) => handleEventContextMenu(e, event)}
                   onpointerdown={(e) => handleDragStart(e, event)}
                   onpointermove={(e) => handleDragMove(e)}
@@ -1175,6 +1181,11 @@
                     <div class="cal-event-time font-mono">
                       {formatStartTime(event.startHour)} - {formatEndTime(event.startHour, event.duration)}
                     </div>
+                  {/if}
+                  {#if height > 42 && event.status && event.type !== 'external'}
+                    <span class="cal-event-status cal-event-status--{event.status}">
+                      {event.status === 'free' ? 'Free' : event.status === 'busy' ? 'Defended' : event.status === 'locked' ? 'Locked' : event.status}
+                    </span>
                   {/if}
                   {#if hasConflict}
                     <span class="conflict-badge" title="Overlaps with {conflicts.get(eventId)?.join(', ')}">
@@ -2004,6 +2015,33 @@
       font-size: 0.625rem;
       color: var(--color-text-secondary);
       line-height: 1.3;
+    }
+
+    &-status {
+      display: inline-block;
+      font-size: 0.5625rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      padding: 1px 4px;
+      border-radius: var(--radius-sm);
+      line-height: 1.4;
+      margin-top: 1px;
+
+      &--free {
+        color: var(--color-success);
+        background: color-mix(in srgb, var(--color-success) 12%, transparent);
+      }
+
+      &--busy {
+        color: var(--color-primary);
+        background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+      }
+
+      &--locked {
+        color: var(--color-text-secondary);
+        background: color-mix(in srgb, var(--color-text-secondary) 12%, transparent);
+      }
     }
 
     &--conflict {
