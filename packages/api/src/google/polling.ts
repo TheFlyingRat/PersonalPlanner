@@ -33,6 +33,7 @@ export class CalendarPoller {
     private getSyncToken: () => Promise<string | null>,
     private saveSyncToken: (token: string) => Promise<void>,
     private onAuthError?: () => Promise<void>,
+    private intervalMs: number = POLL_INTERVAL_MS,
   ) {}
 
   /** Start the initial sync and begin the polling interval. */
@@ -44,7 +45,7 @@ export class CalendarPoller {
 
     this.intervalId = setInterval(() => {
       void this.poll();
-    }, POLL_INTERVAL_MS);
+    }, this.intervalMs);
   }
 
   /** Stop polling. */
@@ -53,6 +54,11 @@ export class CalendarPoller {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+  }
+
+  /** Trigger an immediate sync cycle (used by push notification webhook). */
+  triggerSync(): void {
+    void this.poll();
   }
 
   /**
@@ -126,35 +132,21 @@ export class CalendarPoller {
   }
 
   /**
-   * Filter out events that were recently modified by us.
-   *
-   * We consider an event "ours" if its `lastModifiedByUs` extended property
-   * timestamp is within the last 30 seconds.  Everything else is treated as
-   * an external change that the scheduler needs to know about.
+   * Filter out events that haven't changed since the last poll cycle.
+   * Compares each event against the `lastEventsById` snapshot — if
+   * all tracked fields are identical, the event is dropped.
    */
   private filterExternalChanges(events: CalendarEvent[]): CalendarEvent[] {
-    const now = Date.now();
-    const GRACE_PERIOD_MS = 30_000; // 30 seconds
-
     return events.filter((event) => {
       // Events without a googleEventId are malformed; skip them
       if (!event.googleEventId) {
         return false;
       }
 
-      // Check if this event was recently written by us
-      if (event.isManaged) {
-        // The lastModifiedByUs timestamp lives in the event's extended
-        // properties.  Since we store it when building the event body, we
-        // can look at the previous snapshot to check the timestamp.
-        const previous = this.lastEventsById.get(event.googleEventId);
-        if (previous) {
-          // If the event hasn't actually changed compared to our last snapshot,
-          // it's not an external change.
-          if (this.eventsAreEqual(previous, event)) {
-            return false;
-          }
-        }
+      // If we've seen this event before and nothing changed, filter it out
+      const previous = this.lastEventsById.get(event.googleEventId);
+      if (previous && this.eventsAreEqual(previous, event)) {
+        return false;
       }
 
       return true;
@@ -169,7 +161,8 @@ export class CalendarPoller {
       a.end === b.end &&
       a.status === b.status &&
       a.itemType === b.itemType &&
-      a.itemId === b.itemId
+      a.itemId === b.itemId &&
+      (a.location ?? null) === (b.location ?? null)
     );
   }
 }

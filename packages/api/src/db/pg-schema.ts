@@ -86,10 +86,15 @@ export const calendars = pgTable('calendars', {
   mode: text('mode').default('writable'),
   enabled: boolean('enabled').default(true),
   syncToken: text('sync_token'),
+  watchChannelId: text('watch_channel_id'),
+  watchResourceId: text('watch_resource_id'),
+  watchToken: text('watch_token'),
+  watchExpiresAt: timestamp('watch_expires_at', { withTimezone: true, mode: 'string' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
   index('idx_calendars_user_id').on(table.userId),
+  index('idx_calendars_watch_channel_id').on(table.watchChannelId),
 ]);
 
 // ============================================================

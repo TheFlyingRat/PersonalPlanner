@@ -59,6 +59,7 @@ import searchRouter from './routes/search.js';
 import activityRouter from './routes/activity.js';
 import bookingRouter from './routes/booking.js';
 import quickAddRouter from './routes/quick-add.js';
+import webhooksRouter from './routes/webhooks.js';
 
 const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY, 10) : 0);
@@ -120,6 +121,16 @@ app.use('/api', globalLimiter);
 
 // bookingLimiter moved to rate-limiters.ts to avoid circular imports
 
+// Rate limit for Google Calendar push notification webhooks
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many webhook requests.' },
+});
+app.use('/api/webhooks', webhookLimiter);
+
 const rescheduleLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 10,
@@ -146,6 +157,7 @@ const PUBLIC_ROUTE_PATTERNS: RegExp[] = [
   /^\/api\/health$/,
   /^\/api\/auth\//,
   /^\/api\/book\//,
+  /^\/api\/webhooks\//,
 ];
 
 app.use('/api', (req, res, next) => {
@@ -181,6 +193,7 @@ app.use('/api/search', searchRouter);
 app.use('/api/activity', activityRouter);
 app.use('/api/book', bookingRouter);
 app.use('/api/quick-add', quickAddRouter);
+app.use('/api/webhooks', webhooksRouter);
 
 
 // Global error handler

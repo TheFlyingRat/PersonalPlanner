@@ -1,9 +1,11 @@
+import { randomUUID } from 'crypto';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
 import { calendars, calendarEvents } from '../db/pg-schema.js';
 import { GoogleCalendarClient } from './calendar.js';
 import { CalendarPoller } from './polling.js';
 import type { CalendarEvent } from '@cadence/shared';
+import { PUSH_FALLBACK_POLL_MS, WATCH_TTL_MS, WATCH_RENEWAL_BUFFER_MS } from '@cadence/shared';
 
 /**
  * Manages one CalendarPoller per enabled calendar.
@@ -13,14 +15,20 @@ import type { CalendarEvent } from '@cadence/shared';
 export class CalendarPollerManager {
   private pollers = new Map<string, CalendarPoller>();
   private userId: string;
+  private renewalTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private client: GoogleCalendarClient,
     private onChanges: (calendarId: string, events: CalendarEvent[]) => Promise<void>,
     userId?: string,
     private onAuthError?: () => Promise<void>,
+    private webhookBaseUrl?: string,
   ) {
     this.userId = userId || '';
+  }
+
+  get isPushMode(): boolean {
+    return !!this.webhookBaseUrl;
   }
 
   /** Start pollers for all enabled calendars (scoped to user if userId set). */
@@ -34,6 +42,8 @@ export class CalendarPollerManager {
     for (const cal of enabledCalendars) {
       await this.startPoller(cal.id, cal.googleCalendarId);
     }
+
+    this.startRenewalTimer();
   }
 
   /** Start a poller for a specific calendar. Also does an initial event cache. */
@@ -86,6 +96,41 @@ export class CalendarPollerManager {
       console.error(`[poller] Initial sync failed for ${calId}:`, err);
     }
 
+    // Register watch channel in push mode
+    let watchRegistered = false;
+    if (this.webhookBaseUrl) {
+      try {
+        const channelId = randomUUID();
+        const token = randomUUID();
+        const address = `${this.webhookBaseUrl}/api/webhooks/google-calendar`;
+
+        const watch = await this.client.watchEvents(
+          googleCalendarId,
+          address,
+          channelId,
+          token,
+          WATCH_TTL_MS,
+        );
+
+        await db.update(calendars)
+          .set({
+            watchChannelId: channelId,
+            watchResourceId: watch.resourceId,
+            watchToken: token,
+            watchExpiresAt: watch.expiration,
+          })
+          .where(eq(calendars.id, calId));
+
+        watchRegistered = true;
+        console.log(`[poller] Push channel registered for calendar ${calId}, expires ${watch.expiration}`);
+      } catch (err) {
+        console.error(`[poller] Failed to register push channel for ${calId}, falling back to polling:`, err);
+      }
+    }
+
+    // Use longer fallback interval in push mode (5min vs 15s)
+    const intervalMs = watchRegistered ? PUSH_FALLBACK_POLL_MS : undefined;
+
     const poller = new CalendarPoller(
       this.client,
       googleCalendarId,
@@ -103,6 +148,7 @@ export class CalendarPollerManager {
           .where(eq(calendars.id, calId));
       },
       this.onAuthError,
+      intervalMs,
     );
 
     await poller.start();
@@ -114,6 +160,24 @@ export class CalendarPollerManager {
     const poller = this.pollers.get(calId);
     if (poller) {
       poller.stop();
+
+      // Stop push channel if active
+      if (this.userId) {
+        try {
+          const calRows = await db.select().from(calendars).where(eq(calendars.id, calId));
+          const cal = calRows[0];
+          if (cal?.watchChannelId && cal?.watchResourceId) {
+            await this.client.stopWatch(cal.watchChannelId, cal.watchResourceId);
+            await db.update(calendars)
+              .set({ watchChannelId: null, watchResourceId: null, watchToken: null, watchExpiresAt: null })
+              .where(eq(calendars.id, calId));
+            console.log(`[poller] Push channel stopped for calendar ${calId}`);
+          }
+        } catch (err) {
+          console.error(`[poller] Failed to stop push channel for ${calId}:`, err);
+        }
+      }
+
       this.pollers.delete(calId);
     }
     // Clear cached events for this calendar (scoped to user)
@@ -126,10 +190,26 @@ export class CalendarPollerManager {
     }
   }
 
-  /** Stop all pollers. */
-  stopAll(): void {
-    for (const [, poller] of this.pollers) {
+  /** Stop all pollers and deregister push channels. */
+  async stopAll(): Promise<void> {
+    this.stopRenewalTimer();
+    for (const [calId, poller] of this.pollers) {
       poller.stop();
+      // Deregister push channel if active
+      if (this.userId) {
+        try {
+          const calRows = await db.select().from(calendars).where(eq(calendars.id, calId));
+          const cal = calRows[0];
+          if (cal?.watchChannelId && cal?.watchResourceId) {
+            await this.client.stopWatch(cal.watchChannelId, cal.watchResourceId);
+            await db.update(calendars)
+              .set({ watchChannelId: null, watchResourceId: null, watchToken: null, watchExpiresAt: null })
+              .where(eq(calendars.id, calId));
+          }
+        } catch (err) {
+          console.error(`[poller] Failed to stop push channel for ${calId} during shutdown:`, err);
+        }
+      }
     }
     this.pollers.clear();
   }
@@ -143,6 +223,96 @@ export class CalendarPollerManager {
   markAllWritten(): void {
     for (const poller of this.pollers.values()) {
       poller.markWritten();
+    }
+  }
+
+  /** Handle a push notification by triggering immediate sync on the target calendar. */
+  handleWebhookNotification(calId: string): void {
+    const poller = this.pollers.get(calId);
+    if (poller) {
+      poller.triggerSync();
+    } else {
+      console.warn(`[poller] Webhook notification for unknown calendar: ${calId}`);
+    }
+  }
+
+  /** Start periodic check for expiring watch channels (every 30 min). */
+  startRenewalTimer(): void {
+    if (!this.webhookBaseUrl) return;
+
+    this.renewalTimer = setInterval(() => {
+      void this.renewExpiringChannels();
+    }, 30 * 60 * 1000);
+  }
+
+  /** Stop the renewal timer. */
+  stopRenewalTimer(): void {
+    if (this.renewalTimer) {
+      clearInterval(this.renewalTimer);
+      this.renewalTimer = null;
+    }
+  }
+
+  private async renewExpiringChannels(): Promise<void> {
+    if (!this.userId || !this.webhookBaseUrl) return;
+
+    try {
+      const userCals = await db.select().from(calendars)
+        .where(eq(calendars.userId, this.userId));
+
+      const now = Date.now();
+      for (const cal of userCals) {
+        if (!cal.watchExpiresAt || !cal.watchChannelId) continue;
+
+        const expiresAt = new Date(cal.watchExpiresAt).getTime();
+        if (expiresAt - now > WATCH_RENEWAL_BUFFER_MS) continue;
+
+        console.log(`[poller] Renewing push channel for calendar ${cal.id} (expires ${cal.watchExpiresAt})`);
+
+        // Stop old channel
+        try {
+          if (cal.watchResourceId) {
+            await this.client.stopWatch(cal.watchChannelId, cal.watchResourceId);
+          }
+        } catch (err) {
+          console.warn(`[poller] Failed to stop old channel for ${cal.id}:`, err);
+        }
+
+        // Create new channel
+        try {
+          const channelId = randomUUID();
+          const token = randomUUID();
+          const address = `${this.webhookBaseUrl}/api/webhooks/google-calendar`;
+
+          const watch = await this.client.watchEvents(
+            cal.googleCalendarId,
+            address,
+            channelId,
+            token,
+            WATCH_TTL_MS,
+          );
+
+          await db.update(calendars)
+            .set({
+              watchChannelId: channelId,
+              watchResourceId: watch.resourceId,
+              watchToken: token,
+              watchExpiresAt: watch.expiration,
+            })
+            .where(eq(calendars.id, cal.id));
+
+          console.log(`[poller] Push channel renewed for calendar ${cal.id}, expires ${watch.expiration}`);
+        } catch (err) {
+          console.error(`[poller] Failed to renew push channel for ${cal.id}, restarting with polling fallback:`, err);
+          // Clear stale watch data and restart poller (will fall back to 15s polling)
+          await db.update(calendars)
+            .set({ watchChannelId: null, watchResourceId: null, watchToken: null, watchExpiresAt: null })
+            .where(eq(calendars.id, cal.id));
+          await this.startPoller(cal.id, cal.googleCalendarId);
+        }
+      }
+    } catch (err) {
+      console.error(`[poller] Channel renewal check failed:`, err);
     }
   }
 }

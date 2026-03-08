@@ -155,6 +155,7 @@ export class UserScheduler {
         await this.stop();
         broadcastToUser(this.userId, 'google_auth_required', 'Google Calendar access has been revoked. Please reconnect.');
       },
+      process.env.WEBHOOK_BASE_URL,
     );
 
     this.pollerManager = manager;
@@ -193,11 +194,18 @@ export class UserScheduler {
       this.periodicTimer = null;
     }
     if (this.pollerManager) {
-      this.pollerManager.stopAll();
+      await this.pollerManager.stopAll();
       this.pollerManager = null;
     }
     this.started = false;
     console.log(`[scheduler] User ${this.userId}: stopped`);
+  }
+
+  /** Handle a push notification for a specific calendar. */
+  handleWebhookNotification(calendarId: string): void {
+    if (this.pollerManager) {
+      this.pollerManager.handleWebhookNotification(calendarId);
+    }
   }
 
   async triggerReschedule(reason: string): Promise<number> {
@@ -486,7 +494,9 @@ export class UserScheduler {
       console.log(`[scheduler] User ${userId}: ${op.type} ${op.itemType}:${op.title} -> ${op.start} - ${op.end}`);
     }
     console.log(`[scheduler] User ${userId}: ${reason}: ${result.operations.length} operations applied`);
-    broadcastToUser(userId, 'schedule_updated', reason);
+    if (result.operations.length > 0) {
+      broadcastToUser(userId, 'schedule_updated', reason);
+    }
     return result.operations.length;
   }
 
@@ -610,6 +620,7 @@ export class UserScheduler {
             .where(and(eq(calendarEvents.googleEventId, ev.googleEventId), eq(calendarEvents.userId, userId)));
         }
       } else {
+        console.log(`[poller] User ${userId}: new external event: ${ev.title}`);
         externalChanged = true;
         await db.insert(calendarEvents).values({
           userId,
@@ -622,6 +633,17 @@ export class UserScheduler {
           location: ev.location || null,
           isAllDay: !ev.start.includes('T'),
           updatedAt: now,
+        }).onConflictDoUpdate({
+          target: [calendarEvents.userId, calendarEvents.googleEventId],
+          set: {
+            title: ev.title,
+            start: ev.start,
+            end: ev.end,
+            status: ev.status || 'busy',
+            location: ev.location || null,
+            isAllDay: !ev.start.includes('T'),
+            updatedAt: now,
+          },
         });
       }
     }
@@ -716,6 +738,16 @@ export class SchedulerRegistry {
 
   get(userId: string): UserScheduler | undefined {
     return this.schedulers.get(userId);
+  }
+
+  /** Route a webhook notification to the correct user's scheduler. */
+  async handleWebhookNotification(userId: string, calendarId: string): Promise<void> {
+    const scheduler = this.schedulers.get(userId);
+    if (scheduler) {
+      scheduler.handleWebhookNotification(calendarId);
+    } else {
+      console.warn(`[scheduler] Webhook notification for unknown user: ${userId}`);
+    }
   }
 
   async destroy(userId: string): Promise<void> {

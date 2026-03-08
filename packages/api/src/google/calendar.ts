@@ -318,6 +318,47 @@ export class GoogleCalendarClient {
     return deleted;
   }
 
+  // ---------- Push notification channels ------------------------------------
+
+  /** Register a push notification channel for calendar events. */
+  async watchEvents(
+    calendarId: string,
+    address: string,
+    channelId: string,
+    token: string,
+    ttlMs?: number,
+  ): Promise<{ resourceId: string; expiration: string }> {
+    const expiration = ttlMs
+      ? Date.now() + ttlMs
+      : Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days default
+
+    const response = await this.calendar.events.watch({
+      calendarId,
+      requestBody: {
+        id: channelId,
+        type: 'web_hook',
+        address,
+        token,
+        expiration: String(expiration),
+      },
+    });
+
+    return {
+      resourceId: response.data.resourceId || '',
+      expiration: new Date(Number(response.data.expiration) || expiration).toISOString(),
+    };
+  }
+
+  /** Stop a push notification channel. */
+  async stopWatch(channelId: string, resourceId: string): Promise<void> {
+    await this.calendar.channels.stop({
+      requestBody: {
+        id: channelId,
+        resourceId,
+      },
+    });
+  }
+
   // ---------- Internal helpers ----------------------------------------------
 
   /** Convert a raw Google Calendar event into our CalendarEvent shape. */

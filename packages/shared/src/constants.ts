@@ -40,6 +40,15 @@ export const FLIP_THRESHOLDS = {
 // Polling interval in milliseconds
 export const POLL_INTERVAL_MS = 15_000;
 
+/** Fallback polling interval in push mode (5 minutes) */
+export const PUSH_FALLBACK_POLL_MS = 5 * 60 * 1000;
+
+/** Buffer before channel expiry to trigger renewal (1 hour) */
+export const WATCH_RENEWAL_BUFFER_MS = 60 * 60 * 1000;
+
+/** Default watch channel TTL (7 days minus 1 hour safety margin) */
+export const WATCH_TTL_MS = 7 * 24 * 60 * 60 * 1000 - 60 * 60 * 1000;
+
 // Default scheduling window (days ahead)
 export const DEFAULT_SCHEDULING_WINDOW_DAYS = 14;
 

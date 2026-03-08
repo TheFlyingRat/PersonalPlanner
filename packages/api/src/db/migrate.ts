@@ -350,6 +350,17 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_habit_completions_unique ON habit_completions(habit_id, scheduled_date, user_id);
     `,
       },
+      {
+        version: 6,
+        description: 'Add watch channel columns to calendars for Google push notifications',
+        sql: `
+      ALTER TABLE calendars ADD COLUMN IF NOT EXISTS watch_channel_id TEXT;
+      ALTER TABLE calendars ADD COLUMN IF NOT EXISTS watch_resource_id TEXT;
+      ALTER TABLE calendars ADD COLUMN IF NOT EXISTS watch_token TEXT;
+      ALTER TABLE calendars ADD COLUMN IF NOT EXISTS watch_expires_at TIMESTAMPTZ;
+      CREATE INDEX IF NOT EXISTS idx_calendars_watch_channel_id ON calendars (watch_channel_id);
+    `,
+      },
     ];
 
     // INFRA-H1: Run each pending migration in a transaction
