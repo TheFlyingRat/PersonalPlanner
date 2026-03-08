@@ -16,7 +16,13 @@ router.get('/', async (req, res) => {
   const rows = await db.select().from(bufferConfig).where(eq(bufferConfig.userId, userId));
 
   if (rows.length === 0) {
-    sendNotFound(res, 'Buffer config');
+    res.json({
+      id: 'default',
+      travelTimeMinutes: 15,
+      decompressionMinutes: 10,
+      breakBetweenItemsMinutes: 5,
+      applyDecompressionTo: 'all',
+    });
     return;
   }
 
