@@ -7,7 +7,7 @@ import { SchedulingHours } from '@cadence/shared';
 import { createLinkSchema, updateLinkSchema, linkBookingSchema } from '../validation.js';
 import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 import { DEFAULT_USER_SETTINGS, getHoursWindow } from './defaults.js';
-import { bookingLimiter } from '../index.js';
+import { bookingLimiter } from '../rate-limiters.js';
 
 const router = Router();
 

@@ -118,14 +118,7 @@ const globalLimiter = rateLimit({
 });
 app.use('/api', globalLimiter);
 
-// Booking rate limiter — applied inline on router handlers in links.ts and booking.ts
-export const bookingLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'Too many booking requests, please try again later.' },
-});
+// bookingLimiter moved to rate-limiters.ts to avoid circular imports
 
 const rescheduleLimiter = rateLimit({
   windowMs: 60 * 1000,
