@@ -41,6 +41,7 @@
   let selectedIndex = $state(-1);
   let isMac = $state(false);
   let profileMenuOpen = $state(false);
+  let avatarFailed = $state(false);
   let profileTriggerEl: HTMLButtonElement | undefined;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined;
   let searchAbortController: AbortController | undefined;
@@ -544,8 +545,8 @@
         aria-haspopup="menu"
         title={collapsed ? (auth.user?.name ?? 'Profile') : undefined}
       >
-        {#if auth.user?.avatarUrl}
-          <img class="profile-avatar" src={auth.user.avatarUrl} alt="" />
+        {#if auth.user?.avatarUrl && !avatarFailed}
+          <img class="profile-avatar" src={auth.user.avatarUrl} alt="" onerror={() => { avatarFailed = true; }} referrerpolicy="no-referrer" />
         {:else}
           <span class="profile-avatar profile-avatar--initials">{userInitials}</span>
         {/if}

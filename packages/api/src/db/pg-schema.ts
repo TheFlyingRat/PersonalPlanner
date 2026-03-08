@@ -329,6 +329,21 @@ export const oauthStates = pgTable('oauth_states', {
 });
 
 // ============================================================
+// Scheduling Templates
+// ============================================================
+export const schedulingTemplates = pgTable('scheduling_templates', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  startTime: text('start_time').notNull(),
+  endTime: text('end_time').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+  index('idx_scheduling_templates_user_id').on(table.userId),
+]);
+
+// ============================================================
 // Scheduling Links
 // ============================================================
 export const schedulingLinks = pgTable('scheduling_links', {

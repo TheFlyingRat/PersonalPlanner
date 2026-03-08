@@ -361,6 +361,22 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_calendars_watch_channel_id ON calendars (watch_channel_id);
     `,
       },
+      {
+        version: 7,
+        description: 'Add scheduling_templates table',
+        sql: `
+      CREATE TABLE IF NOT EXISTS scheduling_templates (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_scheduling_templates_user_id ON scheduling_templates(user_id);
+    `,
+      },
     ];
 
     // INFRA-H1: Run each pending migration in a transaction

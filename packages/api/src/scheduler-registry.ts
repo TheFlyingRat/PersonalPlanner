@@ -263,11 +263,38 @@ export class UserScheduler {
           schedulingWindowDays: 14,
         };
 
+    // Clean up orphaned scheduled events (items that no longer exist)
+    const validItemIds = new Set([
+      ...allHabits.map(h => h.id),
+      ...allTasks.map(t => t.id),
+      ...allMeetings.map(m => m.id),
+      ...allFocusRules.map(f => f.id),
+    ]);
+
     // Load existing managed events (future only), scoped to user
     const nowISO = new Date().toISOString();
     const rawRows = await db.select().from(scheduledEvents)
       .where(eq(scheduledEvents.userId, userId));
-    const futureRows = rawRows.filter(r => r.end && r.end >= nowISO);
+
+    // Remove orphans: scheduled events whose parent item no longer exists
+    const orphanIds: string[] = [];
+    for (const row of rawRows) {
+      if (!row.itemId) continue;
+      const originalId = row.itemId.split('__')[0];
+      if (!validItemIds.has(originalId)) {
+        orphanIds.push(row.id);
+      }
+    }
+    if (orphanIds.length > 0) {
+      console.log(`[scheduler] User ${userId}: cleaning up ${orphanIds.length} orphaned scheduled events`);
+      for (const oid of orphanIds) {
+        await db.delete(scheduledEvents).where(and(eq(scheduledEvents.id, oid), eq(scheduledEvents.userId, userId)));
+      }
+    }
+
+    const futureRows = rawRows
+      .filter(r => r.end && r.end >= nowISO)
+      .filter(r => !orphanIds.includes(r.id));
 
     // Deduplicate by itemId
     const byItemId = new Map<string, any[]>();

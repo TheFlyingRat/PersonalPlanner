@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, like } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
 import { tasks, scheduledEvents, subtasks } from '../db/pg-schema.js';
 import type { CreateTaskRequest, Task, Subtask } from '@cadence/shared';
@@ -109,7 +109,7 @@ router.delete('/:id', async (req, res) => {
   }
 
   await db.transaction(async (tx) => {
-    await tx.delete(scheduledEvents).where(and(eq(scheduledEvents.itemId, id), eq(scheduledEvents.userId, req.userId)));
+    await tx.delete(scheduledEvents).where(and(like(scheduledEvents.itemId, `${id}__%`), eq(scheduledEvents.userId, req.userId)));
     await tx.delete(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
   });
   await logActivity(req.userId, 'delete', 'task', id, { name: existing[0].name });

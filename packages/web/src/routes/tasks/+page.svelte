@@ -1,7 +1,8 @@
 <script lang="ts">
   import { pageTitle } from '$lib/brand';
   import { tick } from 'svelte';
-  import { tasks as tasksApi, calendars as calendarsApi, ApiError } from '$lib/api';
+  import { tasks as tasksApi, calendars as calendarsApi, schedulingTemplates as templatesApi, ApiError } from '$lib/api';
+  import type { SchedulingTemplate } from '$lib/api';
   import { SchedulingHours } from '@cadence/shared';
   import type { Task, Subtask, Calendar, CreateTaskRequest } from '@cadence/shared';
   import Plus from 'lucide-svelte/icons/plus';
@@ -40,6 +41,10 @@
   let formChunkMin = $state(15);
   let formChunkMax = $state(60);
   let formSchedulingHours: SchedulingHours = $state(SchedulingHours.Working);
+
+  // Scheduling templates
+  let schedulingTemplates = $state<SchedulingTemplate[]>([]);
+  let selectedTemplateId = $state<string | null>(null);
 
   let calendarList = $state<Calendar[]>([]);
   let formCalendarId = $state('');
@@ -95,6 +100,25 @@
     return task.totalDuration > 0 ? Math.round(((task.totalDuration - task.remainingDuration) / task.totalDuration) * 100) : 0;
   }
 
+  function handleScheduleDropdownChange(value: string) {
+    if (value.startsWith('template:')) {
+      const tmplId = value.slice('template:'.length);
+      const tmpl = schedulingTemplates.find((t) => t.id === tmplId);
+      if (tmpl) {
+        selectedTemplateId = tmplId;
+        formSchedulingHours = SchedulingHours.Custom;
+      }
+    } else {
+      selectedTemplateId = null;
+      formSchedulingHours = value as SchedulingHours;
+    }
+  }
+
+  function getScheduleDropdownValue(): string {
+    if (selectedTemplateId) return `template:${selectedTemplateId}`;
+    return formSchedulingHours;
+  }
+
   function resetForm() {
     formName = '';
     formPriority = 3;
@@ -104,6 +128,7 @@
     formChunkMin = 15;
     formChunkMax = 60;
     formSchedulingHours = SchedulingHours.Working;
+    selectedTemplateId = null;
     formCalendarId = '';
     formColor = '';
     formSkipBuffer = false;
@@ -385,6 +410,7 @@
       }
       loadAllSubtaskCounts();
       calendarsApi.list().then((c) => { calendarList = c; }).catch(() => {});
+      templatesApi.list().then((r) => { schedulingTemplates = r.templates; }).catch(() => {});
     })();
   });
 </script>
@@ -592,10 +618,17 @@
 
       <div class="form-field">
         <label for="task-sched">Schedule during</label>
-        <select id="task-sched" bind:value={formSchedulingHours}>
+        <select id="task-sched" value={getScheduleDropdownValue()} onchange={(e) => handleScheduleDropdownChange(e.currentTarget.value)}>
           <option value="working">Work hours</option>
           <option value="personal">Personal hours</option>
           <option value="custom">Anytime (custom)</option>
+          {#if schedulingTemplates.length > 0}
+            <optgroup label="Templates">
+              {#each schedulingTemplates as tmpl}
+                <option value="template:{tmpl.id}">{tmpl.name} ({tmpl.startTime}–{tmpl.endTime})</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
       </div>
 

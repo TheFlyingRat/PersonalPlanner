@@ -61,8 +61,8 @@ export function generateCandidateSlots(
       continue; // slot too short for this item
     }
 
-    // Slide a window across the available slot
-    let candidateStart = windowStart;
+    // Slide a window across the available slot, snapped to 15-min grid
+    let candidateStart = Math.ceil(windowStart / stepMs) * stepMs;
     while (candidateStart + durationMs <= windowEnd) {
       const candidateEnd = candidateStart + durationMs;
 

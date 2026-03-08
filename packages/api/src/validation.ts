@@ -122,6 +122,7 @@ export const updateTaskSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   priority: z.number().int().min(1).max(4).optional(),
   totalDuration: z.number().int().positive().max(43200).optional(),
+  remainingDuration: z.number().int().nonnegative().max(43200).optional(),
   dueDate: z.string().datetime({ offset: true }).optional(),
   earliestStart: z.string().datetime({ offset: true }).optional(),
   chunkMin: z.number().int().positive().max(1440).optional(),
@@ -215,6 +216,15 @@ export const linkBookingSchema = z.object({
 }).refine(data => new Date(data.start) < new Date(data.end), {
   message: 'End must be after start',
 });
+
+export const createSchedulingTemplateSchema = z.object({
+  name: z.string().min(1).max(50),
+  startTime: z.string().regex(timeRegex, 'Must be HH:MM format'),
+  endTime: z.string().regex(timeRegex, 'Must be HH:MM format'),
+}).refine(
+  data => data.startTime < data.endTime,
+  { message: 'startTime must be before endTime' },
+);
 
 export const updateSubtaskSchema = z.object({
   name: z.string().min(1).max(200).optional(),

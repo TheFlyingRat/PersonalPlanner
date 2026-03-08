@@ -60,6 +60,7 @@ import activityRouter from './routes/activity.js';
 import bookingRouter from './routes/booking.js';
 import quickAddRouter from './routes/quick-add.js';
 import webhooksRouter from './routes/webhooks.js';
+import schedulingTemplatesRouter from './routes/scheduling-templates.js';
 
 const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY, 10) : 0);
@@ -194,6 +195,7 @@ app.use('/api/activity', activityRouter);
 app.use('/api/book', bookingRouter);
 app.use('/api/quick-add', quickAddRouter);
 app.use('/api/webhooks', webhooksRouter);
+app.use('/api/scheduling-templates', schedulingTemplatesRouter);
 
 
 // Global error handler

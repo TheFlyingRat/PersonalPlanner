@@ -619,7 +619,7 @@ router.get('/quality', async (req, res) => {
         type: ItemType.Meeting,
         priority: m.priority,
         timeWindow: { start: dayStart, end: dayEnd },
-        idealTime: m.idealTime,
+        idealTime: m.idealTime ?? '09:00',
         duration: m.duration,
         skipBuffer: m.skipBuffer,
         locked: false,
@@ -682,7 +682,7 @@ const alternativesLimiter = rateLimit({
 router.get('/:itemId/alternatives', alternativesLimiter, async (req, res) => {
   try {
     const userId = req.userId;
-    const { itemId } = req.params;
+    const itemId = req.params.itemId as string;
 
     if (!UUID_REGEX.test(itemId)) {
       sendError(res, 400, 'Invalid itemId format');

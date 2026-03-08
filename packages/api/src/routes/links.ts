@@ -226,7 +226,7 @@ router.get('/:slug/slots', async (req, res) => {
 
 // POST /api/links/:slug/book — book a slot
 router.post('/:slug/book', bookingLimiter, async (req, res) => {
-  const { slug } = req.params;
+  const slug = req.params.slug as string;
   const linkRows = await db.select().from(schedulingLinks).where(and(eq(schedulingLinks.slug, slug), eq(schedulingLinks.userId, req.userId)));
 
   if (linkRows.length === 0) {

@@ -5,8 +5,10 @@
   import Check from 'lucide-svelte/icons/check';
   import Loader2 from 'lucide-svelte/icons/loader-2';
   import Download from 'lucide-svelte/icons/download';
-  import { settings as settingsApi, buffers as buffersApi, calendars as calendarsApi, schedule as scheduleApi, auth as authApi } from '$lib/api';
-  import type { SessionInfo } from '$lib/api';
+  import { settings as settingsApi, buffers as buffersApi, calendars as calendarsApi, schedule as scheduleApi, auth as authApi, schedulingTemplates as templatesApi } from '$lib/api';
+  import type { SessionInfo, SchedulingTemplate } from '$lib/api';
+  import Plus from 'lucide-svelte/icons/plus';
+  import Clock from 'lucide-svelte/icons/clock';
   import type { Calendar } from '@cadence/shared';
   import { CalendarMode, DecompressionTarget } from '@cadence/shared';
   import Lock from 'lucide-svelte/icons/lock';
@@ -107,6 +109,14 @@
   let deleteConfirmEmail = $state('');
   let deleting = $state(false);
   let deletePassword = $state('');
+
+  // Scheduling templates
+  let templates = $state<SchedulingTemplate[]>([]);
+  let newTemplateName = $state('');
+  let newTemplateStart = $state('09:00');
+  let newTemplateEnd = $state('17:00');
+  let templateError = $state('');
+  let addingTemplate = $state(false);
 
   // Validation (#10)
   let hoursError = $derived.by(() => {
@@ -385,6 +395,64 @@
     }
   }
 
+  async function loadTemplates() {
+    try {
+      const result = await templatesApi.list();
+      templates = result.templates;
+    } catch {
+      // Non-critical — don't block settings load
+    }
+  }
+
+  async function addTemplate() {
+    templateError = '';
+    const name = newTemplateName.trim();
+    if (!name) {
+      templateError = 'Name is required.';
+      return;
+    }
+    if (name.length > 50) {
+      templateError = 'Name must be 50 characters or less.';
+      return;
+    }
+    if (newTemplateStart >= newTemplateEnd) {
+      templateError = 'Start time must be before end time.';
+      return;
+    }
+    if (templates.length >= 8) {
+      templateError = 'Maximum 8 templates allowed.';
+      return;
+    }
+    addingTemplate = true;
+    try {
+      const result = await templatesApi.create({
+        name,
+        startTime: newTemplateStart,
+        endTime: newTemplateEnd,
+      });
+      templates = [...templates, result.template];
+      newTemplateName = '';
+      newTemplateStart = '09:00';
+      newTemplateEnd = '17:00';
+      showSuccess('Template added.');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to add template.';
+      templateError = msg.length > 200 ? msg.slice(0, 200) + '...' : msg;
+    } finally {
+      addingTemplate = false;
+    }
+  }
+
+  async function deleteTemplate(id: string) {
+    try {
+      await templatesApi.delete(id);
+      templates = templates.filter(t => t.id !== id);
+      showSuccess('Template deleted.');
+    } catch {
+      showError('Failed to delete template.');
+    }
+  }
+
   function handleInstallPrompt(e: Event) {
     e.preventDefault();
     installPrompt = e as BeforeInstallPromptEvent;
@@ -429,8 +497,9 @@
         userHasPassword = !!meResult.user.hasPassword;
       }
 
-      // Load sessions in background
+      // Load sessions and templates in background
       loadSessions();
+      loadTemplates();
 
       calendarList = cals;
       googleConnected = authStatus.connected;
@@ -667,6 +736,79 @@
 
       <hr class="section-divider" />
 
+      <!-- Scheduling Templates -->
+      <section aria-labelledby="templates-heading" class="settings-section">
+        <div class="section-header-row">
+          <h2 id="templates-heading" class="section-heading">Scheduling Templates</h2>
+          <span class="template-count">{templates.length} / 8</span>
+        </div>
+        <p class="section-description">Define reusable time windows for habits, tasks, and focus time.</p>
+
+        {#if templates.length === 0}
+          <p class="empty-message">No custom templates yet.</p>
+        {:else}
+          <div class="template-list">
+            {#each templates as template (template.id)}
+              <div class="template-item">
+                <div class="template-info">
+                  <Clock size={14} />
+                  <span class="template-name">{template.name}</span>
+                  <span class="template-time font-mono">{template.startTime} – {template.endTime}</span>
+                </div>
+                <button
+                  class="btn-icon-danger"
+                  onclick={() => deleteTemplate(template.id)}
+                  aria-label="Delete template {template.name}"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if templates.length < 8}
+          <div class="template-form">
+            <div class="form-field">
+              <input
+                type="text"
+                placeholder="Template name"
+                bind:value={newTemplateName}
+                maxlength={50}
+              />
+            </div>
+            <div class="form-field">
+              <input
+                type="time"
+                bind:value={newTemplateStart}
+                class="font-mono"
+              />
+            </div>
+            <div class="form-field">
+              <input
+                type="time"
+                bind:value={newTemplateEnd}
+                class="font-mono"
+                aria-invalid={newTemplateStart >= newTemplateEnd}
+              />
+            </div>
+            <button
+              class="btn-sm btn-primary"
+              onclick={addTemplate}
+              disabled={addingTemplate}
+            >
+              <Plus size={14} />
+              Add
+            </button>
+          </div>
+          {#if templateError}
+            <p class="validation-error">{templateError}</p>
+          {/if}
+        {/if}
+      </section>
+
+      <hr class="section-divider" />
+
       <!-- General -->
       <section aria-labelledby="general-heading" class="settings-section">
         <h2 id="general-heading" class="section-heading">General</h2>
@@ -776,7 +918,7 @@
         <div class="account-info">
           <div class="account-avatar">
             {#if userAvatarUrl}
-              <img src={userAvatarUrl} alt="" class="account-avatar-img" />
+              <img src={userAvatarUrl} alt="" class="account-avatar-img" referrerpolicy="no-referrer" onerror={(e: Event) => { userAvatarUrl = null; }} />
             {:else}
               {initials}
             {/if}
@@ -1483,6 +1625,105 @@
     .privacy-item {
       flex-direction: column;
       align-items: flex-start;
+    }
+
+    .template-form {
+      grid-template-columns: 1fr !important;
+    }
+  }
+
+  /* Scheduling Templates */
+  .section-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-2);
+  }
+
+  .section-header-row .section-heading {
+    margin-bottom: 0;
+  }
+
+  .template-count {
+    font-size: 0.75rem;
+    color: var(--color-text-tertiary);
+    font-family: var(--font-mono);
+  }
+
+  .section-description {
+    font-size: 0.8125rem;
+    color: var(--color-text-secondary);
+    margin: 0 0 var(--space-4) 0;
+  }
+
+  .empty-message {
+    font-size: 0.8125rem;
+    color: var(--color-text-tertiary);
+    margin: 0 0 var(--space-4) 0;
+    font-style: italic;
+  }
+
+  .template-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin-bottom: var(--space-4);
+  }
+
+  .template-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-secondary);
+
+    &:hover {
+      background: var(--color-bg-tertiary);
+    }
+  }
+
+  .template-info {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 0.8125rem;
+    color: var(--color-text);
+  }
+
+  .template-name {
+    font-weight: 500;
+  }
+
+  .template-time {
+    color: var(--color-text-secondary);
+    font-size: 0.75rem;
+  }
+
+  .template-form {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: var(--space-2);
+    align-items: end;
+
+    .form-field {
+      margin: 0;
+    }
+  }
+
+  .btn-icon-danger {
+    background: none;
+    border: none;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    padding: var(--space-1);
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+
+    &:hover {
+      color: var(--color-danger);
+      background: var(--color-danger-bg, rgba(239, 68, 68, 0.1));
     }
   }
 </style>

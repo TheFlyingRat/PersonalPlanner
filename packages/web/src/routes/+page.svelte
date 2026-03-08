@@ -444,10 +444,11 @@
     error = '';
     deleting = true;
     confirmingDelete = false;
+    const entityId = event.itemId.split('__')[0];
     try {
-      if (event.type === 'habit') await habitsApi.delete(event.itemId);
-      else if (event.type === 'task') await tasksApi.delete(event.itemId);
-      else if (event.type === 'meeting') await meetingsApi.delete(event.itemId);
+      if (event.type === 'habit') await habitsApi.delete(entityId);
+      else if (event.type === 'task') await tasksApi.delete(entityId);
+      else if (event.type === 'meeting') await meetingsApi.delete(entityId);
       else return;
       await fetchEvents();
       closeDetail();

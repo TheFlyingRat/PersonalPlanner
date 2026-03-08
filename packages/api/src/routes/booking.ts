@@ -167,7 +167,7 @@ router.get('/:slug', async (req, res) => {
 
 // GET /api/book/:slug/availability?date=YYYY-MM-DD&duration=30
 router.get('/:slug/availability', bookingAvailabilityLimiter, async (req, res) => {
-  const { slug } = req.params;
+  const slug = req.params.slug as string;
   const linkRows = await db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, slug));
 
   if (linkRows.length === 0) {
@@ -248,7 +248,7 @@ router.get('/:slug/availability', bookingAvailabilityLimiter, async (req, res) =
 
 // POST /api/book/:slug — book a slot (public, no auth required)
 router.post('/:slug', bookingLimiter, async (req, res) => {
-  const { slug } = req.params;
+  const slug = req.params.slug as string;
   const linkRows = await db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, slug));
 
   if (linkRows.length === 0) {

@@ -1,5 +1,6 @@
 import {
   CandidateSlot,
+  ItemType,
   ScheduleItem,
   TimeSlot,
   BufferConfig,
@@ -31,13 +32,15 @@ export function scoreSlot(
   let score = 0;
 
   const hasIdealTime = !!item.idealTime && /^\d{1,2}:\d{2}$/.test(item.idealTime);
+  // Habits and meetings have user-set preferred times; tasks/focus use auto-generated ones
+  const userSetIdealTime = hasIdealTime && (item.type === ItemType.Habit || item.type === ItemType.Meeting);
   const wIdeal = hasIdealTime ? 55 : 40;
   const wBuffer = hasIdealTime ? 20 : 25;
   const wContinuity = 20;
   const wTimeOfDay = hasIdealTime ? 5 : 15;
 
   // 1. Proximity to ideal time
-  score += scoreIdealTimeProximity(slot, item, tz) * wIdeal;
+  score += scoreIdealTimeProximity(slot, item, userSetIdealTime, tz) * wIdeal;
 
   // 2. Buffer compliance (neutral score if item skips buffers)
   score += (item.skipBuffer ? 0.5 : scoreBufferCompliance(slot, existingPlacements, bufferConfig, tz, placementsByDay)) * wBuffer;
@@ -55,20 +58,19 @@ export function scoreSlot(
  * Score proximity to ideal time (0-1 scale).
  * Ideal time is an HH:MM preference. The closer the slot start is, the better.
  *
- * Uses a Gaussian decay so that being right on the ideal time scores ~1.0,
- * 30 min away scores ~0.70, 60 min away scores ~0.24, and 2h+ away is near 0.
- * This makes the ideal time a strong attractor when explicitly set.
+ * Uses a Gaussian decay. When the user explicitly sets a preferred time,
+ * a tighter sigma (45 min) makes it a strong attractor. For auto-generated
+ * ideal times (e.g. task chunks), a wider sigma (75 min) keeps placement flexible.
  */
-function scoreIdealTimeProximity(slot: CandidateSlot, item: ScheduleItem, tz?: string): number {
+function scoreIdealTimeProximity(slot: CandidateSlot, item: ScheduleItem, userSet: boolean, tz?: string): number {
   const idealMinutes = parseTimeToMinutes(item.idealTime);
   const slotMinutes = dateToMinutesSinceMidnight(slot.start, tz);
 
   const rawDiff = Math.abs(slotMinutes - idealMinutes);
   const diff = Math.min(rawDiff, 1440 - rawDiff);
 
-  // Gaussian decay: sigma = 75 min
-  // On-target: 1.0, 30min off: 0.92, 60min off: 0.73, 2h off: 0.28
-  const sigma = 75;
+  // Tighter sigma for user-set preferred times, wider for auto-generated
+  const sigma = userSet ? 45 : 75;
   return Math.exp(-(diff * diff) / (2 * sigma * sigma));
 }
 

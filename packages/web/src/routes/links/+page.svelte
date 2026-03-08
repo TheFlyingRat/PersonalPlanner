@@ -1,8 +1,10 @@
 <script lang="ts">
   import { pageTitle } from '$lib/brand';
   import { onMount, onDestroy, tick } from 'svelte';
-  import { links as linksApi } from '$lib/api';
+  import { links as linksApi, schedulingTemplates as templatesApi } from '$lib/api';
+  import type { SchedulingTemplate } from '$lib/api';
   import type { SchedulingLink } from '@cadence/shared';
+  import { SchedulingHours } from '@cadence/shared';
   import Plus from 'lucide-svelte/icons/plus';
   import Pencil from 'lucide-svelte/icons/pencil';
   import Trash2 from 'lucide-svelte/icons/trash-2';
@@ -37,7 +39,12 @@
   let formDuration15 = $state(false);
   let formDuration30 = $state(true);
   let formDuration60 = $state(false);
+  let formSchedulingHours: SchedulingHours = $state(SchedulingHours.Working);
   let manualSlugEdit = $state(false);
+
+  // Scheduling templates
+  let schedulingTemplates = $state<SchedulingTemplate[]>([]);
+  let selectedTemplateId = $state<string | null>(null);
 
   let panelEl = $state<HTMLDivElement | null>(null);
   let successTimer: ReturnType<typeof setTimeout> | null = null;
@@ -52,6 +59,25 @@
     if (successTimer) clearTimeout(successTimer);
   });
 
+  function handleScheduleDropdownChange(value: string) {
+    if (value.startsWith('template:')) {
+      const tmplId = value.slice('template:'.length);
+      const tmpl = schedulingTemplates.find((t) => t.id === tmplId);
+      if (tmpl) {
+        selectedTemplateId = tmplId;
+        formSchedulingHours = SchedulingHours.Custom;
+      }
+    } else {
+      selectedTemplateId = null;
+      formSchedulingHours = value as SchedulingHours;
+    }
+  }
+
+  function getScheduleDropdownValue(): string {
+    if (selectedTemplateId) return `template:${selectedTemplateId}`;
+    return formSchedulingHours;
+  }
+
   function resetForm() {
     formName = '';
     formSlug = '';
@@ -59,6 +85,8 @@
     formDuration15 = false;
     formDuration30 = true;
     formDuration60 = false;
+    formSchedulingHours = SchedulingHours.Working;
+    selectedTemplateId = null;
     manualSlugEdit = false;
     editingId = null;
   }
@@ -98,6 +126,8 @@
     formDuration15 = link.durations.includes(15);
     formDuration30 = link.durations.includes(30);
     formDuration60 = link.durations.includes(60);
+    formSchedulingHours = link.schedulingHours ?? SchedulingHours.Working;
+    selectedTemplateId = null;
     manualSlugEdit = true;
     showPanel = true;
     tick().then(() => focusFirstInPanel());
@@ -185,6 +215,7 @@
       slug: formSlug,
       durations,
       priority: formPriority,
+      schedulingHours: formSchedulingHours,
     };
 
     try {
@@ -261,6 +292,7 @@
     } finally {
       loading = false;
     }
+    templatesApi.list().then((r) => { schedulingTemplates = r.templates; }).catch(() => {});
   });
 </script>
 
@@ -456,6 +488,22 @@
           <option value={2}>P2 - High</option>
           <option value={3}>P3 - Medium</option>
           <option value={4}>P4 - Low</option>
+        </select>
+      </div>
+
+      <div class="form-field">
+        <label for="link-sched">Schedule during</label>
+        <select id="link-sched" value={getScheduleDropdownValue()} onchange={(e) => handleScheduleDropdownChange(e.currentTarget.value)}>
+          <option value="working">Work hours</option>
+          <option value="personal">Personal hours</option>
+          <option value="custom">Anytime (custom)</option>
+          {#if schedulingTemplates.length > 0}
+            <optgroup label="Templates">
+              {#each schedulingTemplates as tmpl}
+                <option value="template:{tmpl.id}">{tmpl.name} ({tmpl.startTime}–{tmpl.endTime})</option>
+              {/each}
+            </optgroup>
+          {/if}
         </select>
       </div>
 

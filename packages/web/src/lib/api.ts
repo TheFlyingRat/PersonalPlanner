@@ -362,6 +362,28 @@ export interface SessionInfo {
   current: boolean;
 }
 
+export interface SchedulingTemplate {
+  id: string;
+  userId: string;
+  name: string;
+  startTime: string;
+  endTime: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const schedulingTemplates = {
+  list: () =>
+    request<{ templates: SchedulingTemplate[] }>('/scheduling-templates'),
+  create: (data: { name: string; startTime: string; endTime: string }) =>
+    request<{ template: SchedulingTemplate }>('/scheduling-templates', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  delete: (id: string) =>
+    request<{ success: boolean }>(`/scheduling-templates/${id}`, { method: 'DELETE' }),
+};
+
 export const auth = {
   login: (email: string, password: string) =>
     request<{ user: { id: string; name: string; email: string; emailVerified: boolean; onboardingCompleted: boolean } }>('/auth/login', {

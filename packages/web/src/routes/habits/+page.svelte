@@ -1,7 +1,9 @@
 <script lang="ts">
   import { pageTitle } from '$lib/brand';
   import { tick } from 'svelte';
-  import { habits as habitsApi, calendars as calendarsApi, ApiError } from '$lib/api';
+  import { habits as habitsApi, calendars as calendarsApi, settings as settingsApi, schedulingTemplates as templatesApi, ApiError } from '$lib/api';
+  import type { SchedulingTemplate } from '$lib/api';
+  import type { UserConfig } from '@cadence/shared';
   import { Frequency, SchedulingHours } from '@cadence/shared';
   import type { Habit, HabitCompletion, Calendar } from '@cadence/shared';
   import Plus from 'lucide-svelte/icons/plus';
@@ -74,6 +76,13 @@
 
   // Calendar list
   let calendarList = $state<Calendar[]>([]);
+
+  // User settings for scheduling hour presets
+  let userSettings = $state<UserConfig | null>(null);
+
+  // Scheduling templates
+  let schedulingTemplates = $state<SchedulingTemplate[]>([]);
+  let selectedTemplateId = $state<string | null>(null);
 
   // Streak and completion tracking
   let streaks = $state<Record<string, number>>({});
@@ -201,6 +210,7 @@
     formDurationMax = 60;
     formDays = [...WEEKDAYS];
     formSchedulingHours = SchedulingHours.Working;
+    selectedTemplateId = null;
     formLocked = false;
     formAutoDecline = false;
     formNotifications = false;
@@ -210,9 +220,53 @@
     editingId = null;
   }
 
+  function applySchedulingPreset(value: SchedulingHours) {
+    selectedTemplateId = null;
+    const s = userSettings?.settings;
+    if (value === SchedulingHours.Working && s) {
+      formWindowStart = s.workingHours.start;
+      formWindowEnd = s.workingHours.end;
+    } else if (value === SchedulingHours.Personal && s) {
+      formWindowStart = s.personalHours.start;
+      formWindowEnd = s.personalHours.end;
+    } else if (value === SchedulingHours.Custom) {
+      formWindowStart = '00:00';
+      formWindowEnd = '23:59';
+    }
+  }
+
+  function handleScheduleDropdownChange(value: string) {
+    if (value.startsWith('template:')) {
+      const tmplId = value.slice('template:'.length);
+      const tmpl = schedulingTemplates.find((t) => t.id === tmplId);
+      if (tmpl) {
+        selectedTemplateId = tmplId;
+        formSchedulingHours = SchedulingHours.Custom;
+        formWindowStart = tmpl.startTime;
+        formWindowEnd = tmpl.endTime;
+      }
+    } else {
+      formSchedulingHours = value as SchedulingHours;
+      applySchedulingPreset(formSchedulingHours);
+    }
+  }
+
+  function getScheduleDropdownValue(): string {
+    if (selectedTemplateId) return `template:${selectedTemplateId}`;
+    return formSchedulingHours;
+  }
+
+  function detectTemplateMatch(windowStart: string, windowEnd: string): string | null {
+    const match = schedulingTemplates.find(
+      (t) => t.startTime === windowStart && t.endTime === windowEnd
+    );
+    return match?.id ?? null;
+  }
+
   function openAddForm() {
     panelTrigger = document.activeElement as HTMLElement;
     resetForm();
+    applySchedulingPreset(formSchedulingHours);
     showPanel = true;
     tick().then(() => focusFirstInPanel());
   }
@@ -229,6 +283,7 @@
     formDurationMax = habit.durationMax;
     formDays = daysFromHabit(habit);
     formSchedulingHours = habit.schedulingHours;
+    selectedTemplateId = detectTemplateMatch(habit.windowStart, habit.windowEnd);
     formLocked = habit.locked;
     formAutoDecline = habit.autoDecline;
     formNotifications = habit.notifications ?? false;
@@ -420,6 +475,8 @@
       }
       loadStreaksAndCompletions();
       calendarsApi.list().then((c) => { calendarList = c; }).catch(() => {});
+      settingsApi.get().then((s) => { userSettings = s; }).catch(() => {});
+      templatesApi.list().then((r) => { schedulingTemplates = r.templates; }).catch(() => {});
     })();
   });
 </script>
@@ -691,6 +748,23 @@
         </div>
       </fieldset>
 
+      <div class="form-field">
+        <label for="habit-sched">Schedule during</label>
+        <select id="habit-sched" value={getScheduleDropdownValue()} onchange={(e) => handleScheduleDropdownChange(e.currentTarget.value)}>
+          <option value="working">Work hours{userSettings?.settings ? ` (${userSettings.settings.workingHours.start}–${userSettings.settings.workingHours.end})` : ''}</option>
+          <option value="personal">Personal hours{userSettings?.settings ? ` (${userSettings.settings.personalHours.start}–${userSettings.settings.personalHours.end})` : ''}</option>
+          <option value="custom">Anytime (custom)</option>
+          {#if schedulingTemplates.length > 0}
+            <optgroup label="Templates">
+              {#each schedulingTemplates as tmpl}
+                <option value="template:{tmpl.id}">{tmpl.name} ({tmpl.startTime}–{tmpl.endTime})</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </select>
+        <span class="form-helper">Preset fills the time range below</span>
+      </div>
+
       <fieldset class="form-section">
         <legend class="form-section-header">Available time range</legend>
         <span class="form-helper">The time range this habit can be scheduled within</span>
@@ -710,16 +784,6 @@
         <label for="habit-ideal">Preferred time</label>
         <input id="habit-ideal" type="time" bind:value={formIdealTime} />
         <span class="form-helper">The scheduler will try to schedule near this time</span>
-      </div>
-
-      <div class="form-field">
-        <label for="habit-sched">Schedule during</label>
-        <select id="habit-sched" bind:value={formSchedulingHours}>
-          <option value="working">Work hours (from settings)</option>
-          <option value="personal">Personal hours (from settings)</option>
-          <option value="custom">Anytime (custom)</option>
-        </select>
-        <span class="form-helper">Uses hours from your settings page</span>
       </div>
 
       {#if calendarList.length > 0}

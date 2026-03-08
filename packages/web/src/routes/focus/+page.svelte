@@ -4,13 +4,16 @@
   import Loader2 from 'lucide-svelte/icons/loader-2';
   import Check from 'lucide-svelte/icons/check';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
-  import { focusTime as focusApi } from '$lib/api';
+  import { focusTime as focusApi, schedulingTemplates as templatesApi } from '$lib/api';
+  import type { SchedulingTemplate } from '$lib/api';
   import { SchedulingHours } from '@cadence/shared';
 
   // Config state
   let weeklyTarget = $state(10);
   let dailyTarget = $state(2);
   let schedulingHours = $state('working');
+  let selectedTemplateId = $state<string | null>(null);
+  let schedulingTemplates = $state<SchedulingTemplate[]>([]);
   let enabled = $state(true);
   let loading = $state(true);
   let loadFailed = $state(false);
@@ -76,7 +79,29 @@
     }
   }
 
-  onMount(() => { loadConfig(); });
+  function handleScheduleDropdownChange(value: string) {
+    if (value.startsWith('template:')) {
+      const tmplId = value.slice('template:'.length);
+      const tmpl = schedulingTemplates.find((t) => t.id === tmplId);
+      if (tmpl) {
+        selectedTemplateId = tmplId;
+        schedulingHours = 'custom';
+      }
+    } else {
+      selectedTemplateId = null;
+      schedulingHours = value;
+    }
+  }
+
+  function getScheduleDropdownValue(): string {
+    if (selectedTemplateId) return `template:${selectedTemplateId}`;
+    return schedulingHours;
+  }
+
+  onMount(() => {
+    loadConfig();
+    templatesApi.list().then((r) => { schedulingTemplates = r.templates; }).catch(() => {});
+  });
 </script>
 
 <svelte:head>
@@ -164,10 +189,17 @@
             <!-- Scheduling Hours -->
             <div class="form-field">
               <label for="focus-sched-hours">Scheduling Hours</label>
-              <select id="focus-sched-hours" bind:value={schedulingHours}>
+              <select id="focus-sched-hours" value={getScheduleDropdownValue()} onchange={(e) => handleScheduleDropdownChange(e.currentTarget.value)}>
                 <option value="working">Working Hours</option>
                 <option value="personal">Personal Hours</option>
                 <option value="custom">Custom</option>
+                {#if schedulingTemplates.length > 0}
+                  <optgroup label="Templates">
+                    {#each schedulingTemplates as tmpl}
+                      <option value="template:{tmpl.id}">{tmpl.name} ({tmpl.startTime}–{tmpl.endTime})</option>
+                    {/each}
+                  </optgroup>
+                {/if}
               </select>
             </div>
           </div>
