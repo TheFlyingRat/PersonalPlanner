@@ -513,11 +513,25 @@ router.get('/google', async (req, res) => {
 
   await db.insert(oauthStates).values({ stateHash, expiresAt });
 
-  // Use 'consent' to ensure Google returns a refresh_token (required for calendar access).
+  // First-time auth needs 'consent' to get a refresh_token from Google.
+  // Subsequent logins use 'none' for silent sign-in (refresh token already stored).
   // 'select_account' is used on retry to let user pick a different account.
-  const ALLOWED_PROMPTS = ['consent', 'select_account'] as const;
+  const ALLOWED_PROMPTS = ['none', 'consent', 'select_account'] as const;
   const rawPrompt = req.query.prompt as string | undefined;
-  const promptParam = rawPrompt && ALLOWED_PROMPTS.includes(rawPrompt as any) ? rawPrompt : 'consent';
+  let promptParam: string;
+  if (rawPrompt && ALLOWED_PROMPTS.includes(rawPrompt as any)) {
+    promptParam = rawPrompt;
+  } else {
+    // Check if user already has a refresh token (existing Google connection)
+    const userId = req.userId;
+    let hasRefreshToken = false;
+    if (userId) {
+      const [existing] = await db.select({ grt: users.googleRefreshToken })
+        .from(users).where(eq(users.id, userId));
+      hasRefreshToken = !!existing?.grt;
+    }
+    promptParam = hasRefreshToken ? 'none' : 'consent';
+  }
 
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
