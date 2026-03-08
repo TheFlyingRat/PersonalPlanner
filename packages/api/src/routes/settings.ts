@@ -64,9 +64,37 @@ router.put('/', async (req, res) => {
 
 // POST /api/settings/onboarding/complete — mark onboarding as completed
 router.post('/onboarding/complete', async (req, res) => {
+  const now = new Date().toISOString();
   await db.update(users)
-    .set({ onboardingCompleted: true, updatedAt: new Date().toISOString() })
+    .set({
+      onboardingCompleted: true,
+      gdprConsentAt: now,
+      consentVersion: '1.0',
+      updatedAt: now,
+    })
     .where(eq(users.id, req.userId));
+
+  // Re-issue access token with hasGdprConsent=true so the GDPR middleware unblocks
+  const { signAccessToken, setAuthCookies } = await import('../auth/jwt.js');
+  const accessToken = signAccessToken({
+    userId: req.userId,
+    email: req.userEmail,
+    plan: req.userPlan,
+    emailVerified: true,
+    hasGdprConsent: true,
+  });
+  // Set only the access token cookie (refresh token unchanged)
+  const isProduction = process.env.NODE_ENV === 'production';
+  const cookieDomain = process.env.COOKIE_DOMAIN;
+  res.cookie('access_token', accessToken, {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 15 * 60 * 1000,
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
+  });
+
   res.json({ onboardingCompleted: true });
 });
 
