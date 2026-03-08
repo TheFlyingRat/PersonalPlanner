@@ -513,10 +513,11 @@ router.get('/google', async (req, res) => {
 
   await db.insert(oauthStates).values({ stateHash, expiresAt });
 
-  // Use prompt=none for silent sign-in; fall back to select_account on retry
-  const ALLOWED_PROMPTS = ['none', 'select_account'] as const;
+  // Use 'consent' to ensure Google returns a refresh_token (required for calendar access).
+  // 'select_account' is used on retry to let user pick a different account.
+  const ALLOWED_PROMPTS = ['consent', 'select_account'] as const;
   const rawPrompt = req.query.prompt as string | undefined;
-  const promptParam = rawPrompt && ALLOWED_PROMPTS.includes(rawPrompt as any) ? rawPrompt : 'none';
+  const promptParam = rawPrompt && ALLOWED_PROMPTS.includes(rawPrompt as any) ? rawPrompt : 'consent';
 
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
