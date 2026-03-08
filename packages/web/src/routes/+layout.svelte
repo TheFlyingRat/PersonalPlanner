@@ -104,9 +104,11 @@
     }, 300);
   }
 
+  const ALLOWED_ROUTE_PREFIXES = ['/habits', '/tasks', '/meetings', '/focus', '/links', '/analytics', '/settings', '/dashboard', '/privacy', '/book'];
+
   function selectResult(result: { href: string }) {
     closeSearch();
-    if (result.href && result.href.startsWith('/')) {
+    if (result.href && result.href.startsWith('/') && (result.href === '/' || ALLOWED_ROUTE_PREFIXES.some(p => result.href.startsWith(p)))) {
       goto(result.href);
     }
   }

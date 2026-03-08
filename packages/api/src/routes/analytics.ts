@@ -6,18 +6,43 @@ import type { AnalyticsData } from '@cadence/shared';
 
 const router = Router();
 
-function getDateRange(req: import('express').Request): { fromDate: string; toDate: string } {
+const MAX_RANGE_DAYS = 365;
+
+function getDateRange(req: import('express').Request): { fromDate: string; toDate: string } | { error: string } {
   const now = new Date();
-  const toDate = typeof req.query.to === 'string' ? req.query.to : now.toISOString();
-  const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const fromDate = typeof req.query.from === 'string' ? req.query.from : defaultFrom;
+  let toDate: string;
+  let fromDate: string;
+
+  if (typeof req.query.to === 'string') {
+    if (isNaN(Date.parse(req.query.to))) return { error: 'Invalid "to" date format' };
+    toDate = req.query.to;
+  } else {
+    toDate = now.toISOString();
+  }
+
+  if (typeof req.query.from === 'string') {
+    if (isNaN(Date.parse(req.query.from))) return { error: 'Invalid "from" date format' };
+    fromDate = req.query.from;
+  } else {
+    fromDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  }
+
+  const rangeMs = new Date(toDate).getTime() - new Date(fromDate).getTime();
+  if (rangeMs < 0) return { error: '"from" must be before "to"' };
+  if (rangeMs > MAX_RANGE_DAYS * 24 * 60 * 60 * 1000) return { error: `Date range must not exceed ${MAX_RANGE_DAYS} days` };
+
   return { fromDate, toDate };
 }
 
 // GET /api/analytics — compute analytics from scheduled_events
 router.get('/', async (req, res) => {
   const userId = req.userId;
-  const { fromDate, toDate } = getDateRange(req);
+  const range = getDateRange(req);
+  if ('error' in range) {
+    res.status(400).json({ error: range.error });
+    return;
+  }
+  const { fromDate, toDate } = range;
 
   const [events, allHabits] = await Promise.all([
     db.select().from(scheduledEvents).where(
@@ -73,7 +98,12 @@ router.get('/', async (req, res) => {
 // GET /api/analytics/weekly — weekly breakdown
 router.get('/weekly', async (req, res) => {
   const userId = req.userId;
-  const { fromDate, toDate } = getDateRange(req);
+  const range = getDateRange(req);
+  if ('error' in range) {
+    res.status(400).json({ error: range.error });
+    return;
+  }
+  const { fromDate, toDate } = range;
   const events = await db.select().from(scheduledEvents).where(
     and(
       eq(scheduledEvents.userId, userId),

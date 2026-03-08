@@ -8,6 +8,7 @@ import { SchedulingHours } from '@cadence/shared';
 import { bookingAvailabilitySchema, bookingRequestSchema } from '../validation.js';
 import { sendValidationError, sendNotFound, sendError } from './helpers.js';
 import { DEFAULT_USER_SETTINGS, getHoursWindow } from './defaults.js';
+import { bookingLimiter } from '../index.js';
 
 const router = Router();
 
@@ -246,7 +247,7 @@ router.get('/:slug/availability', bookingAvailabilityLimiter, async (req, res) =
 });
 
 // POST /api/book/:slug — book a slot (public, no auth required)
-router.post('/:slug', async (req, res) => {
+router.post('/:slug', bookingLimiter, async (req, res) => {
   const { slug } = req.params;
   const linkRows = await db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, slug));
 
@@ -305,6 +306,9 @@ router.post('/:slug', async (req, res) => {
   const now = new Date().toISOString();
   const bookingTitle = `Booking: ${name}`;
   // SEC-L5: Include notes in description if provided
+  // NOTE: PII (name, email) in title/description is intentional — the link owner
+  // needs to see who booked the slot in their calendar. This data is only visible
+  // to the authenticated link owner and is covered by GDPR cascade deletion.
   const description = notes
     ? `Booked by ${name} (${email})\nNotes: ${notes}`
     : `Booked by ${name} (${email})`;

@@ -3,6 +3,7 @@ import type { Server } from 'http';
 import type { IncomingMessage } from 'http';
 import { verifyAccessToken, getAccessTokenCookieName } from './auth/jwt.js';
 import { schedulerRegistry } from './scheduler-registry.js';
+import { allowedOrigins } from './index.js';
 
 let wss: WebSocketServer | null = null;
 
@@ -37,7 +38,19 @@ function authenticateWs(req: IncomingMessage): string | null {
 }
 
 export function initWebSocket(server: Server): void {
-  wss = new WebSocketServer({ server, path: '/ws' });
+  wss = new WebSocketServer({
+    server,
+    path: '/ws',
+    verifyClient: ({ req }, cb) => {
+      const origin = req.headers.origin;
+      // Allow connections with no origin (non-browser clients, e.g. server-side health checks)
+      if (!origin || allowedOrigins.includes(origin)) {
+        cb(true);
+      } else {
+        cb(false, 403, 'Origin not allowed');
+      }
+    },
+  });
 
   // Heartbeat: ping every 30s, terminate stale clients
   const heartbeat = setInterval(() => {

@@ -71,4 +71,5 @@ export interface JwtPayload {
   email: string;
   plan: string;
   emailVerified: boolean;
+  hasGdprConsent: boolean;
 }

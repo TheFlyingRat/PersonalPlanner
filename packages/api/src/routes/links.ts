@@ -7,6 +7,7 @@ import { SchedulingHours } from '@cadence/shared';
 import { createLinkSchema, updateLinkSchema, linkBookingSchema } from '../validation.js';
 import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 import { DEFAULT_USER_SETTINGS, getHoursWindow } from './defaults.js';
+import { bookingLimiter } from '../index.js';
 
 const router = Router();
 
@@ -224,7 +225,7 @@ router.get('/:slug/slots', async (req, res) => {
 });
 
 // POST /api/links/:slug/book — book a slot
-router.post('/:slug/book', async (req, res) => {
+router.post('/:slug/book', bookingLimiter, async (req, res) => {
   const { slug } = req.params;
   const linkRows = await db.select().from(schedulingLinks).where(and(eq(schedulingLinks.slug, slug), eq(schedulingLinks.userId, req.userId)));
 

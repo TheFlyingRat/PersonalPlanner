@@ -63,9 +63,9 @@ export async function sendVerificationEmail(email: string, token: string): Promi
     text: `Verify your email\n\nVisit this link to verify your email: ${verifyUrl}\n\nThis link expires in 24 hours.`,
   });
 
-  // Log to console when using jsonTransport (no SMTP configured)
+  // Log metadata only when using jsonTransport (no SMTP configured)
   if (info.envelope === undefined && info.message) {
-    console.log('[email] Verification email (console mode):', JSON.parse(info.message));
+    console.log(`[email] Verification email sent (console mode): to=${email}, subject="Verify your email"`);
   }
 }
 
@@ -95,6 +95,6 @@ export async function sendPasswordResetEmail(email: string, token: string): Prom
   });
 
   if (info.envelope === undefined && info.message) {
-    console.log('[email] Password reset email (console mode):', JSON.parse(info.message));
+    console.log(`[email] Password reset email sent (console mode): to=${email}, subject="Reset your password"`);
   }
 }

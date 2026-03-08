@@ -433,6 +433,11 @@ router.get('/export', async (req, res) => {
       endFilter = parsed;
     }
 
+    if (startFilter !== null && endFilter !== null && startFilter >= endFilter) {
+      sendError(res, 400, 'start must be before end');
+      return;
+    }
+
     function inRange(evStart: string, evEnd: string): boolean {
       if (!startFilter || !endFilter) return true;
       const s = new Date(evStart).getTime();

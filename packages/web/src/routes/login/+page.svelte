@@ -2,6 +2,7 @@
   import { pageTitle, APP_NAME } from '$lib/brand';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
+  import { onMount } from 'svelte';
   import { login, googleAuth } from '$lib/auth.svelte';
   import { ApiError } from '$lib/api';
   import AuthLayout from '$lib/components/auth/AuthLayout.svelte';
@@ -29,9 +30,11 @@
   let passwordError = $state('');
 
   // If redirected back because prompt=none failed, retry with account picker
-  if (page.url.searchParams.get('google_retry') === '1') {
-    googleAuth('select_account');
-  }
+  onMount(() => {
+    if (page.url.searchParams.get('google_retry') === '1') {
+      googleAuth('select_account');
+    }
+  });
 
   async function handleSignIn(e: SubmitEvent) {
     e.preventDefault();

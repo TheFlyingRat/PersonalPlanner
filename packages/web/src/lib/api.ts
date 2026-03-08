@@ -108,7 +108,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     let message = `API error: ${res.status}`;
     try {
       const body = await res.json();
-      message = body.error ?? body.message ?? message;
+      const raw = body.error ?? body.message ?? message;
+      message = raw.length > 200 ? raw.slice(0, 200) + '...' : raw;
     } catch (_e) { /* no JSON body */ }
     throw new ApiError(message, res.status);
   }

@@ -107,7 +107,7 @@ router.delete('/:id', async (req, res) => {
   await db.transaction(async (tx) => {
     // Delete scheduled events that use meetingId__dateStr format
     await tx.delete(scheduledEvents).where(
-      and(like(scheduledEvents.itemId, `${id}%`), eq(scheduledEvents.userId, req.userId))
+      and(like(scheduledEvents.itemId, `${id}__%`), eq(scheduledEvents.userId, req.userId))
     );
     await tx.delete(smartMeetings).where(and(eq(smartMeetings.id, id), eq(smartMeetings.userId, req.userId)));
   });

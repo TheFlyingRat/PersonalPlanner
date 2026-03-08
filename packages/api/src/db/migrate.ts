@@ -342,6 +342,14 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_habit_completions_habit_user ON habit_completions(habit_id, user_id);
     `,
       },
+      {
+        version: 5,
+        description: 'Add index on oauth_states.expires_at and unique constraint on habit_completions',
+        sql: `
+      CREATE INDEX IF NOT EXISTS idx_oauth_states_expires_at ON oauth_states(expires_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_habit_completions_unique ON habit_completions(habit_id, scheduled_date, user_id);
+    `,
+      },
     ];
 
     // INFRA-H1: Run each pending migration in a transaction

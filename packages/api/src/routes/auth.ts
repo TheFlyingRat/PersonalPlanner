@@ -88,6 +88,14 @@ const changePasswordLimiter = rateLimit({
   message: { error: 'Too many password change attempts, please try again later.' },
 });
 
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many refresh attempts, please try again later.' },
+});
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -120,6 +128,7 @@ async function createSession(
     email: user.email,
     plan: user.plan,
     emailVerified: !!user.emailVerified,
+    hasGdprConsent: !!user.gdprConsentAt,
   });
 
   const refreshToken = generateRefreshToken();
@@ -261,7 +270,7 @@ router.post('/login', loginLimiter, async (req, res) => {
 // POST /api/auth/refresh
 // ============================================================
 
-router.post('/refresh', async (req, res) => {
+router.post('/refresh', refreshLimiter, async (req, res) => {
   const oldRefreshToken = req.cookies?.refresh_token;
   if (!oldRefreshToken) {
     sendError(res, 401, 'No refresh token');
@@ -277,8 +286,8 @@ router.post('/refresh', async (req, res) => {
 
     // Find and lock the session row atomically
     const { rows: sessionRows } = await client.query(
-      `SELECT id, "userId" FROM sessions
-       WHERE "refreshTokenHash" = $1 AND "expiresAt" > NOW()
+      `SELECT id, user_id FROM sessions
+       WHERE refresh_token_hash = $1 AND expires_at > NOW()
        FOR UPDATE`,
       [oldHash],
     );
@@ -299,7 +308,7 @@ router.post('/refresh', async (req, res) => {
 
     // Create new session (outside transaction — uses Drizzle)
     const { accessToken, refreshToken } = await createSession(
-      session.userId,
+      session.user_id,
       req.headers['user-agent'],
       getClientIp(req),
     );
@@ -370,11 +379,12 @@ router.get('/verify-email', verifyEmailLimiter, async (req, res) => {
 // ============================================================
 
 router.post('/resend-verification-email', signupLimiter, async (req, res) => {
-  const { email } = req.body ?? {};
-  if (!email || typeof email !== 'string') {
-    sendError(res, 400, 'Email is required');
+  const parsed = forgotPasswordSchema.safeParse(req.body);
+  if (!parsed.success) {
+    sendError(res, 400, 'Valid email is required');
     return;
   }
+  const { email } = parsed.data;
 
   // Always return success (prevent email enumeration)
   const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
@@ -504,7 +514,9 @@ router.get('/google', async (req, res) => {
   await db.insert(oauthStates).values({ stateHash, expiresAt });
 
   // Use prompt=none for silent sign-in; fall back to select_account on retry
-  const promptParam = req.query.prompt === 'select_account' ? 'select_account' : 'none';
+  const ALLOWED_PROMPTS = ['none', 'select_account'] as const;
+  const rawPrompt = req.query.prompt as string | undefined;
+  const promptParam = rawPrompt && ALLOWED_PROMPTS.includes(rawPrompt as any) ? rawPrompt : 'none';
 
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -526,7 +538,20 @@ router.get('/google', async (req, res) => {
 router.get('/google/callback', async (req, res) => {
   const code = req.query.code as string;
   const state = req.query.state as string | undefined;
-  const frontendOrigin = process.env.FRONTEND_URL || process.env.CORS_ORIGIN?.split(',')[0] || 'http://localhost:5173';
+  const rawFrontendOrigin = process.env.FRONTEND_URL || process.env.CORS_ORIGIN?.split(',')[0] || 'http://localhost:5173';
+
+  // Validate frontendOrigin is a valid URL to prevent open redirect
+  let frontendOrigin: string;
+  try {
+    const parsed = new URL(rawFrontendOrigin);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Invalid protocol');
+    }
+    frontendOrigin = parsed.origin;
+  } catch {
+    console.error('[auth] Invalid FRONTEND_URL/CORS_ORIGIN:', rawFrontendOrigin);
+    frontendOrigin = 'http://localhost:5173';
+  }
 
   // If Google returned an error (e.g. prompt=none failed), retry with select_account
   const oauthError = req.query.error as string | undefined;
@@ -890,6 +915,25 @@ router.delete('/sessions/:id', requireAuth, async (req, res) => {
   if (!session) {
     sendNotFound(res, 'Session');
     return;
+  }
+
+  // Warn if deleting current session — suggest /logout instead
+  const currentRefreshToken = req.cookies?.refresh_token;
+  if (currentRefreshToken) {
+    const currentHash = hashToken(currentRefreshToken);
+    try {
+      const a = Buffer.from(session.refreshTokenHash, 'hex');
+      const b = Buffer.from(currentHash, 'hex');
+      if (a.length === b.length && timingSafeEqual(a, b)) {
+        res.json({
+          success: true,
+          message: 'Session revoked',
+          warning: 'You revoked your current session. Use /api/auth/logout to sign out properly.',
+        });
+        await db.delete(sessions).where(eq(sessions.id, sessionId));
+        return;
+      }
+    } catch { /* hash comparison failed, proceed normally */ }
   }
 
   await db.delete(sessions).where(eq(sessions.id, sessionId));

@@ -10,11 +10,11 @@ import rateLimit from 'express-rate-limit';
 
 // Startup validation
 if (process.env.NODE_ENV === 'production') {
-  if (!process.env.JWT_SECRET) {
-    throw new Error('JWT_SECRET must be set in production');
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+    throw new Error('JWT_SECRET must be set in production and be at least 32 characters');
   }
-  if (!process.env.JWT_REFRESH_SECRET) {
-    throw new Error('JWT_REFRESH_SECRET must be set in production');
+  if (!process.env.JWT_REFRESH_SECRET || process.env.JWT_REFRESH_SECRET.length < 32) {
+    throw new Error('JWT_REFRESH_SECRET must be set in production and be at least 32 characters');
   }
   if (!process.env.CORS_ORIGIN) {
     throw new Error('CORS_ORIGIN must be set in production');
@@ -35,6 +35,9 @@ if (process.env.ENCRYPTION_KEY && !/^[0-9a-fA-F]{64}$/.test(process.env.ENCRYPTI
 }
 if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
   console.warn('WARNING: GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET not set. Google Calendar integration will not work.');
+}
+if (process.env.NODE_ENV === 'production' && !process.env.SMTP_HOST) {
+  console.warn('WARNING: SMTP_HOST is not set in production. Email verification and password reset will log to console instead of sending emails.');
 }
 
 import { closeDb } from './db/pg-index.js';
@@ -61,17 +64,17 @@ const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY, 10) : 0);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
-// Derive WebSocket origin from CORS_ORIGIN for CSP connectSrc
-const wsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+// Derive allowed origins for CORS, CSP, and WebSocket origin checks
+const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
   .split(',')
-  .map((o) => o.trim().replace(/^http/, 'ws'));
+  .map((o) => o.trim());
+const wsOrigins = allowedOrigins.map((o) => o.replace(/^http/, 'ws'));
 
 // Security headers — allow Geist font CDN
-// Note: SvelteKit static builds emit inline <script> and <style> tags,
-// so both 'unsafe-inline' directives are required.
-// Note: SvelteKit static builds emit inline <script> and <style> tags,
-// so 'unsafe-inline' for scriptSrc and styleSrc is required until
-// nonce-based CSP is configured in the SvelteKit build (owned by frontend).
+// TODO(H5): 'unsafe-inline' in scriptSrc/styleSrc is required because SvelteKit
+// static builds emit inline <script> and <style> tags. The proper fix is
+// nonce-based CSP configured in the SvelteKit build pipeline (owned by frontend).
+// See: https://kit.svelte.dev/docs/configuration#csp
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -80,7 +83,7 @@ app.use(helmet({
       fontSrc: ["'self'", "https://cdn.jsdelivr.net"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:"],
-      connectSrc: ["'self'", ...wsOrigins, ...wsOrigins.map((o) => o.replace('ws:', 'wss:'))],
+      connectSrc: ["'self'", ...allowedOrigins, ...wsOrigins, ...wsOrigins.map((o) => o.replace('ws:', 'wss:'))],
       frameAncestors: ["'self'"],
       baseUri: ["'self'"],
       formAction: ["'self'"],
@@ -88,10 +91,9 @@ app.use(helmet({
   },
 }));
 
-// CORS — supports multiple origins (comma-separated in CORS_ORIGIN)
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
-  .split(',')
-  .map((o) => o.trim());
+// Export for WebSocket origin validation
+export { allowedOrigins };
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -116,16 +118,14 @@ const globalLimiter = rateLimit({
 });
 app.use('/api', globalLimiter);
 
-// Stricter rate limits for public endpoints
-const bookingLimiter = rateLimit({
+// Booking rate limiter — applied inline on router handlers in links.ts and booking.ts
+export const bookingLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { error: 'Too many booking requests, please try again later.' },
 });
-app.use('/api/links/:slug/book', bookingLimiter);
-app.use('/api/book/:slug', bookingLimiter);
 
 const rescheduleLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -169,7 +169,7 @@ app.use('/api', (req, res, next) => {
 
 // Health check
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok' });
 });
 
 // API Routes

@@ -15,6 +15,7 @@ declare global {
  * JWT authentication middleware.
  * Extracts access token from httpOnly cookie, validates it,
  * and attaches userId, userEmail, userPlan to the request.
+ * Enforces GDPR consent for non-auth API endpoints.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const token = req.cookies?.[getAccessTokenCookieName()];
@@ -30,6 +31,15 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
       res.status(403).json({ error: 'Email not verified', code: 'EMAIL_NOT_VERIFIED' });
       return;
     }
+
+    // Enforce GDPR consent for non-auth API routes (allow auth/* for onboarding/consent flow)
+    // Tokens issued before this field was added default to consented (hasGdprConsent === undefined → true)
+    const isAuthRoute = req.originalUrl.startsWith('/api/auth/') || req.originalUrl === '/api/auth';
+    if (payload.hasGdprConsent === false && !isAuthRoute) {
+      res.status(403).json({ error: 'GDPR consent required', code: 'GDPR_CONSENT_REQUIRED' });
+      return;
+    }
+
     req.userId = payload.userId;
     req.userEmail = payload.email;
     req.userPlan = payload.plan;
