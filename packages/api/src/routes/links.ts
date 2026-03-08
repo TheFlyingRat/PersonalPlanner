@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
-import { schedulingLinks, scheduledEvents, users } from '../db/pg-schema.js';
+import { schedulingLinks, scheduledEvents, calendarEvents, users } from '../db/pg-schema.js';
 import type { CreateLinkRequest, SchedulingLink, UserSettings } from '@cadence/shared';
 import { SchedulingHours } from '@cadence/shared';
 import { createLinkSchema, updateLinkSchema, linkBookingSchema } from '../validation.js';
@@ -25,13 +25,6 @@ router.post('/', async (req, res) => {
   }
   const body = parsed.data as CreateLinkRequest;
 
-  // Check for slug uniqueness
-  const existingSlug = await db.select().from(schedulingLinks).where(eq(schedulingLinks.slug, body.slug));
-  if (existingSlug.length > 0) {
-    sendError(res, 409, 'Slug already exists');
-    return;
-  }
-
   const row = {
     userId: req.userId,
     slug: body.slug,
@@ -42,8 +35,16 @@ router.post('/', async (req, res) => {
     enabled: true,
   };
 
-  const inserted = await db.insert(schedulingLinks).values(row).returning();
-  res.status(201).json(toLink(inserted[0]));
+  try {
+    const inserted = await db.insert(schedulingLinks).values(row).returning();
+    res.status(201).json(toLink(inserted[0]));
+  } catch (err: any) {
+    if (err.code === '23505') {
+      sendError(res, 409, 'Slug already exists');
+      return;
+    }
+    throw err;
+  }
 });
 
 // PUT /api/links/:id — update a scheduling link
@@ -142,21 +143,37 @@ router.get('/:slug/slots', async (req, res) => {
   const windowEnd = new Date(now);
   windowEnd.setDate(windowEnd.getDate() + 7);
 
-  // Load all existing scheduled events within the window for this user
-  const existingEvents = await db.select().from(scheduledEvents)
-    .where(
-      and(
-        eq(scheduledEvents.userId, req.userId),
-        gte(scheduledEvents.end, now.toISOString()),
-        lte(scheduledEvents.start, windowEnd.toISOString()),
+  // Load all existing scheduled events and external calendar events within the window
+  const [existingEvents, externalEvents] = await Promise.all([
+    db.select().from(scheduledEvents)
+      .where(
+        and(
+          eq(scheduledEvents.userId, req.userId),
+          gte(scheduledEvents.end, now.toISOString()),
+          lte(scheduledEvents.start, windowEnd.toISOString()),
+        ),
       ),
-    );
+    db.select().from(calendarEvents)
+      .where(
+        and(
+          eq(calendarEvents.userId, req.userId),
+          gte(calendarEvents.end, now.toISOString()),
+          lte(calendarEvents.start, windowEnd.toISOString()),
+        ),
+      ),
+  ]);
 
-  // Build occupied intervals from existing events
-  const occupied: Array<{ start: number; end: number }> = existingEvents.map((ev) => ({
-    start: new Date(ev.start!).getTime(),
-    end: new Date(ev.end!).getTime(),
-  }));
+  // Build occupied intervals from both managed and external events
+  const occupied: Array<{ start: number; end: number }> = [
+    ...existingEvents.map((ev) => ({
+      start: new Date(ev.start!).getTime(),
+      end: new Date(ev.end!).getTime(),
+    })),
+    ...externalEvents.map((ev) => ({
+      start: new Date(ev.start).getTime(),
+      end: new Date(ev.end).getTime(),
+    })),
+  ];
 
   // Generate available slots for each duration
   const slots: Array<{ start: string; end: string; duration: number }> = [];
@@ -251,55 +268,62 @@ router.post('/:slug/book', async (req, res) => {
     return;
   }
 
-  // Verify the slot is still available (not taken since slots were listed)
-  const conflicting = (await db.select().from(scheduledEvents)
-    .where(
-      and(
-        eq(scheduledEvents.userId, req.userId),
-        gte(scheduledEvents.end, start),
-        lte(scheduledEvents.start, end),
-      ),
-    ))
-    .filter((ev) => {
-      // Check for actual overlap (not just touching boundaries)
-      const evStart = new Date(ev.start!).getTime();
-      const evEnd = new Date(ev.end!).getTime();
-      return startDate.getTime() < evEnd && endDate.getTime() > evStart;
-    });
-
-  if (conflicting.length > 0) {
-    sendError(res, 409, 'Slot is no longer available');
-    return;
-  }
-
-  // Create a scheduled_event in the DB for this booking
   const now = new Date().toISOString();
   const durationMin = Math.round((endDate.getTime() - startDate.getTime()) / 60000);
   const bookingTitle = name ? `Booking: ${name}` : `Booking via ${slug}`;
 
-  const inserted = await db.insert(scheduledEvents).values({
-    userId: req.userId,
-    itemType: 'meeting',
-    itemId: link.id,
-    title: bookingTitle,
-    googleEventId: null,
-    start,
-    end,
-    status: 'busy',
-    alternativeSlotsCount: null,
-  }).returning();
+  try {
+    const inserted = await db.transaction(async (tx) => {
+      // Verify the slot is still available inside transaction
+      const conflicting = (await tx.select().from(scheduledEvents)
+        .where(
+          and(
+            eq(scheduledEvents.userId, req.userId),
+            gte(scheduledEvents.end, start),
+            lte(scheduledEvents.start, end),
+          ),
+        ))
+        .filter((ev) => {
+          const evStart = new Date(ev.start!).getTime();
+          const evEnd = new Date(ev.end!).getTime();
+          return startDate.getTime() < evEnd && endDate.getTime() > evStart;
+        });
 
-  res.status(201).json({
-    id: inserted[0].id,
-    slug,
-    title: bookingTitle,
-    start,
-    end,
-    duration: durationMin,
-    name: name || null,
-    email: email || null,
-    createdAt: now,
-  });
+      if (conflicting.length > 0) {
+        throw new Error('SLOT_CONFLICT');
+      }
+
+      return await tx.insert(scheduledEvents).values({
+        userId: req.userId,
+        itemType: 'meeting',
+        itemId: link.id,
+        title: bookingTitle,
+        googleEventId: null,
+        start,
+        end,
+        status: 'busy',
+        alternativeSlotsCount: null,
+      }).returning();
+    });
+
+    res.status(201).json({
+      id: inserted[0].id,
+      slug,
+      title: bookingTitle,
+      start,
+      end,
+      duration: durationMin,
+      name: name || null,
+      email: email || null,
+      createdAt: now,
+    });
+  } catch (err: any) {
+    if (err.message === 'SLOT_CONFLICT') {
+      sendError(res, 409, 'Slot is no longer available');
+      return;
+    }
+    throw err;
+  }
 });
 
 function toLink(row: typeof schedulingLinks.$inferSelect): SchedulingLink {

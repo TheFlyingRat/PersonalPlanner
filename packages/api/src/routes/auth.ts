@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, and, gt, ne, sql } from 'drizzle-orm';
+import { eq, and, gt, ne, sql, lt } from 'drizzle-orm';
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { db, pool as getPool } from '../db/pg-index.js';
@@ -7,7 +7,7 @@ import {
   users, sessions, emailVerifications, passwordResets,
   habits, tasks, smartMeetings, focusTimeRules, bufferConfig,
   scheduledEvents, calendarEvents, calendars, habitCompletions,
-  subtasks, activityLog, scheduleChanges, schedulingLinks,
+  subtasks, activityLog, scheduleChanges, schedulingLinks, oauthStates,
 } from '../db/pg-schema.js';
 import { createOAuth2Client, getAuthUrl, exchangeCode } from '../google/index.js';
 import { encrypt, decrypt } from '../crypto.js';
@@ -137,9 +137,7 @@ async function createSession(
 }
 
 function getClientIp(req: import('express').Request): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string') return forwarded.split(',')[0].trim();
-  return req.ip || '';
+  return req.ip || req.socket.remoteAddress || '';
 }
 
 // ============================================================
@@ -173,22 +171,26 @@ router.post('/signup', signupLimiter, async (req, res) => {
 
   const passwordHash = await hashPassword(password);
 
-  const [newUser] = await db.insert(users).values({
-    email: email.toLowerCase(),
-    passwordHash,
-    name,
-    gdprConsentAt: new Date().toISOString(),
-    consentVersion: '1.0',
-  }).returning();
-
   // Generate email verification token
   const verifyToken = randomBytes(32).toString('hex');
   const tokenHash = hashToken(verifyToken);
 
-  await db.insert(emailVerifications).values({
-    userId: newUser.id,
-    tokenHash,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
+  const [newUser] = await db.transaction(async (tx) => {
+    const inserted = await tx.insert(users).values({
+      email: email.toLowerCase(),
+      passwordHash,
+      name,
+      gdprConsentAt: new Date().toISOString(),
+      consentVersion: '1.0',
+    }).returning();
+
+    await tx.insert(emailVerifications).values({
+      userId: inserted[0].id,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
+    });
+
+    return inserted;
   });
 
   // Send verification email (fire-and-forget)
@@ -352,15 +354,51 @@ router.get('/verify-email', verifyEmailLimiter, async (req, res) => {
     return;
   }
 
-  // Mark email as verified
-  await db.update(users)
-    .set({ emailVerified: true, updatedAt: new Date().toISOString() })
-    .where(eq(users.id, verification.userId));
-
-  // Delete all verification tokens for this user
-  await db.delete(emailVerifications).where(eq(emailVerifications.userId, verification.userId));
+  // Mark email as verified and delete tokens atomically
+  await db.transaction(async (tx) => {
+    await tx.update(users)
+      .set({ emailVerified: true, updatedAt: new Date().toISOString() })
+      .where(eq(users.id, verification.userId));
+    await tx.delete(emailVerifications).where(eq(emailVerifications.userId, verification.userId));
+  });
 
   res.json({ success: true, message: 'Email verified successfully' });
+});
+
+// ============================================================
+// POST /api/auth/resend-verification-email
+// ============================================================
+
+router.post('/resend-verification-email', signupLimiter, async (req, res) => {
+  const { email } = req.body ?? {};
+  if (!email || typeof email !== 'string') {
+    sendError(res, 400, 'Email is required');
+    return;
+  }
+
+  // Always return success (prevent email enumeration)
+  const [user] = await db.select().from(users).where(eq(users.email, email.toLowerCase()));
+
+  if (user && !user.emailVerified) {
+    // Delete old verification tokens
+    await db.delete(emailVerifications).where(eq(emailVerifications.userId, user.id));
+
+    // Create new token
+    const verifyToken = randomBytes(32).toString('hex');
+    const tokenHash = hashToken(verifyToken);
+
+    await db.insert(emailVerifications).values({
+      userId: user.id,
+      tokenHash,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    });
+
+    sendVerificationEmail(email.toLowerCase(), verifyToken).catch((err) => {
+      console.error('[auth] Failed to resend verification email:', err);
+    });
+  }
+
+  res.json({ success: true, message: 'If an account with that email exists and is unverified, a new verification email has been sent.' });
 });
 
 // ============================================================
@@ -449,44 +487,21 @@ router.post('/reset-password', resetPasswordLimiter, async (req, res) => {
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-// Initialize OAuth states table (lazy — deferred until first use so dotenv has loaded)
-let oauthStatesTableReady: Promise<void> | null = null;
-function ensureOAuthStatesTable(): Promise<void> {
-  if (!oauthStatesTableReady) {
-    oauthStatesTableReady = (async () => {
-      const pool = getPool();
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS oauth_states (
-          state_hash TEXT PRIMARY KEY,
-          expires_at TIMESTAMPTZ NOT NULL
-        )
-      `);
-    })();
-  }
-  return oauthStatesTableReady;
-}
-
 // Cleanup expired OAuth states periodically
 setInterval(async () => {
   try {
-    const pool = getPool();
-    await pool.query('DELETE FROM oauth_states WHERE expires_at < NOW()');
+    await db.delete(oauthStates).where(lt(oauthStates.expiresAt, new Date().toISOString()));
   } catch { /* ignore cleanup errors */ }
 }, 60_000);
 
 // GET /api/auth/google — initiate unified OAuth
 router.get('/google', async (req, res) => {
-  await ensureOAuthStatesTable();
   const oauth2Client = createOAuth2Client();
   const state = randomBytes(16).toString('hex');
   const stateHash = createHash('sha256').update(state).digest('hex');
   const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS).toISOString();
 
-  const pool = getPool();
-  await pool.query(
-    'INSERT INTO oauth_states (state_hash, expires_at) VALUES ($1, $2)',
-    [stateHash, expiresAt],
-  );
+  await db.insert(oauthStates).values({ stateHash, expiresAt });
 
   // Use prompt=none for silent sign-in; fall back to select_account on retry
   const promptParam = req.query.prompt === 'select_account' ? 'select_account' : 'none';
@@ -538,13 +553,10 @@ router.get('/google/callback', async (req, res) => {
     return;
   }
 
-  await ensureOAuthStatesTable();
-  const pool = getPool();
   const stateHash = createHash('sha256').update(state).digest('hex');
-  const { rows: stateRows } = await pool.query(
-    'DELETE FROM oauth_states WHERE state_hash = $1 AND expires_at > NOW() RETURNING state_hash',
-    [stateHash],
-  );
+  const stateRows = await db.delete(oauthStates)
+    .where(and(eq(oauthStates.stateHash, stateHash), gt(oauthStates.expiresAt, new Date().toISOString())))
+    .returning({ stateHash: oauthStates.stateHash });
 
   if (stateRows.length === 0) {
     console.warn('[auth] OAuth callback: invalid or expired state');

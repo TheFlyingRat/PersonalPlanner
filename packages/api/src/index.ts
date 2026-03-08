@@ -61,9 +61,7 @@ import bookingRouter from './routes/booking.js';
 import quickAddRouter from './routes/quick-add.js';
 
 const app = express();
-if (process.env.TRUST_PROXY) {
-  app.set('trust proxy', parseInt(process.env.TRUST_PROXY, 10));
-}
+app.set('trust proxy', process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY, 10) : 1);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Derive WebSocket origin from CORS_ORIGIN for CSP connectSrc

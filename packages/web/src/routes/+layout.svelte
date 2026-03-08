@@ -26,7 +26,7 @@
   import LogOut from 'lucide-svelte/icons/log-out';
   import ChevronUp from 'lucide-svelte/icons/chevron-up';
   import { search as searchApi } from '$lib/api';
-  import { logout, getAuthState } from '$lib/auth.svelte';
+  import { logout, getAuthState, checkAuth } from '$lib/auth.svelte';
 
   let { children } = $props();
 
@@ -39,7 +39,7 @@
   let searchLoading = $state(false);
   let searchError = $state('');
   let selectedIndex = $state(-1);
-  let isMac = $state(true);
+  let isMac = $state(false);
   let profileMenuOpen = $state(false);
   let profileTriggerEl: HTMLButtonElement | undefined;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -170,6 +170,22 @@
   onMount(() => {
     document.body.classList.add('hydrated');
     isMac = navigator.userAgent?.includes('Mac') ?? false;
+    if (!auth.isAuthenticated && !isPublicRoute) {
+      checkAuth();
+    }
+  });
+
+  let isLoginOrSignupRoute = $derived(
+    page.url.pathname === '/login' || page.url.pathname === '/signup'
+  );
+
+  $effect(() => {
+    if (!auth.isLoading && !auth.isAuthenticated && !isPublicRoute) {
+      goto('/login');
+    }
+    if (auth.isAuthenticated && !auth.isLoading && isLoginOrSignupRoute) {
+      goto('/');
+    }
   });
 
   $effect(() => {
@@ -311,6 +327,8 @@
 {#if isPublicRoute}
   <!-- Public/auth pages render without app shell -->
   {@render children()}
+{:else if auth.isLoading}
+  <div class="auth-loading">Loading...</div>
 {:else}
 
 <a href="#main-content" class="skip-link">Skip to main content</a>
@@ -568,6 +586,15 @@
 
 <style lang="scss">
   @use '$lib/styles/mixins' as *;
+
+  .auth-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+  }
 
   .app-layout {
     display: flex;

@@ -331,29 +331,43 @@ router.post('/:slug', async (req, res) => {
 
   try {
     const inserted = await db.transaction(async (tx) => {
-      // Re-check availability inside the transaction
-      const dayStart = new Date(startDate);
-      dayStart.setHours(0, 0, 0, 0);
-      const dayEnd = new Date(startDate);
-      dayEnd.setHours(23, 59, 59, 999);
+      // Re-check availability inside the transaction using link owner's timezone
+      const dateStr = startDate.toLocaleDateString('sv-SE', { timeZone: userTimezone });
+      const { dayStart: dayStartISO, dayEnd: dayEndISO } = getDayBoundariesInTimezone(dateStr, userTimezone);
 
       // Check managed events for conflicts
       const managed = await tx.select().from(scheduledEvents)
         .where(
           and(
             eq(scheduledEvents.userId, link.userId),
-            gte(scheduledEvents.end, dayStart.toISOString()),
-            lte(scheduledEvents.start, dayEnd.toISOString()),
+            gte(scheduledEvents.end, dayStartISO),
+            lte(scheduledEvents.start, dayEndISO),
           ),
         );
 
-      const hasConflict = managed.some(ev => {
+      const hasManagedConflict = managed.some(ev => {
         if (!ev.start || !ev.end) return false;
         return startDate.getTime() < new Date(ev.end).getTime() &&
                endDate.getTime() > new Date(ev.start).getTime();
       });
 
-      if (hasConflict) {
+      // Also check external calendar events for conflicts
+      const external = await tx.select().from(calendarEvents)
+        .where(
+          and(
+            eq(calendarEvents.userId, link.userId),
+            gte(calendarEvents.end, dayStartISO),
+            lte(calendarEvents.start, dayEndISO),
+          ),
+        );
+
+      const hasExternalConflict = external.some(ev => {
+        if (!ev.start || !ev.end || ev.isAllDay) return false;
+        return startDate.getTime() < new Date(ev.end).getTime() &&
+               endDate.getTime() > new Date(ev.start).getTime();
+      });
+
+      if (hasManagedConflict || hasExternalConflict) {
         throw new Error('SLOT_CONFLICT');
       }
 

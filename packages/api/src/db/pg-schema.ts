@@ -187,6 +187,7 @@ export const focusTimeRules = pgTable('focus_time_rules', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
   index('idx_focus_time_rules_user_id').on(table.userId),
+  uniqueIndex('idx_focus_time_rules_user_id_unique').on(table.userId),
 ]);
 
 // ============================================================
@@ -201,6 +202,7 @@ export const bufferConfig = pgTable('buffer_config', {
   applyDecompressionTo: text('apply_decompression_to').default('all'),
 }, (table) => [
   index('idx_buffer_config_user_id').on(table.userId),
+  uniqueIndex('idx_buffer_config_user_id_unique').on(table.userId),
 ]);
 
 // ============================================================
@@ -244,6 +246,7 @@ export const calendarEvents = pgTable('calendar_events', {
 }, (table) => [
   index('idx_calendar_events_user_id').on(table.userId),
   index('idx_calendar_events_user_id_end').on(table.userId, table.end),
+  uniqueIndex('idx_calendar_events_user_google_event').on(table.userId, table.googleEventId),
 ]);
 
 // ============================================================
@@ -257,6 +260,7 @@ export const habitCompletions = pgTable('habit_completions', {
   completedAt: text('completed_at').notNull(),
 }, (table) => [
   index('idx_habit_completions_user_id').on(table.userId),
+  index('idx_habit_completions_habit_user').on(table.habitId, table.userId),
 ]);
 
 // ============================================================
@@ -308,7 +312,16 @@ export const scheduleChanges = pgTable('schedule_changes', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull(),
 }, (table) => [
   index('idx_schedule_changes_user_id').on(table.userId),
+  index('idx_schedule_changes_batch_id').on(table.batchId),
 ]);
+
+// ============================================================
+// OAuth States
+// ============================================================
+export const oauthStates = pgTable('oauth_states', {
+  stateHash: text('state_hash').primaryKey(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+});
 
 // ============================================================
 // Scheduling Links

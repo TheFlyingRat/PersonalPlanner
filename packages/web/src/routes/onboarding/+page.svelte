@@ -262,12 +262,14 @@
     // Check if already connected via the existing Google OAuth flow
     try {
       const response = await settingsApi.connectGoogle();
-      if (response.redirectUrl) {
+      if (response.redirectUrl && response.redirectUrl.startsWith('https://accounts.google.com/')) {
         window.location.href = response.redirectUrl;
+      } else if (response.redirectUrl) {
+        throw new Error('Invalid OAuth redirect URL');
       }
     } catch {
       // fallback
-      googleAuth();
+      return googleAuth();
     }
   }
 </script>

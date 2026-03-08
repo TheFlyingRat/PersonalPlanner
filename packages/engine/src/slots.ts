@@ -83,14 +83,13 @@ export function generateCandidateSlots(
       }
       // All slots at indices [0, lo) have startMs < candidateEnd.
       // Check backwards from lo-1 for any with endMs > candidateStart.
+      // Cannot break early on endMs <= candidateStart because earlier slots
+      // (sorted by startMs) may have longer durations with endMs > candidateStart.
       for (let i = lo - 1; i >= 0; i--) {
-        if (sortedOccupied[i].endMs <= candidateStart) {
-          // Since sorted by startMs, earlier slots end even earlier — stop.
+        if (sortedOccupied[i].endMs > candidateStart) {
+          hasConflict = true;
           break;
         }
-        // sortedOccupied[i].startMs < candidateEnd && sortedOccupied[i].endMs > candidateStart
-        hasConflict = true;
-        break;
       }
 
       // Hard dependency constraint: candidate must start after

@@ -1,4 +1,4 @@
-import { eq, and } from 'drizzle-orm';
+import { eq, and, isNotNull } from 'drizzle-orm';
 import { db } from './db/pg-index.js';
 import {
   users,
@@ -283,7 +283,7 @@ export class UserScheduler {
       });
       dedupedRows.push(group[0]);
       for (let i = 1; i < group.length; i++) {
-        await db.delete(scheduledEvents).where(eq(scheduledEvents.id, group[i].id));
+        await db.delete(scheduledEvents).where(and(eq(scheduledEvents.id, group[i].id), eq(scheduledEvents.userId, userId)));
       }
     }
 
@@ -425,10 +425,7 @@ export class UserScheduler {
       if (result.operations.length === 0) return 0;
     }
 
-    // Record schedule changes AFTER successful apply (not before)
-    await recordScheduleChanges(result.operations, existingEventsMap, userId);
-
-    // EDGE-C2: Persist to DB in a single transaction
+    // EDGE-C2: Persist to DB in a single transaction, then record changes
     const nowTs = new Date().toISOString();
     await db.transaction(async (tx) => {
       for (const op of result.operations) {
@@ -447,7 +444,7 @@ export class UserScheduler {
               end: op.end,
               status: op.status,
               updatedAt: nowTs,
-            }).where(eq(scheduledEvents.id, existing[0].id));
+            }).where(and(eq(scheduledEvents.id, existing[0].id), eq(scheduledEvents.userId, userId)));
           } else {
             await tx.insert(scheduledEvents).values({
               userId,
@@ -474,12 +471,15 @@ export class UserScheduler {
               googleEventId: op.googleEventId || undefined,
               updatedAt: nowTs,
             })
-            .where(eq(scheduledEvents.id, op.eventId));
+            .where(and(eq(scheduledEvents.id, op.eventId), eq(scheduledEvents.userId, userId)));
         } else if (op.type === CalendarOpType.Delete && op.eventId) {
-          await tx.delete(scheduledEvents).where(eq(scheduledEvents.id, op.eventId));
+          await tx.delete(scheduledEvents).where(and(eq(scheduledEvents.id, op.eventId), eq(scheduledEvents.userId, userId)));
         }
       }
     });
+
+    // Record schedule changes AFTER successful DB persist
+    await recordScheduleChanges(result.operations, existingEventsMap, userId);
 
     if (manager) manager.markAllWritten();
     for (const op of result.operations) {
@@ -542,7 +542,7 @@ export class UserScheduler {
           end: ev.end,
           status: EventStatus.Locked,
           updatedAt: now,
-        }).where(eq(scheduledEvents.id, local.id));
+        }).where(and(eq(scheduledEvents.id, local.id), eq(scheduledEvents.userId, userId)));
 
         if (local.googleEventId) {
           const calIsUuid = local.calendarId && local.calendarId !== 'primary';
@@ -576,7 +576,7 @@ export class UserScheduler {
         if (cachedByGoogleEventId.has(ev.googleEventId)) {
           externalChanged = true;
           await db.delete(calendarEvents)
-            .where(eq(calendarEvents.googleEventId, ev.googleEventId));
+            .where(and(eq(calendarEvents.googleEventId, ev.googleEventId), eq(calendarEvents.userId, userId)));
         }
         continue;
       }
@@ -607,7 +607,7 @@ export class UserScheduler {
               isAllDay: newIsAllDay,
               updatedAt: now,
             })
-            .where(eq(calendarEvents.googleEventId, ev.googleEventId));
+            .where(and(eq(calendarEvents.googleEventId, ev.googleEventId), eq(calendarEvents.userId, userId)));
         }
       } else {
         externalChanged = true;
@@ -758,8 +758,7 @@ export class SchedulerRegistry {
 
   /** On server startup: start schedulers for recently active users with Google tokens */
   async startAll(): Promise<void> {
-    const usersWithTokens = await db.select().from(users);
-    const connected = usersWithTokens.filter(u => !!u.googleRefreshToken);
+    const connected = await db.select().from(users).where(isNotNull(users.googleRefreshToken));
 
     console.log(`[scheduler] Starting schedulers for ${connected.length} connected user(s)`);
 

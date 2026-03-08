@@ -166,11 +166,13 @@ function habitsToScheduleItems(
 
         const weekNum = getWeekNumber(day, tz);
         if (scheduledWeeks.has(weekNum)) continue;
+        const { year: localYear, month: localMonth } = getDatePartsInTimezone(day, tz);
+        let isoYear = localYear;
+        if (weekNum <= 1 && localMonth === 12) isoYear = localYear + 1;
+        if (weekNum >= 52 && localMonth === 1) isoYear = localYear - 1;
         let weeksSinceStart = weekNum - windowStartWeek;
         if (weeksSinceStart < 0) {
-          // Handle year boundary properly (ISO years can have 52 or 53 weeks)
-          const { year: localYear } = getDatePartsInTimezone(day, tz);
-          const lastDayPrevYear = new Date(Date.UTC(localYear - 1, 11, 28));
+          const lastDayPrevYear = new Date(Date.UTC(isoYear - 1, 11, 28));
           weeksSinceStart += getWeekNumber(lastDayPrevYear, tz);
         }
         if (weekInterval > 1 && weeksSinceStart % weekInterval !== 0) continue;
@@ -272,6 +274,8 @@ function tasksToScheduleItems(
     // Fix: ensure no chunk is smaller than chunkMin.
     // If the last chunk would be < chunkMin, reduce numChunks by 1 so the
     // remaining time is distributed into fewer (slightly larger) chunks.
+    // If reducing would make chunks exceed chunkMax, keep the reduced count
+    // anyway — one slightly oversized chunk is better than one undersized chunk.
     if (numChunks > 1) {
       const lastChunkSize = remaining - (numChunks - 1) * chunkSize;
       if (lastChunkSize < task.chunkMin) {
@@ -280,8 +284,13 @@ function tasksToScheduleItems(
     }
 
     const earliest = new Date(task.earliestStart);
-    const due = new Date(task.dueDate);
-    const windowEnd = due < scheduleEnd ? due : scheduleEnd;
+    const due = task.dueDate ? new Date(task.dueDate) : null;
+
+    if (due && due < scheduleStart) {
+      continue; // Overdue tasks handled after conversion
+    }
+
+    const windowEnd = due && due < scheduleEnd ? due : scheduleEnd;
 
     // Determine scheduling hours
     const { start: hourStart } = getSchedulingWindow(
@@ -298,6 +307,22 @@ function tasksToScheduleItems(
     if (effectiveChunkSize > task.chunkMax) {
       effectiveChunkSize = task.chunkMax;
       numChunks = Math.ceil(remaining / effectiveChunkSize);
+      // Re-check: last chunk may now be below chunkMin after re-clamping.
+      // Reduce chunk count to absorb the small remainder. If the resulting
+      // chunk size still fits within chunkMax, use it. Otherwise accept the
+      // runt — exceeding chunkMax would be worse.
+      if (numChunks > 1) {
+        const lastChunk = remaining - (numChunks - 1) * effectiveChunkSize;
+        if (lastChunk > 0 && lastChunk < task.chunkMin) {
+          const reducedChunks = numChunks - 1;
+          const reducedSize = Math.ceil(remaining / reducedChunks);
+          if (reducedSize <= task.chunkMax) {
+            numChunks = reducedChunks;
+            effectiveChunkSize = reducedSize;
+          }
+          // else: accept the undersized last chunk — can't fix without exceeding chunkMax
+        }
+      }
     }
 
     for (let i = 0; i < numChunks; i++) {
@@ -337,6 +362,7 @@ function meetingsToScheduleItems(
   scheduleEnd: Date,
   windowStart: Date,
   tz: string,
+  userSettings: UserSettings,
   precomputedDays?: Date[],
 ): ScheduleItem[] {
   const items: ScheduleItem[] = [];
@@ -345,20 +371,26 @@ function meetingsToScheduleItems(
   for (const meeting of meetings) {
     if (meeting.duration <= 0) continue; // Skip invalid duration
 
+    // Default null window/ideal fields to work hours
+    const defaultWorkHours = userSettings.workingHours ?? { start: '09:00', end: '17:00' };
+    const mWindowStart = meeting.windowStart ?? defaultWorkHours.start;
+    const mWindowEnd = meeting.windowEnd ?? defaultWorkHours.end;
+    const mIdealTime = meeting.idealTime ?? mWindowStart;
+
     if (meeting.frequency === Frequency.Daily) {
       for (const day of days) {
         // Skip weekends for meetings
         const dow = getDayOfWeekInTimezone(day, tz);
         if (dow === 0 || dow === 6) continue;
 
-        const timeWindow = buildDayWindow(day, meeting.windowStart, meeting.windowEnd, tz);
+        const timeWindow = buildDayWindow(day, mWindowStart, mWindowEnd, tz);
         items.push({
           id: `${meeting.id}__${toLocalDateStr(day, tz)}`,
           name: meeting.name,
           type: ItemType.Meeting,
           priority: meeting.priority,
           timeWindow,
-          idealTime: meeting.idealTime,
+          idealTime: mIdealTime,
           duration: meeting.duration,
           skipBuffer: meeting.skipBuffer ?? false,
           locked: false,
@@ -374,25 +406,27 @@ function meetingsToScheduleItems(
         if (dow === 0 || dow === 6) continue;
         const weekNum = getWeekNumber(day, tz);
         if (scheduledWeeks.has(weekNum)) continue;
+        const { year: localYear, month: localMonth } = getDatePartsInTimezone(day, tz);
+        let isoYear = localYear;
+        if (weekNum <= 1 && localMonth === 12) isoYear = localYear + 1;
+        if (weekNum >= 52 && localMonth === 1) isoYear = localYear - 1;
         let weeksSinceStart = weekNum - windowStartWeek;
         if (weeksSinceStart < 0) {
-          // Handle year boundary properly (ISO years can have 52 or 53 weeks)
-          const { year: localYear } = getDatePartsInTimezone(day, tz);
-          const lastDayPrevYear = new Date(Date.UTC(localYear - 1, 11, 28));
+          const lastDayPrevYear = new Date(Date.UTC(isoYear - 1, 11, 28));
           weeksSinceStart += getWeekNumber(lastDayPrevYear, tz);
         }
         if (weekInterval > 1 && weeksSinceStart % weekInterval !== 0) continue;
 
         scheduledWeeks.add(weekNum);
         const dayStr = toLocalDateStr(day, tz);
-        const timeWindow = buildDayWindow(day, meeting.windowStart, meeting.windowEnd, tz);
+        const timeWindow = buildDayWindow(day, mWindowStart, mWindowEnd, tz);
         items.push({
           id: `${meeting.id}__${dayStr}`,
           name: meeting.name,
           type: ItemType.Meeting,
           priority: meeting.priority,
           timeWindow,
-          idealTime: meeting.idealTime,
+          idealTime: mIdealTime,
           duration: meeting.duration,
           skipBuffer: meeting.skipBuffer ?? false,
           locked: false,
@@ -424,14 +458,14 @@ function meetingsToScheduleItems(
         if (!isTargetDay) continue;
 
         const dayStr = toLocalDateStr(day, tz);
-        const timeWindow = buildDayWindow(day, meeting.windowStart, meeting.windowEnd, tz);
+        const timeWindow = buildDayWindow(day, mWindowStart, mWindowEnd, tz);
         items.push({
           id: `${meeting.id}__${dayStr}`,
           name: meeting.name,
           type: ItemType.Meeting,
           priority: meeting.priority,
           timeWindow,
-          idealTime: meeting.idealTime,
+          idealTime: mIdealTime,
           duration: meeting.duration,
           skipBuffer: meeting.skipBuffer ?? false,
           locked: false,
@@ -568,11 +602,13 @@ export function reschedule(
     }
   }
 
-  // 1. Define the scheduling window
+  // 1. Define the scheduling window (timezone-aware day advancement)
   const safeDays = Math.min(userSettings.schedulingWindowDays || 14, 90);
   const scheduleStart = new Date(currentTime);
-  const scheduleEnd = new Date(currentTime);
-  scheduleEnd.setDate(scheduleEnd.getDate() + safeDays);
+  let scheduleEnd = startOfDayInTimezone(currentTime, tz);
+  for (let i = 0; i < safeDays; i++) {
+    scheduleEnd = nextDayInTimezone(scheduleEnd, tz);
+  }
 
   // PERF-L2: Clear week number cache between reschedule runs
   weekNumberCache.clear();
@@ -626,7 +662,7 @@ export function reschedule(
   // 4. Convert domain objects to ScheduleItems (PERF-L1: pass precomputed days)
   const habitItems = habitsToScheduleItems(habits, scheduleStart, scheduleEnd, scheduleStart, tz, days);
   const taskItems = tasksToScheduleItems(tasks, scheduleStart, scheduleEnd, userSettings);
-  const meetingItems = meetingsToScheduleItems(meetings, scheduleStart, scheduleEnd, scheduleStart, tz, days);
+  const meetingItems = meetingsToScheduleItems(meetings, scheduleStart, scheduleEnd, scheduleStart, tz, userSettings, days);
 
   // 4b. Handle circular dependencies: add errors and strip dependsOn
   const unschedulable: Array<{ itemId: string; itemType: ItemType; reason: string }> = [];
@@ -637,6 +673,20 @@ export function reschedule(
       itemType: ItemType.Habit,
       reason: error.message,
     });
+  }
+
+  // 4c. Detect overdue tasks (due before schedule start)
+  for (const task of tasks) {
+    if (task.status === TaskStatus.Completed || task.status === TaskStatus.DoneScheduling) continue;
+    if (!task.dueDate) continue;
+    const due = new Date(task.dueDate);
+    if (due < scheduleStart) {
+      unschedulable.push({
+        itemId: task.id,
+        itemType: ItemType.Task,
+        reason: `Task is overdue (due: ${task.dueDate})`,
+      });
+    }
   }
 
   // Strip dependsOn from schedule items that belong to cyclic habits
@@ -849,7 +899,7 @@ function placeFocusTime(
     const dayOfWeek = getDayOfWeekInTimezone(now, tz);
     let weekStart = startOfDayInTimezone(now, tz);
     for (let i = 0; i < dayOfWeek; i++) {
-      weekStart = startOfDayInTimezone(new Date(weekStart.getTime() - 23 * 3600000), tz);
+      weekStart = startOfDayInTimezone(new Date(weekStart.getTime() - 12 * 3600000), tz);
     }
     let weekEnd = weekStart;
     for (let i = 0; i < 7; i++) {
@@ -990,7 +1040,8 @@ function generateCalendarOperations(
     const existingEvent = existingManagedEvents.get(itemId);
 
     // Extract the original item id (before __ suffix)
-    const originalItemId = itemId.split('__')[0];
+    const sepIdx = itemId.lastIndexOf('__');
+    const originalItemId = sepIdx > 0 ? itemId.substring(0, sepIdx) : itemId;
     // Title uses human-readable name; status emoji is added by calendar client
     const title = item.name || `${item.type}: ${originalItemId}`;
 
@@ -1047,7 +1098,8 @@ function generateCalendarOperations(
   // Delete events that are no longer placed
   for (const [itemId, event] of existingManagedEvents) {
     if (!processedExistingIds.has(itemId)) {
-      const originalItemId = itemId.split('__')[0];
+      const delSepIdx = itemId.lastIndexOf('__');
+      const originalItemId = delSepIdx > 0 ? itemId.substring(0, delSepIdx) : itemId;
       operations.push({
         type: CalendarOpType.Delete,
         eventId: event.id,

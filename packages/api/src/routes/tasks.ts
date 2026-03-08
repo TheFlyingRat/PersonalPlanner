@@ -108,8 +108,10 @@ router.delete('/:id', async (req, res) => {
     return;
   }
 
-  await db.delete(scheduledEvents).where(and(eq(scheduledEvents.itemId, id), eq(scheduledEvents.userId, req.userId)));
-  await db.delete(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
+  await db.transaction(async (tx) => {
+    await tx.delete(scheduledEvents).where(and(eq(scheduledEvents.itemId, id), eq(scheduledEvents.userId, req.userId)));
+    await tx.delete(tasks).where(and(eq(tasks.id, id), eq(tasks.userId, req.userId)));
+  });
   await logActivity(req.userId, 'delete', 'task', id, { name: existing[0].name });
   broadcastToUser(req.userId, 'schedule_updated', 'Task deleted');
   triggerReschedule('Task deleted', req.userId);

@@ -106,9 +106,9 @@
     formPriority = meeting.priority;
     formDuration = meeting.duration;
     formFrequency = meeting.frequency;
-    formIdealTime = meeting.idealTime;
-    formWindowStart = meeting.windowStart;
-    formWindowEnd = meeting.windowEnd;
+    formIdealTime = meeting.idealTime ?? '';
+    formWindowStart = meeting.windowStart ?? '';
+    formWindowEnd = meeting.windowEnd ?? '';
     formLocation = meeting.location;
     formConferenceType = meeting.conferenceType;
     formAttendees = meeting.attendees.join(', ');

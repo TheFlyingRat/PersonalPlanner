@@ -59,8 +59,7 @@
     } catch (err) {
       if (err instanceof ApiError && err.code === 'GOOGLE_ACCOUNT') {
         loginError = 'This account uses Google sign-in. Redirecting...';
-        googleAuth();
-        return;
+        return googleAuth();
       }
       loginError = err instanceof Error ? err.message : 'Sign in failed. Please try again.';
     } finally {

@@ -60,25 +60,27 @@ export class CalendarPollerManager {
 
       // Cache external events only (skip Cadence-managed ones, they live in scheduledEvents)
       const now = new Date().toISOString();
-      await db.delete(calendarEvents)
-        .where(eq(calendarEvents.calendarId, calId));
-      for (const ev of syncResult.events) {
-        if (ev.isManaged) continue;
-        if (ev.start && ev.end && ev.title) {
-          await db.insert(calendarEvents).values({
+      const externalEvents = syncResult.events.filter(
+        ev => !ev.isManaged && ev.start && ev.end && ev.title,
+      );
+      await db.transaction(async (tx) => {
+        await tx.delete(calendarEvents)
+          .where(and(eq(calendarEvents.calendarId, calId), eq(calendarEvents.userId, this.userId)));
+        if (externalEvents.length > 0) {
+          await tx.insert(calendarEvents).values(externalEvents.map(ev => ({
             userId: this.userId,
             calendarId: calId,
             googleEventId: ev.googleEventId || '',
-            title: ev.title,
-            start: ev.start,
-            end: ev.end,
+            title: ev.title!,
+            start: ev.start!,
+            end: ev.end!,
             status: ev.status || 'busy',
             location: ev.location || null,
-            isAllDay: !ev.start.includes('T'),
+            isAllDay: !ev.start!.includes('T'),
             updatedAt: now,
-          });
+          })));
         }
-      }
+      });
       console.log(`[poller] Cached ${syncResult.events.length} events for calendar ${calId}`);
     } catch (err) {
       console.error(`[poller] Initial sync failed for ${calId}:`, err);
@@ -114,9 +116,14 @@ export class CalendarPollerManager {
       poller.stop();
       this.pollers.delete(calId);
     }
-    // Clear cached events for this calendar
-    await db.delete(calendarEvents)
-      .where(eq(calendarEvents.calendarId, calId));
+    // Clear cached events for this calendar (scoped to user)
+    if (this.userId) {
+      await db.delete(calendarEvents)
+        .where(and(eq(calendarEvents.calendarId, calId), eq(calendarEvents.userId, this.userId)));
+    } else {
+      await db.delete(calendarEvents)
+        .where(eq(calendarEvents.calendarId, calId));
+    }
   }
 
   /** Stop all pollers. */

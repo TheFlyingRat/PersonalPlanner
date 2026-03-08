@@ -5,11 +5,12 @@ import { scheduledEvents, calendarEvents, calendars, habits, tasks, smartMeeting
 import { reschedule, generateCandidateSlots, scoreSlot, buildTimeline, calculateScheduleQuality } from '@cadence/engine';
 import type { Habit, Task, SmartMeeting, FocusTimeRule, BufferConfig, CalendarEvent, UserSettings, ScheduleItem, TimeSlot, ScheduleChange, CalendarOperation, QualityScore } from '@cadence/shared';
 import { Priority, Frequency, SchedulingHours, TaskStatus, DecompressionTarget, EventStatus, ItemType, CalendarOpType, STATUS_PREFIX, EXTENDED_PROPS, ScheduleChangeType, BRAND } from '@cadence/shared';
+import rateLimit from 'express-rate-limit';
 import { triggerReschedule } from '../polling-ref.js';
 import { broadcastToUser } from '../ws.js';
 import { moveEventSchema, scheduleChangesQuerySchema } from '../validation.js';
 import { schedulerRegistry } from '../scheduler-registry.js';
-import { sendValidationError, sendNotFound, sendError } from './helpers.js';
+import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 
 const router = Router();
 
@@ -110,11 +111,8 @@ export async function recordScheduleChanges(
 
   // Persist all changes
   if (!userId) return changes;
-  for (const change of changes) {
-    await db.insert(scheduleChanges).values({
-      ...change,
-      userId,
-    });
+  if (changes.length > 0) {
+    await db.insert(scheduleChanges).values(changes.map(c => ({ ...c, userId })));
   }
 
   // Broadcast changes via WebSocket
@@ -671,8 +669,16 @@ router.get('/quality', async (req, res) => {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const alternativesLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many alternatives requests, please try again later.' },
+});
+
 // GET /api/schedule/:itemId/alternatives — find alternative time slots
-router.get('/:itemId/alternatives', async (req, res) => {
+router.get('/:itemId/alternatives', alternativesLimiter, async (req, res) => {
   try {
     const userId = req.userId;
     const { itemId } = req.params;
@@ -855,6 +861,7 @@ router.post('/:eventId/move', async (req, res) => {
   try {
     const userId = req.userId;
     const { eventId } = req.params;
+    if (!validateUUID(eventId, res)) return;
     const parsed = moveEventSchema.safeParse(req.body);
     if (!parsed.success) {
       sendError(res, 400, parsed.error.issues[0]?.message || 'Invalid input');

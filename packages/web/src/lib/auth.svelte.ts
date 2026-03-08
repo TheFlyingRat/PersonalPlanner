@@ -65,9 +65,9 @@ export async function checkAuth(): Promise<User | null> {
   if (!browser) return null;
   try {
     authState.isLoading = true;
-    const user = await authRequest<User>('/auth/me');
-    setAuth(user);
-    return user;
+    const result = await authRequest<{ user: User }>('/auth/me');
+    setAuth(result.user);
+    return result.user;
   } catch {
     setAuth(null);
     return null;
@@ -106,8 +106,9 @@ export async function logout(): Promise<void> {
 
 export async function refreshToken(): Promise<boolean> {
   try {
-    const result = await authRequest<{ user: User }>('/auth/refresh', { method: 'POST' });
-    setAuth(result.user);
+    await authRequest<{ success: boolean }>('/auth/refresh', { method: 'POST' });
+    // Refresh succeeded — re-fetch user profile with new access token
+    await checkAuth();
     return true;
   } catch {
     setAuth(null);
@@ -131,14 +132,13 @@ export async function googleAuth(prompt?: 'select_account'): Promise<void> {
 }
 
 export async function verifyEmail(token: string): Promise<void> {
-  await authRequest<void>('/auth/verify-email', {
-    method: 'POST',
-    body: JSON.stringify({ token }),
+  await authRequest<void>(`/auth/verify-email?token=${encodeURIComponent(token)}`, {
+    method: 'GET',
   });
 }
 
 export async function resendVerification(email: string): Promise<void> {
-  await authRequest<void>('/auth/resend-verification', {
+  await authRequest<void>('/auth/resend-verification-email', {
     method: 'POST',
     body: JSON.stringify({ email }),
   });

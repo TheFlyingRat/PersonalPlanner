@@ -2,19 +2,37 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import request from 'supertest';
 
 const { mockDb } = vi.hoisted(() => {
+  const mockForUpdate = vi.fn();
   const mockWhere = vi.fn().mockResolvedValue([]);
   const mockSetWhere = vi.fn().mockResolvedValue(undefined);
   const mockSet = vi.fn().mockReturnValue({ where: mockSetWhere });
   const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
 
+  // Transaction mock: creates a tx object that mirrors db, then calls the callback
+  const mockTransaction = vi.fn().mockImplementation(async (cb: (tx: any) => Promise<any>) => {
+    const txWhere = vi.fn().mockImplementation((...args: any[]) => {
+      const result = mockWhere(...args);
+      return { for: mockForUpdate.mockReturnValue(result) };
+    });
+    const txFrom = vi.fn().mockReturnValue({ where: txWhere });
+    const tx = {
+      select: vi.fn().mockReturnValue({ from: txFrom }),
+      update: vi.fn().mockReturnValue({ set: mockSet }),
+    };
+    return cb(tx);
+  });
+
   return {
     mockDb: {
       select: vi.fn().mockReturnValue({ from: mockFrom }),
       update: vi.fn().mockReturnValue({ set: mockSet }),
+      transaction: mockTransaction,
       _mockWhere: mockWhere,
       _mockFrom: mockFrom,
       _mockSet: mockSet,
       _mockSetWhere: mockSetWhere,
+      _mockTransaction: mockTransaction,
+      _mockForUpdate: mockForUpdate,
     },
   };
 });
@@ -54,6 +72,18 @@ function resetMocks() {
   mockDb._mockSet.mockReturnValue({ where: mockDb._mockSetWhere });
   mockDb.select.mockReturnValue({ from: mockDb._mockFrom });
   mockDb.update.mockReturnValue({ set: mockDb._mockSet });
+  mockDb._mockTransaction.mockImplementation(async (cb: (tx: any) => Promise<any>) => {
+    const txWhere = vi.fn().mockImplementation((...args: any[]) => {
+      const result = mockDb._mockWhere(...args);
+      return { for: mockDb._mockForUpdate.mockReturnValue(result) };
+    });
+    const txFrom = vi.fn().mockReturnValue({ where: txWhere });
+    const tx = {
+      select: vi.fn().mockReturnValue({ from: txFrom }),
+      update: vi.fn().mockReturnValue({ set: mockDb._mockSet }),
+    };
+    return cb(tx);
+  });
 }
 
 describe('GET /api/settings', () => {

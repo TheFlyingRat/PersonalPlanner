@@ -1,6 +1,7 @@
 // API Client - Typed fetch wrapper for all endpoints
 
 import { PUBLIC_API_URL } from '$env/static/public';
+import { goto } from '$app/navigation';
 import type {
   Habit,
   CreateHabitRequest,
@@ -61,7 +62,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     // 401 interceptor: try refresh, then redirect to login
-    if (res.status === 401 && !path.startsWith('/auth/')) {
+    if (res.status === 401 && !path.startsWith('/auth/') && !(options as any)?._retried) {
       if (!refreshPromise) {
         refreshPromise = (async () => {
           try {
@@ -79,10 +80,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       }
       const refreshed = await refreshPromise;
       if (refreshed) {
-        return request<T>(path, options);
+        return request<T>(path, { ...options, _retried: true } as any);
       }
       if (typeof window !== 'undefined') {
-        window.location.href = '/login';
+        goto('/login');
+        throw new ApiError('Session expired', 401);
       }
     }
     // Handle 403 EMAIL_NOT_VERIFIED
@@ -90,7 +92,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       try {
         const body = await res.json();
         if (body.code === 'EMAIL_NOT_VERIFIED' && typeof window !== 'undefined') {
-          window.location.href = '/verify-email';
+          goto('/verify-email');
           return undefined as T;
         }
       } catch { /* no JSON body */ }
@@ -365,7 +367,7 @@ export const auth = {
   logout: () =>
     request<void>('/auth/logout', { method: 'POST' }),
   refresh: () =>
-    request<{ user: { id: string; name: string; email: string; emailVerified: boolean; onboardingCompleted: boolean } }>('/auth/refresh', { method: 'POST' }),
+    request<{ success: boolean }>('/auth/refresh', { method: 'POST' }),
   me: () =>
     request<{ user: { id: string; name: string; email: string; avatarUrl: string | null; emailVerified: boolean; hasPassword: boolean; plan: string; onboardingCompleted: boolean } }>('/auth/me'),
   google: async () => {
@@ -380,12 +382,11 @@ export const auth = {
     window.location.href = redirectUrl;
   },
   verifyEmail: (token: string) =>
-    request<void>('/auth/verify-email', {
-      method: 'POST',
-      body: JSON.stringify({ token }),
+    request<void>(`/auth/verify-email?token=${encodeURIComponent(token)}`, {
+      method: 'GET',
     }),
   resendVerification: (email: string) =>
-    request<void>('/auth/resend-verification', {
+    request<void>('/auth/resend-verification-email', {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),

@@ -94,7 +94,7 @@ export interface Task {
   priority: Priority;
   totalDuration: number;     // minutes
   remainingDuration: number; // minutes
-  dueDate: string;           // ISO datetime
+  dueDate: string | null;    // ISO datetime
   earliestStart: string;     // ISO datetime
   chunkMin: number;          // minutes
   chunkMax: number;          // minutes
@@ -116,9 +116,9 @@ export interface SmartMeeting {
   duration: number;          // minutes
   frequency: Frequency;
   frequencyConfig?: FrequencyConfig;
-  idealTime: string;         // HH:MM
-  windowStart: string;       // HH:MM
-  windowEnd: string;         // HH:MM
+  idealTime: string | null;  // HH:MM
+  windowStart: string | null; // HH:MM
+  windowEnd: string | null;  // HH:MM
   location: string;
   conferenceType: string;    // zoom | meet | teams | none
   skipBuffer: boolean;

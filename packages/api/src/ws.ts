@@ -29,6 +29,7 @@ function authenticateWs(req: IncomingMessage): string | null {
 
   try {
     const payload = verifyAccessToken(token);
+    if (!payload.emailVerified) return null;
     return payload.userId;
   } catch {
     return null;

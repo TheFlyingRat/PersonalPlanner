@@ -92,13 +92,24 @@ export function setTimeInTimezone(date: Date, hours: number, minutes: number, tz
     return new Date(result.getTime() + diffMs);
   }
 
-  // DST fall-back ambiguity: during a fall-back transition (e.g., 2:00 AM occurs
-  // twice), the result hour may not match the target hour. When this happens,
-  // prefer the first occurrence (earlier UTC offset) by nudging backward.
+  // DST ambiguity: during a fall-back transition (e.g., 2:00 AM occurs twice),
+  // the result hour may not match the target hour. During spring-forward, a
+  // requested hour may be skipped entirely (e.g., 2:30 AM doesn't exist).
+  // Handle both by nudging toward the target time.
   const resultHour = rGet('hour') === 24 ? 0 : rGet('hour');
   if (resultHour !== hours) {
     const hourDiffMin = (hours * 60 + minutes) - (resultHour * 60 + rGet('minute'));
-    return new Date(result.getTime() + hourDiffMin * 60000);
+    const adjusted = new Date(result.getTime() + hourDiffMin * 60000);
+    // Verify the adjustment landed on the right hour; if not (spring-forward
+    // skipped the target hour), return the adjusted time as the nearest valid time
+    const adjParts = formatter.formatToParts(adjusted);
+    const adjGet = (type: string) => parseInt(adjParts.find(p => p.type === type)?.value ?? '0');
+    const adjHour = adjGet('hour') === 24 ? 0 : adjGet('hour');
+    if (adjHour !== hours) {
+      // Target hour doesn't exist (spring-forward gap) — return the post-gap time
+      return adjusted;
+    }
+    return adjusted;
   }
 
   return result;

@@ -79,12 +79,13 @@
     return `${h}h ${m}m`;
   }
 
-  function formatDate(iso: string): string {
+  function formatDate(iso: string | null): string {
+    if (!iso) return '';
     const d = new Date(iso);
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
 
-  function toDateInputValue(iso: string): string {
+  function toDateInputValue(iso: string | null): string {
     if (!iso) return '';
     const d = new Date(iso);
     return d.toISOString().split('T')[0];

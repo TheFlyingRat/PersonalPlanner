@@ -167,9 +167,14 @@ function scoreFocusTime(
     return { score: 100, weight: 0.2, label: 'Focus Time' };
   }
 
-  const targetDaily = activeRules.reduce((sum, r) => sum + (r.dailyTargetMinutes || 0), 0);
+  let targetDaily = activeRules.reduce((sum, r) => sum + (r.dailyTargetMinutes || 0), 0);
   if (targetDaily === 0) {
-    return { score: 100, weight: 0.2, label: 'Focus Time' };
+    const weeklyTotal = activeRules.reduce((sum, r) => sum + (r.weeklyTargetMinutes || 0), 0);
+    if (weeklyTotal > 0) {
+      targetDaily = weeklyTotal / 7;
+    } else {
+      return { score: 100, weight: 0.2, label: 'Focus Time' };
+    }
   }
 
   const ratio = focusMinutesPlaced / targetDaily;
@@ -210,7 +215,7 @@ function scoreBuffers(
       // Check gap before meeting
       if (other.end.getTime() <= slot.start.getTime()) {
         const gap = slot.start.getTime() - other.end.getTime();
-        if (gap > 0 && gap < requiredBufferMs) {
+        if (gap >= 0 && gap < requiredBufferMs) {
           hasAdequateBuffer = false;
           break;
         }
@@ -219,7 +224,7 @@ function scoreBuffers(
       // Check gap after meeting
       if (slot.end.getTime() <= other.start.getTime()) {
         const gap = other.start.getTime() - slot.end.getTime();
-        if (gap > 0 && gap < requiredBufferMs) {
+        if (gap >= 0 && gap < requiredBufferMs) {
           hasAdequateBuffer = false;
           break;
         }

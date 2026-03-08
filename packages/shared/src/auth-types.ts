@@ -40,10 +40,6 @@ export interface AuthUser {
   createdAt: string;
 }
 
-export interface AuthResponse {
-  user: AuthUser;
-}
-
 export interface SessionInfo {
   id: string;
   userAgent: string | null;

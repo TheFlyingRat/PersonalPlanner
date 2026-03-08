@@ -5,6 +5,8 @@ import { users } from '../db/pg-schema.js';
 import type { UserSettings } from '@cadence/shared';
 import { userSettingsSchema } from '../validation.js';
 import { sendValidationError, sendNotFound } from './helpers.js';
+import { createOAuth2Client } from '../google/index.js';
+import { decrypt } from '../crypto.js';
 
 const router = Router();
 
@@ -43,31 +45,35 @@ router.put('/', async (req, res) => {
     return;
   }
 
-  const userRows = await db.select().from(users).where(eq(users.id, req.userId));
-  if (userRows.length === 0) {
+  const result = await db.transaction(async (tx) => {
+    const userRows = await tx.select().from(users).where(eq(users.id, req.userId)).for('update');
+    if (userRows.length === 0) {
+      return null;
+    }
+
+    const user = userRows[0];
+    const currentSettings: UserSettings = user.settings && typeof user.settings === 'object'
+      ? user.settings as UserSettings
+      : defaultSettings;
+
+    const updatedSettings: UserSettings = {
+      ...currentSettings,
+      ...parsed.data,
+    };
+
+    await tx.update(users)
+      .set({ settings: updatedSettings, updatedAt: new Date().toISOString() })
+      .where(eq(users.id, req.userId));
+
+    return { id: user.id, settings: updatedSettings, createdAt: user.createdAt ?? '' };
+  });
+
+  if (!result) {
     sendNotFound(res, 'User');
     return;
   }
 
-  const user = userRows[0];
-  const currentSettings: UserSettings = user.settings && typeof user.settings === 'object'
-    ? user.settings as UserSettings
-    : defaultSettings;
-
-  const updatedSettings: UserSettings = {
-    ...currentSettings,
-    ...parsed.data,
-  };
-
-  await db.update(users)
-    .set({ settings: updatedSettings, updatedAt: new Date().toISOString() })
-    .where(eq(users.id, req.userId));
-
-  res.json({
-    id: user.id,
-    settings: updatedSettings,
-    createdAt: user.createdAt ?? '',
-  });
+  res.json(result);
 });
 
 // POST /api/settings/onboarding/complete — mark onboarding as completed
@@ -91,6 +97,18 @@ router.post('/google/disconnect', async (req, res) => {
   if (userRows.length === 0) {
     sendNotFound(res, 'User');
     return;
+  }
+
+  // Revoke Google refresh token before clearing
+  if (userRows[0].googleRefreshToken) {
+    try {
+      const refreshToken = decrypt(userRows[0].googleRefreshToken);
+      const oauth2Client = createOAuth2Client();
+      oauth2Client.setCredentials({ refresh_token: refreshToken });
+      await oauth2Client.revokeCredentials();
+    } catch (err) {
+      console.error('[settings] Failed to revoke Google token:', err);
+    }
   }
 
   await db.update(users)

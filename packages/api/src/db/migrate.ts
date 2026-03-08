@@ -320,6 +320,28 @@ export async function runMigrations(databaseUrl: string): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_calendar_events_user_id_end ON calendar_events(user_id, "end");
     `,
       },
+      {
+        version: 4,
+        description: 'Add oauth_states table, unique constraints, and missing indexes',
+        sql: `
+      -- OAuth States
+      CREATE TABLE IF NOT EXISTS oauth_states (
+        state_hash TEXT PRIMARY KEY,
+        expires_at TIMESTAMPTZ NOT NULL
+      );
+
+      -- Unique constraints for singleton-per-user tables
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_focus_time_rules_user_id_unique ON focus_time_rules(user_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_buffer_config_user_id_unique ON buffer_config(user_id);
+
+      -- Unique constraint to prevent duplicate external calendar events
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_events_user_google_event ON calendar_events(user_id, google_event_id);
+
+      -- Performance indexes
+      CREATE INDEX IF NOT EXISTS idx_schedule_changes_batch_id ON schedule_changes(batch_id);
+      CREATE INDEX IF NOT EXISTS idx_habit_completions_habit_user ON habit_completions(habit_id, user_id);
+    `,
+      },
     ];
 
     // INFRA-H1: Run each pending migration in a transaction

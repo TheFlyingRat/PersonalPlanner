@@ -7,7 +7,7 @@ import { createOAuth2Client, setCredentials, GoogleCalendarClient } from '../goo
 import { decrypt } from '../crypto.js';
 import { CalendarMode } from '@cadence/shared';
 import { schedulerRegistry } from '../scheduler-registry.js';
-import { sendValidationError, sendNotFound, sendError } from './helpers.js';
+import { sendValidationError, sendNotFound, sendError, validateUUID } from './helpers.js';
 
 const patchCalendarSchema = z.object({
   mode: z.enum([CalendarMode.Writable, CalendarMode.Locked]).optional(),
@@ -73,6 +73,7 @@ router.get('/discover', async (req, res) => {
 // PATCH /api/calendars/:id - update mode or enabled
 router.patch('/:id', async (req, res) => {
   const { id } = req.params;
+  if (!validateUUID(id, res)) return;
 
   const parsed = patchCalendarSchema.safeParse(req.body);
   if (!parsed.success) {

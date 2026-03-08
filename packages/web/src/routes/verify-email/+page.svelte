@@ -56,8 +56,8 @@
           resendTimer = undefined;
         }
       }, 1000);
-    } catch {
-      // silently handle
+    } catch (err) {
+      verifyError = err instanceof Error ? err.message : 'Failed to resend verification email.';
     }
   }
 </script>

@@ -1,17 +1,32 @@
 import { Router } from 'express';
-import { eq } from 'drizzle-orm';
+import { eq, and, gte, lte } from 'drizzle-orm';
 import { db } from '../db/pg-index.js';
 import { scheduledEvents, habits } from '../db/pg-schema.js';
 import type { AnalyticsData } from '@cadence/shared';
 
 const router = Router();
 
+function getDateRange(req: import('express').Request): { fromDate: string; toDate: string } {
+  const now = new Date();
+  const toDate = typeof req.query.to === 'string' ? req.query.to : now.toISOString();
+  const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const fromDate = typeof req.query.from === 'string' ? req.query.from : defaultFrom;
+  return { fromDate, toDate };
+}
+
 // GET /api/analytics — compute analytics from scheduled_events
 router.get('/', async (req, res) => {
   const userId = req.userId;
+  const { fromDate, toDate } = getDateRange(req);
 
   const [events, allHabits] = await Promise.all([
-    db.select().from(scheduledEvents).where(eq(scheduledEvents.userId, userId)),
+    db.select().from(scheduledEvents).where(
+      and(
+        eq(scheduledEvents.userId, userId),
+        gte(scheduledEvents.end, fromDate),
+        lte(scheduledEvents.start, toDate),
+      ),
+    ),
     db.select().from(habits).where(eq(habits.userId, userId)),
   ]);
 
@@ -58,7 +73,14 @@ router.get('/', async (req, res) => {
 // GET /api/analytics/weekly — weekly breakdown
 router.get('/weekly', async (req, res) => {
   const userId = req.userId;
-  const events = await db.select().from(scheduledEvents).where(eq(scheduledEvents.userId, userId));
+  const { fromDate, toDate } = getDateRange(req);
+  const events = await db.select().from(scheduledEvents).where(
+    and(
+      eq(scheduledEvents.userId, userId),
+      gte(scheduledEvents.end, fromDate),
+      lte(scheduledEvents.start, toDate),
+    ),
+  );
 
   // Group events by date (day)
   const dayMap = new Map<string, { habitMinutes: number; taskMinutes: number; meetingMinutes: number; focusMinutes: number }>();

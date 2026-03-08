@@ -109,15 +109,12 @@
   let deletePassword = $state('');
 
   // Validation (#10)
-  let hoursError = $derived(
-    workEnd <= workStart && personalEnd <= personalStart
-      ? 'Work end and personal end must be after their start times.'
-      : workEnd <= workStart
-        ? 'Work end time must be after start time.'
-        : personalEnd <= personalStart
-          ? 'Personal end time must be after start time.'
-          : ''
-  );
+  let hoursError = $derived.by(() => {
+    const errors: string[] = [];
+    if (workEnd <= workStart) errors.push('Work end time must be after start time.');
+    if (personalEnd <= personalStart) errors.push('Personal end time must be after start time.');
+    return errors.join(' ');
+  });
   let hoursValid = $derived(hoursError === '');
 
   // Writable calendars for default-calendar selects (#5)
@@ -388,21 +385,27 @@
     }
   }
 
+  function handleInstallPrompt(e: Event) {
+    e.preventDefault();
+    installPrompt = e as BeforeInstallPromptEvent;
+  }
+
+  function handleInstalled() {
+    pwaInstalled = true;
+    installPrompt = null;
+  }
+
   onDestroy(() => {
     if (saveStatusTimer) clearTimeout(saveStatusTimer);
     clearNotification();
+    window.removeEventListener('beforeinstallprompt', handleInstallPrompt);
+    window.removeEventListener('appinstalled', handleInstalled);
   });
 
   onMount(async () => {
     // PWA install prompt
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      installPrompt = e as BeforeInstallPromptEvent;
-    });
-    window.addEventListener('appinstalled', () => {
-      pwaInstalled = true;
-      installPrompt = null;
-    });
+    window.addEventListener('beforeinstallprompt', handleInstallPrompt);
+    window.addEventListener('appinstalled', handleInstalled);
     // Check if already installed (standalone mode)
     if (window.matchMedia('(display-mode: standalone)').matches) {
       pwaInstalled = true;

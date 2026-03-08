@@ -11,7 +11,7 @@
   import ChevronLeft from 'lucide-svelte/icons/chevron-left';
   import Loader from 'lucide-svelte/icons/loader';
   import AlertCircle from 'lucide-svelte/icons/alert-circle';
-  const PUBLIC_API_URL = import.meta.env.PUBLIC_API_URL ?? '';
+  import { PUBLIC_API_URL } from '$env/static/public';
 
   const API_BASE = PUBLIC_API_URL || '/api';
   const slug = $derived(page.params.slug);

@@ -34,26 +34,22 @@ router.put('/', async (req, res) => {
   const userId = req.userId;
   const body = parsed.data;
 
-  const existing = await db.select().from(focusTimeRules).where(eq(focusTimeRules.userId, userId));
-
-  if (existing.length > 0) {
-    const updates: Record<string, unknown> = { updatedAt: new Date().toISOString() };
-
-    if (body.weeklyTargetMinutes !== undefined) updates.weeklyTargetMinutes = body.weeklyTargetMinutes;
-    if (body.dailyTargetMinutes !== undefined) updates.dailyTargetMinutes = body.dailyTargetMinutes;
-    if (body.schedulingHours !== undefined) updates.schedulingHours = body.schedulingHours;
-    if (body.enabled !== undefined) updates.enabled = body.enabled;
-
-    await db.update(focusTimeRules).set(updates).where(eq(focusTimeRules.userId, userId));
-  } else {
-    await db.insert(focusTimeRules).values({
-      userId,
-      weeklyTargetMinutes: body.weeklyTargetMinutes ?? 600,
-      dailyTargetMinutes: body.dailyTargetMinutes ?? 120,
-      schedulingHours: body.schedulingHours ?? 'working',
-      enabled: body.enabled ?? false,
-    });
-  }
+  await db.insert(focusTimeRules).values({
+    userId,
+    weeklyTargetMinutes: body.weeklyTargetMinutes ?? 600,
+    dailyTargetMinutes: body.dailyTargetMinutes ?? 120,
+    schedulingHours: body.schedulingHours ?? 'working',
+    enabled: body.enabled ?? false,
+  }).onConflictDoUpdate({
+    target: focusTimeRules.userId,
+    set: {
+      ...(body.weeklyTargetMinutes !== undefined ? { weeklyTargetMinutes: body.weeklyTargetMinutes } : {}),
+      ...(body.dailyTargetMinutes !== undefined ? { dailyTargetMinutes: body.dailyTargetMinutes } : {}),
+      ...(body.schedulingHours !== undefined ? { schedulingHours: body.schedulingHours } : {}),
+      ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+      updatedAt: new Date().toISOString(),
+    },
+  });
 
   const updated = await db.select().from(focusTimeRules).where(eq(focusTimeRules.userId, userId));
   broadcastToUser(req.userId, 'schedule_updated', 'Focus time updated');
